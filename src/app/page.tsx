@@ -1,4 +1,4 @@
-"use client";
+"use client";// test cambio
 
 import { formatDistanceToNow } from "date-fns";
 import { es } from "date-fns/locale";

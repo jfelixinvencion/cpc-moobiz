@@ -8,6 +8,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  colorForConductorEstado,
+  sortEstadoEntriesForMatrix,
+  sortEstadosForLegend,
+} from "@/lib/conductor-estado";
 
 type ViajeRow = {
   id?: string | number | null;
@@ -20,11 +25,11 @@ type ViajeRow = {
 const HOUR_MS = 60 * 60 * 1000;
 const MIN_AXIS_HOURS = 24;
 /** Altura aproximada para ver ~15 filas de conductores + cabecera de horas. */
-const MATRIX_MAX_HEIGHT = "min(600px, calc(15 * 2.35rem + 3.5rem))";
+const MATRIX_MAX_HEIGHT = "min(600px, calc(15 * 2.35rem + 48px))";
 
 const ROW_ESTIMATE_PX = 40;
 const COL_ESTIMATE_PX = 44;
-const HEADER_ROW_HEIGHT = 40;
+const HEADER_ROW_HEIGHT = 48;
 const NAME_COL_WIDTH = 168;
 
 function toText(value: unknown): string {
@@ -73,86 +78,73 @@ function shortSlotLabel(ms: number): string {
   return `${dd}/${mm} ${hh}:${min}`;
 }
 
-function normalizeEstadoKey(e: string): string {
-  return e
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\s+/g, " ");
+function slotDateKey(ts: number): string {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-const ESTADO_COLORS: Record<string, string> = {
-  pendiente: "#94a3b8",
-  "en camino": "#1e88e5",
-  encamino: "#1e88e5",
-  "en ruta": "#1565c0",
-  completado: "#2e7d32",
-  completada: "#2e7d32",
-  cancelado: "#c62828",
-  cancelada: "#c62828",
-  asignado: "#6a1b9a",
-  asignada: "#6a1b9a",
-  aceptado: "#00897b",
-  aceptada: "#00897b",
-  programado: "#5d4037",
-  programada: "#5d4037",
-  "sin estado": "#78909c",
-  finalizado: "#558b2f",
-  finalizada: "#558b2f",
-  iniciado: "#0277bd",
-  iniciada: "#0277bd",
+function slotDateDisplay(ts: number): string {
+  const d = new Date(ts);
+  return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+}
+
+function slotHourDisplay(ts: number): string {
+  return String(new Date(ts).getHours()).padStart(2, "0");
+}
+
+/** Viaje colocado en una celda (hora de visualización redondeada); `scheduledAt` = fecha/hora real del servicio. */
+type ViajeSlotTrip = {
+  estado: string;
+  scheduledAt: Date;
 };
 
-const FALLBACK_PALETTE = [
-  "#7e57c2",
-  "#ec407a",
-  "#ffa726",
-  "#26c6da",
-  "#8d6e63",
-  "#5c6bc0",
-  "#ab47bc",
-  "#42a5f5",
-  "#789262",
-  "#d4e157",
-];
-
-function colorForEstado(estado: string): string {
-  const k = normalizeEstadoKey(estado);
-  if (ESTADO_COLORS[k]) return ESTADO_COLORS[k];
-  let h = 0;
-  for (let i = 0; i < k.length; i++) h = (h * 31 + k.charCodeAt(i)) | 0;
-  return FALLBACK_PALETTE[Math.abs(h) % FALLBACK_PALETTE.length];
+function formatScheduledDdMmHhmm(d: Date): string {
+  if (Number.isNaN(d.getTime())) return "";
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  return `${dd}/${mm} ${hh}:${min}`;
 }
 
-type CellAgg = Record<string, number>;
+type MatrixSlot = {
+  ts: number;
+  label: string;
+  dateKey: string;
+  dateDisplay: string;
+  hourDisplay: string;
+  showDateLabel: boolean;
+};
 
-const EMPTY_CELL_AGG: CellAgg = {};
+const EMPTY_TRIPS: ViajeSlotTrip[] = [];
 
-/** Interior de celda; compara por referencia de `agg` (misma entrada en el Map = mismo objeto). */
-const MatrixCellBody = memo(function MatrixCellBody({ agg }: { agg: CellAgg | undefined }) {
+/** Interior de celda; `trips` es la lista de servicios en esa franja horaria (referencia estable por celda en el Map). */
+const MatrixCellBody = memo(function MatrixCellBody({ trips }: { trips: ViajeSlotTrip[] | undefined }) {
   const { entries, total, multi } = useMemo(() => {
-    const raw = agg ?? {};
-    const entries = Object.entries(raw)
-      .filter(([, v]) => v > 0)
-      .sort((a, b) => b[1] - a[1]) as [string, number][];
-    const total = entries.reduce((a, [, v]) => a + v, 0);
+    const list = trips ?? [];
+    const counts = new Map<string, number>();
+    for (const t of list) {
+      counts.set(t.estado, (counts.get(t.estado) ?? 0) + 1);
+    }
+    const filtered = [...counts.entries()].filter(([, v]) => v > 0) as [string, number][];
+    const entries = sortEstadoEntriesForMatrix(filtered);
+    const total = list.length;
     return { entries, total, multi: entries.length > 1 };
-  }, [agg]);
+  }, [trips]);
 
   if (total === 0) {
-    return <div className="h-full w-full bg-slate-50/90" />;
+    return <div className="h-full w-full rounded-md bg-slate-50/90" />;
   }
   return (
     <>
-      <div className="flex h-full min-h-0 w-full overflow-hidden">
+      <div className="relative flex h-full min-h-0 w-full gap-0.5 overflow-hidden rounded-md bg-slate-100/90 p-0.5">
         {entries.map(([estado, cnt]) => (
           <div
             key={estado}
-            className="flex min-w-[3px] items-center justify-center text-[10px] font-semibold text-white"
+            className="flex min-w-[3px] items-center justify-center overflow-hidden rounded-md text-[10px] font-semibold text-white shadow-sm ring-1 ring-black/5"
             style={{
               flex: cnt,
-              backgroundColor: colorForEstado(estado),
+              backgroundColor: colorForConductorEstado(estado),
             }}
           >
             {!multi ? cnt : null}
@@ -169,17 +161,17 @@ const MatrixCellBody = memo(function MatrixCellBody({ agg }: { agg: CellAgg | un
 });
 
 export type ConductorMatrixProps = {
-  startDate: string;
-  endDate: string;
-  empresa: string;
+  startDate?: string;
+  endDate?: string;
+  empresa?: string;
   /** Cuando cambia (p. ej. tras sincronizar Moobiz), se vuelve a cargar la matriz. */
   dataRevision?: number;
 };
 
 export function ConductorTimelineMatrix({
-  startDate,
-  endDate,
-  empresa,
+  startDate = "",
+  endDate = "",
+  empresa = "Todas",
   dataRevision = 0,
 }: ConductorMatrixProps) {
   const parentRef = useRef<HTMLDivElement>(null);
@@ -191,9 +183,8 @@ export function ConductorTimelineMatrix({
   const [selectedRowCounts, setSelectedRowCounts] = useState<Set<number>>(new Set());
   const [hover, setHover] = useState<{
     conductor: string;
-    slotLabel: string;
-    byEstado: CellAgg;
     total: number;
+    trips: ViajeSlotTrip[];
     x: number;
     y: number;
   } | null>(null);
@@ -228,7 +219,7 @@ export function ConductorTimelineMatrix({
       const e = toText(row.estado);
       if (e) set.add(e);
     }
-    return Array.from(set).sort((a, b) => a.localeCompare(b, "es"));
+    return sortEstadosForLegend(Array.from(set));
   }, [rows]);
 
   const { slots, conductorOrder, cellMap, conductorTotals } = useMemo(() => {
@@ -243,12 +234,30 @@ export function ConductorTimelineMatrix({
     const minEnd = nowFloor + (MIN_AXIS_HOURS - 1) * HOUR_MS;
     const end = Math.max(maxSlot, minEnd);
 
-    const slotsArr: { ts: number; label: string }[] = [];
+    const slotsArr: MatrixSlot[] = [];
     for (let t = nowFloor; t <= end; t += HOUR_MS) {
-      slotsArr.push({ ts: t, label: shortSlotLabel(t) });
+      slotsArr.push({
+        ts: t,
+        label: shortSlotLabel(t),
+        dateKey: slotDateKey(t),
+        dateDisplay: slotDateDisplay(t),
+        hourDisplay: slotHourDisplay(t),
+        showDateLabel: false,
+      });
     }
 
-    const cell = new Map<string, Map<number, CellAgg>>();
+    const byDay = new Map<string, number[]>();
+    slotsArr.forEach((s, i) => {
+      const k = s.dateKey;
+      if (!byDay.has(k)) byDay.set(k, []);
+      byDay.get(k)!.push(i);
+    });
+    for (const indices of byDay.values()) {
+      const mid = indices[Math.floor((indices.length - 1) / 2)] ?? indices[0];
+      if (mid !== undefined) slotsArr[mid].showDateLabel = true;
+    }
+
+    const cell = new Map<string, Map<number, ViajeSlotTrip[]>>();
     const totals = new Map<string, number>();
 
     for (const row of rows) {
@@ -261,9 +270,9 @@ export function ConductorTimelineMatrix({
       const est = toText(row.estado) || "Sin estado";
       if (!cell.has(c)) cell.set(c, new Map());
       const bySlot = cell.get(c)!;
-      if (!bySlot.has(ts)) bySlot.set(ts, {});
-      const agg = bySlot.get(ts)!;
-      agg[est] = (agg[est] ?? 0) + 1;
+      if (!bySlot.has(ts)) bySlot.set(ts, []);
+      const list = bySlot.get(ts)!;
+      list.push({ estado: est, scheduledAt: new Date(d.getTime()) });
       totals.set(c, (totals.get(c) ?? 0) + 1);
     }
 
@@ -312,6 +321,33 @@ export function ConductorTimelineMatrix({
   const totalInnerWidth = NAME_COL_WIDTH + columnVirtualizer.getTotalSize();
   const totalInnerHeight = rowVirtualizer.getTotalSize();
 
+  const dayDividerColumnIndices = useMemo(() => {
+    const r: number[] = [];
+    for (let i = 1; i < slots.length; i++) {
+      if (slots[i].dateKey !== slots[i - 1].dateKey) r.push(i);
+    }
+    return r;
+  }, [slots]);
+
+  const columnScrollToken = columnVirtualizer.scrollOffset ?? 0;
+
+  const dayDividerLeftPx = useMemo(() => {
+    return dayDividerColumnIndices.map((i) => {
+      const off = columnVirtualizer.getOffsetForIndex(i, "start");
+      return off?.[0] ?? i * COL_ESTIMATE_PX;
+    });
+  }, [dayDividerColumnIndices, columnVirtualizer, colCount, columnScrollToken]);
+
+  const nowHourCenterPx = useMemo(() => {
+    if (slots.length === 0) return null;
+    const off = columnVirtualizer.getOffsetForIndex(0, "start");
+    const start = off?.[0] ?? 0;
+    const vis = columnVirtualizer.getVirtualItems();
+    const v0 = vis.find((v) => v.index === 0);
+    const w = v0?.size ?? COL_ESTIMATE_PX;
+    return start + w / 2;
+  }, [slots.length, columnVirtualizer, colCount, columnScrollToken]);
+
   const toggleCount = (n: number) => {
     setSelectedRowCounts((prev) => {
       const next = new Set(prev);
@@ -323,27 +359,23 @@ export function ConductorTimelineMatrix({
 
   return (
     <Card className="border-slate-200 bg-white shadow-sm">
-      <CardHeader className="border-b border-slate-100 py-3">
+      <CardHeader className="border-b border-slate-100 py-2">
         <CardTitle className="text-base font-semibold text-slate-800">
           Programación por conductor
         </CardTitle>
-        <p className="text-xs text-slate-500">
-          Solo filas con conductor. Eje X desde la hora actual (mínimo {MIN_AXIS_HOURS} h); más horas con
-          scroll horizontal. Conductores ordenados por volumen; scroll vertical (~15 filas visibles).
-        </p>
       </CardHeader>
-      <CardContent className="space-y-4 pt-4">
+      <CardContent className="space-y-3 pt-2">
         {legendEstados.length > 0 && (
           <div className="flex flex-wrap gap-x-4 gap-y-2 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
             <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
               Estados (color)
             </span>
             {legendEstados.map((est) => (
-              <span key={est} className="inline-flex items-center gap-1.5 text-xs text-slate-700">
-                <span
-                  className="inline-block size-3 shrink-0 rounded-sm ring-1 ring-black/10"
-                  style={{ backgroundColor: colorForEstado(est) }}
-                />
+              <span
+                key={est}
+                className="inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold text-white shadow-sm ring-1 ring-black/10"
+                style={{ backgroundColor: colorForConductorEstado(est) }}
+              >
                 {est}
               </span>
             ))}
@@ -404,18 +436,29 @@ export function ConductorTimelineMatrix({
 
         {hover && (
           <div
-            className="pointer-events-none fixed z-[100] max-w-xs rounded-lg border border-slate-700 bg-[#0b1131] px-3 py-2 text-xs text-white shadow-xl"
+            className="pointer-events-none fixed z-[100] max-h-[min(70vh,22rem)] max-w-sm overflow-y-auto rounded-lg border border-slate-700 bg-[#0b1131] px-3 py-2 text-xs text-white shadow-xl"
             style={{ left: hover.x, top: hover.y }}
           >
-            <p className="font-semibold text-[#00e676]">{hover.conductor}</p>
-            <p className="text-white/80">{hover.slotLabel}</p>
-            <p className="mt-1 text-white/60">Total filas: {hover.total}</p>
-            {Object.entries(hover.byEstado).map(([est, n]) => (
-              <div key={est} className="flex justify-between gap-4">
-                <span>{est}</span>
-                <span className="font-medium text-[#00e676]">{n}</span>
-              </div>
-            ))}
+            <p className="font-bold text-white">{hover.conductor}</p>
+            <p className="mt-1 text-white/80">Total filas: {hover.total}</p>
+            <div className="mt-2 space-y-1.5">
+              {hover.trips.map((trip, i) => (
+                <div
+                  key={`${trip.scheduledAt.getTime()}-${i}-${trip.estado}`}
+                  className="flex items-center justify-between gap-3 text-[11px]"
+                >
+                  <span
+                    className="max-w-[55%] truncate rounded-md px-2 py-0.5 font-semibold text-white"
+                    style={{ backgroundColor: colorForConductorEstado(trip.estado) }}
+                  >
+                    {trip.estado}
+                  </span>
+                  <span className="shrink-0 tabular-nums text-white/90">
+                    {formatScheduledDdMmHhmm(trip.scheduledAt)}
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
@@ -463,14 +506,21 @@ export function ConductorTimelineMatrix({
                       return (
                         <div
                           key={vCol.key}
-                          className="absolute flex items-end justify-center overflow-hidden border-r border-slate-200 px-0.5 pb-1 text-center text-[9px] leading-tight text-slate-600"
+                          className="absolute flex flex-col items-center justify-end overflow-hidden border-r border-slate-200 bg-slate-100 px-0.5 pb-0.5 text-center"
                           style={{
                             height: HEADER_ROW_HEIGHT,
                             width: vCol.size,
                             transform: `translateX(${vCol.start}px) translateY(0px)`,
                           }}
                         >
-                          <span className="rotate-[-38deg] whitespace-nowrap">{slot.label}</span>
+                          <div className="flex h-[15px] w-full items-end justify-center leading-none">
+                            {slot.showDateLabel ? (
+                              <span className="text-[13px] font-bold text-slate-800">{slot.dateDisplay}</span>
+                            ) : null}
+                          </div>
+                          <span className="mt-0.5 text-[10px] font-medium tabular-nums text-slate-600">
+                            {slot.hourDisplay}
+                          </span>
                         </div>
                       );
                     })}
@@ -518,17 +568,13 @@ export function ConductorTimelineMatrix({
                         {columnVirtualizer.getVirtualItems().map((vCol) => {
                           const slot = slots[vCol.index];
                           if (!slot) return null;
-                          const agg = cellMap.get(name)?.get(slot.ts);
-                          const raw = agg ?? {};
-                          const entriesForHover = Object.entries(raw)
-                            .filter(([, v]) => v > 0)
-                            .sort((a, b) => b[1] - a[1]) as [string, number][];
-                          const totalHover = entriesForHover.reduce((a, [, v]) => a + v, 0);
+                          const tripsCell = cellMap.get(name)?.get(slot.ts) ?? EMPTY_TRIPS;
+                          const totalHover = tripsCell.length;
 
                           return (
                             <div
                               key={`${vRow.key}-${vCol.key}`}
-                              className="absolute box-border overflow-hidden border-r border-slate-200 bg-white"
+                              className="absolute box-border overflow-hidden border-r border-slate-200 bg-slate-100 p-[2px]"
                               style={{
                                 height: vRow.size,
                                 width: vCol.size,
@@ -539,18 +585,20 @@ export function ConductorTimelineMatrix({
                                   setHover(null);
                                   return;
                                 }
+                                const sorted = [...tripsCell].sort(
+                                  (a, b) => a.scheduledAt.getTime() - b.scheduledAt.getTime(),
+                                );
                                 setHover({
                                   conductor: name,
-                                  slotLabel: slot.label,
-                                  byEstado: Object.fromEntries(entriesForHover),
-                                  total: totalHover,
+                                  total: sorted.length,
+                                  trips: sorted,
                                   x: e.clientX + 12,
                                   y: e.clientY + 12,
                                 });
                               }}
                               onMouseLeave={() => setHover(null)}
                             >
-                              <MatrixCellBody agg={agg ?? EMPTY_CELL_AGG} />
+                              <MatrixCellBody trips={tripsCell} />
                             </div>
                           );
                         })}
@@ -558,6 +606,31 @@ export function ConductorTimelineMatrix({
                     </div>
                   );
                 })}
+
+                <div
+                  className="pointer-events-none absolute z-[38]"
+                  style={{
+                    left: NAME_COL_WIDTH,
+                    top: 0,
+                    width: columnVirtualizer.getTotalSize(),
+                    height: totalInnerHeight,
+                  }}
+                  aria-hidden
+                >
+                  {dayDividerLeftPx.map((left, idx) => (
+                    <div
+                      key={`day-line-${dayDividerColumnIndices[idx]!}`}
+                      className="absolute top-0 h-full w-0 border-l border-dashed border-slate-400/35"
+                      style={{ left }}
+                    />
+                  ))}
+                  {nowHourCenterPx != null ? (
+                    <div
+                      className="absolute top-0 h-full w-px -translate-x-1/2 bg-[rgba(0,191,165,0.35)]"
+                      style={{ left: nowHourCenterPx }}
+                    />
+                  ) : null}
+                </div>
               </div>
             </div>
           </div>

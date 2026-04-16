@@ -1,4 +1,4 @@
-"use client";// test cambio
+"use client";
 
 import { formatDistanceToNow } from "date-fns";
 import { es } from "date-fns/locale";
@@ -12,6 +12,7 @@ import {
   Legend,
   Pie,
   PieChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -39,6 +40,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ConductorTimelineMatrix } from "@/components/conductor-timeline-matrix";
+import { MouseRevealHeaderLayout } from "@/components/mouse-reveal-header-layout";
 import { useRefreshData } from "@/context/refresh-data-context";
 
 type Viaje = {
@@ -101,6 +103,62 @@ function ChartTooltipRow({ label, value }: { label: string; value: string | numb
   );
 }
 
+type ScheduleTimelineDatum = {
+  etiqueta: string;
+  total: number;
+  hourLabel: string;
+  dateLabel: string;
+  dateKey: string;
+  barColor: string;
+  showDayLabel: boolean;
+  dayDividerBefore: boolean;
+};
+
+function parseScheduleLabelParts(value: unknown): { time: string; date: string; dateKey: string } {
+  const raw = asText(value);
+  if (!raw) return { time: "", date: "", dateKey: "" };
+
+  const timeMatch = raw.match(
+    /(\d{1,2})\s*:\s*(\d{2})(?::\s*(\d{2}))?\s*(a\.?\s*m\.?|p\.?\s*m\.?)?/i,
+  );
+  const dateMatch = raw.match(/(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/);
+
+  const time = timeMatch ? `${timeMatch[1]}:${timeMatch[2]}${timeMatch[3] ? `:${timeMatch[3]}` : ""}${timeMatch[4] ? ` ${timeMatch[4]}` : ""}` : "";
+  const day = dateMatch ? dateMatch[1].padStart(2, "0") : "";
+  const month = dateMatch ? dateMatch[2].padStart(2, "0") : "";
+  const year = dateMatch?.[3]
+    ? dateMatch[3].length === 2
+      ? `20${dateMatch[3]}`
+      : dateMatch[3]
+    : String(new Date().getFullYear());
+  const date = day && month ? `${day}/${month}/${year}` : "";
+  const dateKey = day && month ? `${year}-${month}-${day}` : "";
+
+  if (!time && !date) {
+    const trimmed = raw.length > 10 ? `${raw.slice(0, 10)}…` : raw;
+    return { time: trimmed, date: "", dateKey: "" };
+  }
+
+  return { time, date, dateKey };
+}
+
+/** Hora 0–23 desde la etiqueta de franja (soporta 24h y 12h con AM/PM). */
+function extractHour24FromScheduleEtiqueta(raw: string): number | null {
+  const m = raw.match(
+    /(\d{1,2})\s*:\s*(\d{2})(?::\s*(\d{2}))?\s*(a\.?\s*m\.?|p\.?\s*m\.?)?/i,
+  );
+  if (!m) return null;
+  let h = Number(m[1]);
+  const mer = m[4] ? m[4].toLowerCase().replace(/\./g, "").trim() : "";
+  if (mer.startsWith("p")) {
+    if (h < 12) h += 12;
+  } else if (mer.startsWith("a")) {
+    if (h === 12) h = 0;
+  }
+  if (!Number.isFinite(h) || h < 0 || h > 23) return null;
+  return h;
+}
+
 function asText(value: unknown): string {
   if (value === null || value === undefined) return "";
   return String(value).trim();
@@ -131,9 +189,9 @@ export default function HomePage() {
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [dashboardError, setDashboardError] = useState<string | null>(null);
   const [dashboardData, setDashboardData] = useState<DashboardResponse | null>(null);
-  const [dashboardEmpresa, setDashboardEmpresa] = useState("Todas");
-  const [dashboardStartDate, setDashboardStartDate] = useState("");
-  const [dashboardEndDate, setDashboardEndDate] = useState("");
+  const [reservasEmpresa, setReservasEmpresa] = useState("Todas");
+  const [reservasStartDate, setReservasStartDate] = useState("");
+  const [reservasEndDate, setReservasEndDate] = useState("");
   const [mainTab, setMainTab] = useState("datos");
   const [dashboardSubTab, setDashboardSubTab] = useState("reservas");
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
@@ -304,10 +362,10 @@ export default function HomePage() {
     setDashboardError(null);
     try {
       const params = new URLSearchParams();
-      if (dashboardStartDate) params.set("startDate", dashboardStartDate);
-      if (dashboardEndDate) params.set("endDate", dashboardEndDate);
-      if (dashboardEmpresa && dashboardEmpresa !== "Todas") {
-        params.set("empresa", dashboardEmpresa);
+      if (reservasStartDate) params.set("startDate", reservasStartDate);
+      if (reservasEndDate) params.set("endDate", reservasEndDate);
+      if (reservasEmpresa && reservasEmpresa !== "Todas") {
+        params.set("empresa", reservasEmpresa);
       }
       const query = params.toString();
       const res = await fetch(`/api/viajes${query ? `?${query}` : ""}`, { cache: "no-store" });
@@ -320,18 +378,60 @@ export default function HomePage() {
     } finally {
       setDashboardLoading(false);
     }
-  }, [dashboardStartDate, dashboardEndDate, dashboardEmpresa]);
+  }, [reservasStartDate, reservasEndDate, reservasEmpresa]);
 
   useEffect(() => {
+    if (mainTab !== "dashboard" || dashboardSubTab !== "reservas") return;
     void loadDashboard();
-  }, [loadDashboard, refreshKey]);
+  }, [mainTab, dashboardSubTab, loadDashboard, refreshKey]);
 
-  const dashboardEmpresasEnDatos = dashboardData?.filters.empresas ?? [];
+  const reservasEmpresaOptions = dashboardData?.filters.empresas ?? [];
 
   /** Ancho por franja (px); el resto de horas se ve con scroll horizontal. */
   const SCHEDULE_SLOT_PX = 28;
   const scheduleChartData = dashboardData?.charts.pendingBySchedule ?? [];
   const scheduleChartWidth = Math.max(scheduleChartData.length * SCHEDULE_SLOT_PX, 320);
+  const scheduleTimelineData = useMemo<ScheduleTimelineDatum[]>(() => {
+    const today = new Date();
+    const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(
+      today.getDate(),
+    ).padStart(2, "0")}`;
+
+    const grouped = scheduleChartData.reduce<Record<string, Array<{ index: number; time: string }>>>(
+      (acc, item, index) => {
+        const parts = parseScheduleLabelParts(item.etiqueta);
+        const key = parts.dateKey || `fallback-${index}`;
+        if (!acc[key]) acc[key] = [];
+        acc[key].push({ index, time: parts.time });
+        return acc;
+      },
+      {},
+    );
+
+    const centerIndexByDay = new Map<string, number>();
+    Object.entries(grouped).forEach(([dateKey, items]) => {
+      centerIndexByDay.set(dateKey, items[Math.floor((items.length - 1) / 2)]?.index ?? -1);
+    });
+
+    return scheduleChartData.map((item, index) => {
+      const { time, date, dateKey } = parseScheduleLabelParts(item.etiqueta);
+      const hour24 = extractHour24FromScheduleEtiqueta(item.etiqueta);
+      const prevDateKey =
+        index > 0 ? parseScheduleLabelParts(scheduleChartData[index - 1]?.etiqueta).dateKey : "";
+      const isFuture = Boolean(dateKey) && dateKey > todayKey;
+
+      return {
+        etiqueta: item.etiqueta,
+        total: item.total,
+        hourLabel: hour24 !== null ? String(hour24).padStart(2, "0") : time ? time.slice(0, 2) : "",
+        dateLabel: date,
+        dateKey,
+        barColor: isFuture ? "rgba(30, 136, 229, 0.6)" : "#1e88e5",
+        showDayLabel: centerIndexByDay.get(dateKey || `fallback-${index}`) === index,
+        dayDividerBefore: index > 0 && Boolean(dateKey) && dateKey !== prevDateKey,
+      };
+    });
+  }, [scheduleChartData]);
 
   const dashboardAgeLabel = useMemo(() => {
     void dashboardAgeTick;
@@ -339,18 +439,56 @@ export default function HomePage() {
     return formatDistanceToNow(dashboardRefreshedAt, { addSuffix: true, locale: es });
   }, [dashboardRefreshedAt, dashboardAgeTick]);
 
+  const ScheduleXAxisTick = useMemo(
+    () =>
+      function ScheduleXAxisTickFn(props: { x?: number; y?: number; payload?: { value: unknown } }) {
+        const { x = 0, y = 0, payload } = props;
+        const entry = scheduleTimelineData.find((item) => item.etiqueta === payload?.value);
+        if (!entry) return null;
+        return (
+          <g transform={`translate(${x},${y})`}>
+            {entry.hourLabel ? (
+              <text
+                x={0}
+                y={0}
+                dy={2}
+                textAnchor="middle"
+                style={{ fontSize: 10, fontWeight: 500, fill: CHART_AXIS.fill }}
+              >
+                {entry.hourLabel}
+              </text>
+            ) : null}
+            {entry.showDayLabel && entry.dateLabel ? (
+              <text
+                x={0}
+                y={0}
+                dy={20}
+                textAnchor="middle"
+                style={{ fontSize: 12, fontWeight: 700, fill: "#334155" }}
+              >
+                {entry.dateLabel}
+              </text>
+            ) : null}
+          </g>
+        );
+      },
+    [scheduleTimelineData],
+  );
+
   return (
     <main className="flex min-h-screen flex-col bg-slate-100 text-slate-900">
       <Tabs value={mainTab} onValueChange={setMainTab} className="flex min-h-0 flex-1 flex-col">
-        <div className="sticky top-0 z-50 border-b border-white/10 bg-[#0b1131] text-white shadow-md">
-          <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-3 px-4 py-3 md:px-6">
-            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-              <div className="flex items-baseline gap-2">
-                <span className="text-2xl font-bold tracking-tight text-[#00e676]">moobiz.</span>
-                <span className="text-sm text-white/60">Panel de viajes</span>
+        <MouseRevealHeaderLayout
+          header={
+            <div className="border-b border-white/10 text-white">
+              <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-2 px-4 py-2 md:px-6">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+              <div className="flex min-w-0 flex-wrap items-baseline gap-2">
+                <span className="text-xl font-bold tracking-tight text-[#00e676] md:text-2xl">moobiz.</span>
+                <span className="text-xs text-white/60 md:text-sm">Panel de viajes</span>
               </div>
-              <div className="flex items-center gap-2">
-                <div className="text-xs text-white/70 md:text-sm">
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <div className="max-w-[min(100%,220px)] truncate text-[10px] text-white/70 sm:max-w-none md:text-xs">
                   Ultima actualizacion:{" "}
                   <span className="font-medium text-white">
                     {lastUpdate ? lastUpdate.toLocaleString("es-PE") : "Sin datos"}
@@ -358,16 +496,24 @@ export default function HomePage() {
                 </div>
                 <Button
                   size="sm"
+                  onClick={() => void handleSync()}
+                  disabled={syncing || loading}
+                  className="h-8 shrink-0 bg-[#00e676] px-3 text-xs font-semibold text-[#0b1131] hover:bg-[#00c765] md:h-9 md:text-sm"
+                >
+                  {syncing ? "Actualizando..." : "Actualizar"}
+                </Button>
+                <Button
+                  size="sm"
                   variant="outline"
                   onClick={() => void handleLogout()}
-                  className="border-[#00e676]/45 bg-transparent text-xs text-[#00e676] hover:bg-[#00e676]/15 hover:text-[#00e676]"
+                  className="h-8 shrink-0 border-[#00e676]/45 bg-transparent text-xs text-[#00e676] hover:bg-[#00e676]/15 hover:text-[#00e676] md:h-9"
                 >
                   Cerrar sesion
                 </Button>
               </div>
             </div>
 
-            <TabsList className="h-9 w-full max-w-md bg-white/10 p-1 md:h-10">
+            <TabsList className="h-8 w-full max-w-md bg-white/10 p-0.5 md:h-9">
               <TabsTrigger
                 value="datos"
                 className="flex-1 text-xs data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
@@ -383,7 +529,7 @@ export default function HomePage() {
             </TabsList>
 
             {mainTab === "datos" && (
-              <div className="flex flex-col gap-2 border-t border-white/10 pt-3 pb-1">
+              <div className="flex flex-col gap-2 border-t border-white/10 pt-2 pb-1">
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
                   <Select value={empresaFilter} onValueChange={setEmpresaFilter}>
                     <SelectTrigger className="h-9 w-full border-white/20 bg-white/10 text-xs text-white md:text-sm">
@@ -431,14 +577,6 @@ export default function HomePage() {
                     className="h-9 border-white/20 bg-white/10 text-xs text-white placeholder:text-white/50 md:text-sm lg:col-span-2"
                   />
                   <div className="flex flex-wrap gap-2 sm:col-span-2 lg:col-span-2 xl:col-span-1 xl:justify-end">
-                    <Button
-                      size="sm"
-                      onClick={handleSync}
-                      disabled={syncing || loading}
-                      className="bg-[#00e676] font-semibold text-[#0b1131] hover:bg-[#00c765]"
-                    >
-                      {syncing ? "Actualizando..." : "Actualizar"}
-                    </Button>
                     {selectedIds.length > 0 && (
                       <Button
                         size="sm"
@@ -453,67 +591,10 @@ export default function HomePage() {
                 </div>
               </div>
             )}
-
-            {mainTab === "dashboard" && (
-              <div className="flex flex-col gap-3 border-t border-white/10 pt-3 pb-1">
-                <div className="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Input
-                      type="date"
-                      value={dashboardStartDate}
-                      onChange={(e) => setDashboardStartDate(e.target.value)}
-                      className="h-9 w-[150px] border-white/20 bg-white/10 text-xs text-white md:w-[170px] md:text-sm"
-                    />
-                    <Input
-                      type="date"
-                      value={dashboardEndDate}
-                      onChange={(e) => setDashboardEndDate(e.target.value)}
-                      className="h-9 w-[150px] border-white/20 bg-white/10 text-xs text-white md:w-[170px] md:text-sm"
-                    />
-                    <Select value={dashboardEmpresa} onValueChange={setDashboardEmpresa}>
-                      <SelectTrigger className="h-9 w-full min-w-[180px] border-white/20 bg-white/10 text-xs text-white md:text-sm">
-                        <SelectValue placeholder="Empresa" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="Todas">Todas</SelectItem>
-                        {dashboardEmpresasEnDatos.map((empresa) => (
-                          <SelectItem key={empresa} value={empresa}>
-                            {empresa}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Button
-                      size="sm"
-                      onClick={() => void handleSync()}
-                      disabled={syncing || loading}
-                      className="bg-[#00e676] font-semibold text-[#0b1131] hover:bg-[#00c765]"
-                    >
-                      {syncing ? "Actualizando..." : "Actualizar"}
-                    </Button>
-                  </div>
-                  <div className="rounded-lg border border-[#00e676]/40 bg-[#00e676]/15 px-4 py-2">
-                    <p className="text-[10px] uppercase tracking-wide text-white/70">
-                      Pendientes (filtro)
-                    </p>
-                    <p className="text-2xl font-bold leading-none text-[#00e676]">
-                      {dashboardData?.kpi.totalPendientes ?? 0}
-                    </p>
-                  </div>
-                </div>
-                {dashboardLoading && (
-                  <p className="text-xs text-white/60">Actualizando graficos...</p>
-                )}
-                {!dashboardLoading && dashboardAgeLabel && (
-                  <p className="text-[10px] text-white/55">
-                    Graficos del dashboard actualizados {dashboardAgeLabel}
-                  </p>
-                )}
               </div>
-            )}
-          </div>
-        </div>
-
+            </div>
+          }
+        >
         <div className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-6 md:px-6">
           <TabsContent value="datos" className="mt-0 outline-none">
             <Card className="border-slate-200 bg-white text-slate-900 shadow-sm">
@@ -680,22 +761,134 @@ export default function HomePage() {
               </TabsList>
 
               <TabsContent value="conductores" className="mt-0 outline-none">
-                <ConductorTimelineMatrix
-                  startDate={dashboardStartDate}
-                  endDate={dashboardEndDate}
-                  empresa={dashboardEmpresa}
-                  dataRevision={refreshKey}
-                />
+                <ConductorTimelineMatrix dataRevision={refreshKey} />
               </TabsContent>
 
               <TabsContent value="reservas" className="mt-0 space-y-4 outline-none">
+                <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm sm:flex-row sm:items-start sm:justify-between">
+                  <div className="order-2 grid w-full min-w-0 flex-1 grid-cols-1 gap-2 sm:order-1 sm:grid-cols-[minmax(0,1.2fr)] sm:gap-3">
+                    <div className="flex min-w-0 flex-col gap-1 sm:col-span-1">
+                      <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                        Empresa
+                      </span>
+                      <Select value={reservasEmpresa} onValueChange={setReservasEmpresa}>
+                        <SelectTrigger className="h-9 w-full min-w-0 border-slate-200 bg-white text-sm">
+                          <SelectValue placeholder="Empresa" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="Todas">Todas</SelectItem>
+                          {reservasEmpresaOptions.map((empresa) => (
+                            <SelectItem key={empresa} value={empresa}>
+                              {empresa}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <div className="order-1 shrink-0 self-end rounded-lg border border-[#00e676]/40 bg-[#00e676]/15 px-4 py-2 sm:order-2 sm:self-auto sm:min-w-[140px]">
+                    <p className="text-[10px] uppercase tracking-wide text-slate-600/90">
+                      Pendientes (filtro)
+                    </p>
+                    <p className="text-2xl font-bold leading-none text-[#00e676]">
+                      {dashboardData?.kpi.totalPendientes ?? 0}
+                    </p>
+                  </div>
+                </div>
+                {dashboardLoading && (
+                  <p className="text-xs text-slate-500">Actualizando graficos...</p>
+                )}
+                {!dashboardLoading && dashboardAgeLabel && (
+                  <p className="text-[10px] text-slate-500">
+                    Graficos del dashboard actualizados {dashboardAgeLabel} (segun empresa seleccionada arriba).
+                  </p>
+                )}
+            <Card className="border-slate-200 bg-white shadow-sm">
+              <CardHeader className="py-3">
+                <CardTitle className="text-base font-semibold text-slate-800">
+                  Pendientes por franja de programacion
+                </CardTitle>
+                <p className="text-xs text-slate-500">
+                  Desde la primera hora con viaje pendiente hasta la ultima. Minimo 24 h en el eje; desplaza
+                  horizontalmente si hay mas franjas.
+                </p>
+              </CardHeader>
+              <CardContent className="pb-4">
+                <div className="overflow-x-auto overflow-y-hidden rounded-lg border border-slate-100 bg-slate-50/50 [-webkit-overflow-scrolling:touch]">
+                  <div style={{ width: scheduleChartWidth, height: 350 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={scheduleTimelineData}
+                        margin={{ top: 10, right: 12, left: 4, bottom: 28 }}
+                      >
+                        <CartesianGrid stroke={CHART_GRID} vertical={false} />
+                        {scheduleTimelineData
+                          .filter((item) => item.dayDividerBefore)
+                          .map((item) => (
+                            <ReferenceLine
+                              key={`divider-${item.etiqueta}`}
+                              x={item.etiqueta}
+                              position="start"
+                              ifOverflow="visible"
+                              stroke="rgba(6, 182, 212, 0.3)"
+                              strokeDasharray="4 4"
+                              strokeWidth={1}
+                            />
+                          ))}
+                        <XAxis
+                          dataKey="etiqueta"
+                          tickLine={false}
+                          axisLine={{ stroke: CHART_GRID }}
+                          tick={<ScheduleXAxisTick />}
+                          interval={0}
+                          height={48}
+                        />
+                        <YAxis
+                          tick={CHART_AXIS}
+                          width={40}
+                          tickLine={false}
+                          axisLine={{ stroke: CHART_GRID }}
+                          allowDecimals={false}
+                        />
+                        <Tooltip
+                          content={({ active, payload }) => {
+                            if (!active || !payload?.length) return null;
+                            const p = payload[0].payload as { etiqueta: string; total: number };
+                            return (
+                              <div className="min-w-[200px] space-y-1 p-2" style={CHART_TOOLTIP_STYLE}>
+                                <ChartTooltipRow label="Franja" value={p.etiqueta} />
+                                <ChartTooltipRow label="Viajes pendientes" value={p.total} />
+                              </div>
+                            );
+                          }}
+                        />
+                        <Bar
+                          dataKey="total"
+                          name="Viajes"
+                          barSize={SCHEDULE_SLOT_PX - 8}
+                          radius={[4, 4, 0, 0]}
+                          maxBarSize={SCHEDULE_SLOT_PX - 6}
+                        >
+                          {scheduleTimelineData.map((item) => (
+                            <Cell key={`schedule-bar-${item.etiqueta}`} fill={item.barColor} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
               <Card className="border-slate-200 bg-white shadow-sm">
                 <CardHeader className="py-3">
                   <CardTitle className="text-sm font-semibold text-slate-800">
                     Distribucion global por estado
                   </CardTitle>
-                  <p className="text-xs text-slate-500">Sin filtro de fecha ni empresa</p>
+                  <p className="text-xs text-slate-500">
+                    Segun empresa seleccionada arriba.
+                  </p>
                 </CardHeader>
                 <CardContent className="h-[300px] pb-4">
                   <ResponsiveContainer width="100%" height="100%">
@@ -779,71 +972,6 @@ export default function HomePage() {
                 </CardContent>
               </Card>
             </div>
-
-            <Card className="border-slate-200 bg-white shadow-sm">
-              <CardHeader className="py-3">
-                <CardTitle className="text-base font-semibold text-slate-800">
-                  Pendientes por franja de programacion
-                </CardTitle>
-                <p className="text-xs text-slate-500">
-                  Desde la primera hora con viaje pendiente hasta la ultima. Minimo 24 h en el eje; desplaza
-                  horizontalmente si hay mas franjas.
-                </p>
-              </CardHeader>
-              <CardContent className="pb-4">
-                <div className="overflow-x-auto overflow-y-hidden rounded-lg border border-slate-100 bg-slate-50/50 [-webkit-overflow-scrolling:touch]">
-                  <div style={{ width: scheduleChartWidth, height: 420 }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart
-                        data={scheduleChartData}
-                        margin={{ top: 12, right: 16, left: 8, bottom: 72 }}
-                      >
-                        <CartesianGrid stroke={CHART_GRID} vertical={false} />
-                        <XAxis
-                          dataKey="etiqueta"
-                          tick={{ ...CHART_AXIS, fontSize: 10 }}
-                          interval={0}
-                          angle={-40}
-                          textAnchor="end"
-                          height={78}
-                          tickFormatter={(v) =>
-                            String(v).length > 18 ? `${String(v).slice(0, 16)}…` : String(v)
-                          }
-                          tickLine={false}
-                          axisLine={{ stroke: CHART_GRID }}
-                        />
-                        <YAxis
-                          tick={CHART_AXIS}
-                          width={40}
-                          tickLine={false}
-                          axisLine={{ stroke: CHART_GRID }}
-                          allowDecimals={false}
-                        />
-                        <Tooltip
-                          content={({ active, payload }) => {
-                            if (!active || !payload?.length) return null;
-                            const p = payload[0].payload as { etiqueta: string; total: number };
-                            return (
-                              <div className="min-w-[200px] space-y-1 p-2" style={CHART_TOOLTIP_STYLE}>
-                                <ChartTooltipRow label="Franja" value={p.etiqueta} />
-                                <ChartTooltipRow label="Viajes pendientes" value={p.total} />
-                              </div>
-                            );
-                          }}
-                        />
-                        <Bar
-                          dataKey="total"
-                          name="Viajes"
-                          fill="#1e88e5"
-                          radius={[4, 4, 0, 0]}
-                          maxBarSize={SCHEDULE_SLOT_PX - 6}
-                        />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
 
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
               <Card className="border-slate-200 bg-white shadow-sm">
@@ -930,6 +1058,7 @@ export default function HomePage() {
             </Tabs>
           </TabsContent>
         </div>
+        </MouseRevealHeaderLayout>
       </Tabs>
 
       {syncNotice ? (

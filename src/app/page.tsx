@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { formatDistanceToNow } from "date-fns";
+import { es } from "date-fns/locale";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Bar,
@@ -37,6 +39,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ConductorTimelineMatrix } from "@/components/conductor-timeline-matrix";
+import { useRefreshData } from "@/context/refresh-data-context";
 
 type Viaje = {
   id: string | number;
@@ -111,6 +114,7 @@ function formatMoney(value: unknown): string {
 
 export default function HomePage() {
   const router = useRouter();
+  const { refreshKey, triggerRefresh } = useRefreshData();
   const [viajes, setViajes] = useState<Viaje[]>([]);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -132,8 +136,11 @@ export default function HomePage() {
   const [dashboardEndDate, setDashboardEndDate] = useState("");
   const [mainTab, setMainTab] = useState("datos");
   const [dashboardSubTab, setDashboardSubTab] = useState("reservas");
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
+  const [dashboardRefreshedAt, setDashboardRefreshedAt] = useState<Date | null>(null);
+  const [dashboardAgeTick, setDashboardAgeTick] = useState(0);
 
-  const loadViajes = async () => {
+  const loadViajes = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -150,11 +157,23 @@ export default function HomePage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     void loadViajes();
-  }, []);
+  }, [loadViajes]);
+
+  useEffect(() => {
+    if (!syncNotice) return;
+    const t = window.setTimeout(() => setSyncNotice(null), 4500);
+    return () => window.clearTimeout(t);
+  }, [syncNotice]);
+
+  useEffect(() => {
+    if (!dashboardRefreshedAt) return;
+    const id = window.setInterval(() => setDashboardAgeTick((n) => n + 1), 10000);
+    return () => window.clearInterval(id);
+  }, [dashboardRefreshedAt]);
 
   const empresas = useMemo(() => {
     return Array.from(new Set(viajes.map((v) => asText(v.empresa)).filter(Boolean))).sort();
@@ -244,6 +263,7 @@ export default function HomePage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "No se pudieron eliminar los viajes.");
       await loadViajes();
+      triggerRefresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error inesperado al eliminar.");
     } finally {
@@ -270,6 +290,8 @@ export default function HomePage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Fallo al actualizar desde Moobiz.");
       await loadViajes();
+      triggerRefresh();
+      setSyncNotice("Datos actualizados. El dashboard se sincronizo automaticamente.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error inesperado al actualizar.");
     } finally {
@@ -277,7 +299,7 @@ export default function HomePage() {
     }
   };
 
-  const loadDashboard = async () => {
+  const loadDashboard = useCallback(async () => {
     setDashboardLoading(true);
     setDashboardError(null);
     try {
@@ -292,16 +314,17 @@ export default function HomePage() {
       const data = (await res.json()) as DashboardResponse & { error?: string };
       if (!res.ok) throw new Error(data?.error || "No se pudo cargar el dashboard.");
       setDashboardData(data);
+      setDashboardRefreshedAt(new Date());
     } catch (err) {
       setDashboardError(err instanceof Error ? err.message : "Error inesperado en dashboard.");
     } finally {
       setDashboardLoading(false);
     }
-  };
+  }, [dashboardStartDate, dashboardEndDate, dashboardEmpresa]);
 
   useEffect(() => {
     void loadDashboard();
-  }, [dashboardStartDate, dashboardEndDate, dashboardEmpresa]);
+  }, [loadDashboard, refreshKey]);
 
   const dashboardEmpresasEnDatos = dashboardData?.filters.empresas ?? [];
 
@@ -309,6 +332,12 @@ export default function HomePage() {
   const SCHEDULE_SLOT_PX = 28;
   const scheduleChartData = dashboardData?.charts.pendingBySchedule ?? [];
   const scheduleChartWidth = Math.max(scheduleChartData.length * SCHEDULE_SLOT_PX, 320);
+
+  const dashboardAgeLabel = useMemo(() => {
+    void dashboardAgeTick;
+    if (!dashboardRefreshedAt) return null;
+    return formatDistanceToNow(dashboardRefreshedAt, { addSuffix: true, locale: es });
+  }, [dashboardRefreshedAt, dashboardAgeTick]);
 
   return (
     <main className="flex min-h-screen flex-col bg-slate-100 text-slate-900">
@@ -454,6 +483,14 @@ export default function HomePage() {
                         ))}
                       </SelectContent>
                     </Select>
+                    <Button
+                      size="sm"
+                      onClick={() => void handleSync()}
+                      disabled={syncing || loading}
+                      className="bg-[#00e676] font-semibold text-[#0b1131] hover:bg-[#00c765]"
+                    >
+                      {syncing ? "Actualizando..." : "Actualizar"}
+                    </Button>
                   </div>
                   <div className="rounded-lg border border-[#00e676]/40 bg-[#00e676]/15 px-4 py-2">
                     <p className="text-[10px] uppercase tracking-wide text-white/70">
@@ -466,6 +503,11 @@ export default function HomePage() {
                 </div>
                 {dashboardLoading && (
                   <p className="text-xs text-white/60">Actualizando graficos...</p>
+                )}
+                {!dashboardLoading && dashboardAgeLabel && (
+                  <p className="text-[10px] text-white/55">
+                    Graficos del dashboard actualizados {dashboardAgeLabel}
+                  </p>
                 )}
               </div>
             )}
@@ -642,6 +684,7 @@ export default function HomePage() {
                   startDate={dashboardStartDate}
                   endDate={dashboardEndDate}
                   empresa={dashboardEmpresa}
+                  dataRevision={refreshKey}
                 />
               </TabsContent>
 
@@ -888,6 +931,16 @@ export default function HomePage() {
           </TabsContent>
         </div>
       </Tabs>
+
+      {syncNotice ? (
+        <div
+          role="status"
+          className="fixed bottom-4 right-4 z-[60] max-w-sm rounded-lg border border-[#00e676]/40 bg-[#0b1131] px-4 py-3 text-sm text-white shadow-lg"
+        >
+          <p className="font-medium text-[#00e676]">Listo</p>
+          <p className="mt-1 text-white/90">{syncNotice}</p>
+        </div>
+      ) : null}
     </main>
   );
 }

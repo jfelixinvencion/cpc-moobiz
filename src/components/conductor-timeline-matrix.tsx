@@ -172,9 +172,16 @@ export type ConductorMatrixProps = {
   startDate: string;
   endDate: string;
   empresa: string;
+  /** Cuando cambia (p. ej. tras sincronizar Moobiz), se vuelve a cargar la matriz. */
+  dataRevision?: number;
 };
 
-export function ConductorTimelineMatrix({ startDate, endDate, empresa }: ConductorMatrixProps) {
+export function ConductorTimelineMatrix({
+  startDate,
+  endDate,
+  empresa,
+  dataRevision = 0,
+}: ConductorMatrixProps) {
   const parentRef = useRef<HTMLDivElement>(null);
 
   const [rows, setRows] = useState<ViajeRow[]>([]);
@@ -213,7 +220,7 @@ export function ConductorTimelineMatrix({ startDate, endDate, empresa }: Conduct
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, dataRevision]);
 
   const legendEstados = useMemo(() => {
     const set = new Set<string>();

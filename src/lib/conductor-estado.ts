@@ -8,7 +8,8 @@ export const CONDUCTOR_ESTADO_UI_ORDER = ["Aceptado", "Iniciado", "Esperando", "
 export type ConductorEstadoCanonical = (typeof CONDUCTOR_ESTADO_UI_ORDER)[number];
 
 export const CONDUCTOR_ESTADO_COLORS: Record<ConductorEstadoCanonical, string> = {
-  Aceptado: "#0e8b66",
+  /** Negro + texto blanco en UI; borde claro vía `conductorEstadoBadgeRingClass`. */
+  Aceptado: "#000000",
   Iniciado: "#2b7be9",
   Esperando: "#ff8a00",
   "En Camino": "#00bfa5",
@@ -47,6 +48,17 @@ export function colorForConductorEstado(raw: string): string {
   const c = canonicalConductorEstado(raw);
   if (c) return CONDUCTOR_ESTADO_COLORS[c];
   return CONDUCTOR_ESTADO_FALLBACK_COLOR;
+}
+
+/**
+ * Clase Tailwind del anillo del badge (contraste sobre fondo oscuro para "Aceptado" #000).
+ * `cell`: segmentos dentro de la grilla; `pill`: leyenda y tooltip (mismo grosor, tono distinto).
+ */
+export function conductorEstadoBadgeRingClass(raw: string, variant: "cell" | "pill"): string {
+  if (canonicalConductorEstado(raw) === "Aceptado") {
+    return "ring-white/10";
+  }
+  return variant === "cell" ? "ring-black/5" : "ring-black/10";
 }
 
 export function rankConductorEstado(raw: string): number {

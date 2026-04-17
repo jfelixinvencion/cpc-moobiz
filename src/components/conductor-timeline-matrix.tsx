@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/select";
 import {
   colorForConductorEstado,
+  conductorEstadoBadgeRingClass,
   sortEstadoEntriesForMatrix,
   sortEstadosForLegend,
 } from "@/lib/conductor-estado";
@@ -160,7 +161,7 @@ const MatrixCellBody = memo(function MatrixCellBody({
         {entries.map(([estado, cnt]) => (
           <div
             key={estado}
-            className="flex min-w-[3px] items-center justify-center overflow-hidden rounded-md text-[10px] font-semibold text-white shadow-sm ring-1 ring-black/5"
+            className={`flex min-w-[3px] items-center justify-center overflow-hidden rounded-md text-[10px] font-semibold text-white shadow-sm ring-1 ${conductorEstadoBadgeRingClass(estado, "cell")}`}
             style={{
               flex: cnt,
               backgroundColor: colorForConductorEstado(estado),
@@ -428,7 +429,7 @@ export function ConductorTimelineMatrix({
             {legendEstados.map((est) => (
               <span
                 key={est}
-                className="inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold text-white shadow-sm ring-1 ring-black/10"
+                className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold text-white shadow-sm ring-1 ${conductorEstadoBadgeRingClass(est, "pill")}`}
                 style={{ backgroundColor: colorForConductorEstado(est) }}
               >
                 {est}
@@ -520,7 +521,7 @@ export function ConductorTimelineMatrix({
                   className="flex items-center justify-between gap-3 text-[11px]"
                 >
                   <span
-                    className="max-w-[55%] truncate rounded-md px-2 py-0.5 font-semibold text-white"
+                    className={`max-w-[55%] truncate rounded-md px-2 py-0.5 font-semibold text-white shadow-sm ring-1 ${conductorEstadoBadgeRingClass(trip.estado, "pill")}`}
                     style={{ backgroundColor: colorForConductorEstado(trip.estado) }}
                   >
                     {trip.estado}

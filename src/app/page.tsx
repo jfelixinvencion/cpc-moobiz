@@ -2,7 +2,17 @@
 
 import { formatDistanceToNow } from "date-fns";
 import { es } from "date-fns/locale";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+} from "react";
 import { useRouter } from "next/navigation";
 import {
   Bar,
@@ -131,8 +141,25 @@ const SCHEDULE_CRITICAL_PRODUCTS = [
 const SCHEDULE_OTHER_KEY = "OTROS" as const;
 const SCHEDULE_STACK_ORDER = [SCHEDULE_OTHER_KEY, ...SCHEDULE_CRITICAL_PRODUCTS] as const;
 const SCHEDULE_TOOLTIP_ORDER = [...SCHEDULE_CRITICAL_PRODUCTS, SCHEDULE_OTHER_KEY] as const;
+type ScheduleProductKey = (typeof SCHEDULE_STACK_ORDER)[number];
+
+function scheduleVisibilityOnlyOne(key: ScheduleProductKey): Record<ScheduleProductKey, boolean> {
+  const o = {} as Record<ScheduleProductKey, boolean>;
+  for (const k of SCHEDULE_STACK_ORDER) {
+    o[k] = k === key;
+  }
+  return o;
+}
+
+function scheduleOnlyProductVisible(
+  vis: Record<ScheduleProductKey, boolean>,
+  key: ScheduleProductKey,
+): boolean {
+  return SCHEDULE_STACK_ORDER.every((k) => (k === key ? vis[k] === true : vis[k] === false));
+}
+
 const SCHEDULE_PRODUCT_COLORS: Record<(typeof SCHEDULE_STACK_ORDER)[number], string> = {
-  OTROS: "#d1d5db",
+  OTROS: "#9ca3af",
   BUS: "#1d4ed8",
   FURGON: "#16a34a",
   VAN: "#f97316",
@@ -165,37 +192,100 @@ function buildScheduleWindowSlice(
   });
 }
 
-type ScheduleTooltipRenderProps = {
-  active?: boolean;
-  payload?: ReadonlyArray<{ payload?: ScheduleTimelineDatum }>;
+/** Entrada típica de Tooltip en BarChart apilado (Recharts). */
+type ScheduleStackRechartsPayloadEntry = {
+  dataKey?: unknown;
+  name?: unknown;
+  value?: unknown;
+  color?: string;
+  payload?: ScheduleTimelineDatum;
 };
 
-const ScheduleProductTooltip = memo(function ScheduleProductTooltip(props: ScheduleTooltipRenderProps) {
+type ScheduleStackBarTooltipProps = {
+  active?: boolean;
+  payload?: ReadonlyArray<ScheduleStackRechartsPayloadEntry>;
+};
+
+function scheduleStackTooltipDataKeyAsString(entry: ScheduleStackRechartsPayloadEntry): string {
+  const raw = entry.dataKey ?? entry.name;
+  if (raw === null || raw === undefined) return "";
+  return String(raw).trim();
+}
+
+function scheduleTooltipOrderIndexForSort(dataKey: string): number {
+  const order = SCHEDULE_TOOLTIP_ORDER as readonly string[];
+  const i = order.indexOf(dataKey);
+  return i === -1 ? 999 : i;
+}
+
+/**
+ * Tooltip custom del gráfico de franjas: filtra por `Number(value) > 0`.
+ * Recharts a veces entrega `value` como string; se coacciona antes de comparar.
+ */
+const ScheduleStackBarTooltip = memo(function ScheduleStackBarTooltip(props: ScheduleStackBarTooltipProps) {
   const { active, payload } = props;
-  if (!active || !payload?.length) return null;
-  const p = payload[0]?.payload;
-  if (!p) return null;
-  const detailRows = SCHEDULE_TOOLTIP_ORDER.map((k) => ({
-    key: k,
-    label: k === "OTROS" ? "Otros" : k,
-    value: p[k],
-  })).filter((x) => x.value > 0);
+  if (!active) return null;
+  if (!Array.isArray(payload) || payload.length === 0) return null;
+
+  const datum = payload.find((e) => e?.payload != null)?.payload;
+  if (!datum) return null;
+
+  const isKnownProductKey = (k: string): k is ScheduleProductKey =>
+    (SCHEDULE_STACK_ORDER as readonly string[]).includes(k);
+
+  const rows: { key: ScheduleProductKey; label: string; value: number; swatch: string }[] = [];
+
+  for (const entry of payload) {
+    const keyStr = scheduleStackTooltipDataKeyAsString(entry);
+    if (!keyStr || !isKnownProductKey(keyStr)) continue;
+
+    const n = Number(entry.value);
+    if (!Number.isFinite(n)) {
+      if (process.env.NODE_ENV === "development" && entry.value != null && `${entry.value}`.trim() !== "") {
+        console.debug(
+          "[ScheduleStackBarTooltip] Valor no numérico en serie; se omite:",
+          { dataKey: keyStr, value: entry.value },
+        );
+      }
+      continue;
+    }
+    if (n <= 0) continue;
+
+    const swatch =
+      typeof entry.color === "string" && entry.color.length > 0
+        ? entry.color
+        : SCHEDULE_PRODUCT_COLORS[keyStr];
+
+    rows.push({
+      key: keyStr,
+      label: keyStr === "OTROS" ? "Otros" : keyStr,
+      value: n,
+      swatch,
+    });
+  }
+
+  rows.sort((a, b) => scheduleTooltipOrderIndexForSort(a.key) - scheduleTooltipOrderIndexForSort(b.key));
+
+  if (rows.length === 0) return null;
+
+  const columnTotal = rows.reduce((sum, r) => sum + r.value, 0);
+
   return (
     <div className="min-w-[200px] space-y-1 p-2" style={CHART_TOOLTIP_STYLE}>
-      <ChartTooltipRow label="Franja" value={p.etiqueta} />
-      {detailRows.map((row) => (
+      <ChartTooltipRow label="Franja" value={datum.etiqueta} />
+      {rows.map((row) => (
         <div key={row.key} className="flex items-center justify-between gap-3 text-xs">
           <span className="inline-flex items-center gap-1.5 text-white/90">
             <span
               className="inline-block h-2 w-2 rounded-full"
-              style={{ backgroundColor: SCHEDULE_PRODUCT_COLORS[row.key] }}
+              style={{ backgroundColor: row.swatch }}
             />
             {row.label}
           </span>
           <span className="font-semibold text-white">{row.value}</span>
         </div>
       ))}
-      <ChartTooltipRow label="Total columna" value={p.total} />
+      <ChartTooltipRow label="Total columna" value={columnTotal} />
     </div>
   );
 });
@@ -337,6 +427,24 @@ export default function HomePage() {
   const scheduleTimelineScrollRef = useRef<HTMLDivElement | null>(null);
   const scheduleTimelineDataRef = useRef<ScheduleTimelineDatum[]>([]);
   const scheduleScrollRafRef = useRef<number | null>(null);
+  /** Doble click en leyenda: snapshot para restaurar; foco del producto aislado. */
+  const scheduleLegendSessionRef = useRef<{
+    restore: Record<ScheduleProductKey, boolean> | null;
+    isolateFocus: ScheduleProductKey | null;
+  }>({ restore: null, isolateFocus: null });
+  const scheduleLegendClickTimerRef = useRef<{
+    id: ReturnType<typeof setTimeout>;
+    key: ScheduleProductKey;
+  } | null>(null);
+  const [scheduleLegendUiEpoch, setScheduleLegendUiEpoch] = useState(0);
+  const [scheduleLegendHintOpen, setScheduleLegendHintOpen] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return !window.localStorage.getItem("scheduleLegendHintSeen");
+    } catch {
+      return false;
+    }
+  });
   const [scheduleViewWindow, setScheduleViewWindow] = useState({ start: 0, end: 0 });
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
   const [dashboardRefreshedAt, setDashboardRefreshedAt] = useState<Date | null>(null);
@@ -691,31 +799,141 @@ export default function HomePage() {
     return () => ro.disconnect();
   }, [syncScheduleViewport]);
 
-  const toggleScheduleProduct = useCallback((key: (typeof SCHEDULE_STACK_ORDER)[number]) => {
-    setScheduleProductVisibility((prev) => {
-      const turningOn = !prev[key];
-      const next = { ...prev, [key]: !prev[key] };
-      if (turningOn) {
-        const rows = scheduleTimelineDataRef.current;
-        queueMicrotask(() => {
-          const container = scheduleTimelineScrollRef.current;
-          if (!container) return;
-          const n = rows.length || 1;
-          const idx = rows.findIndex((row) => (row[key] ?? 0) > 0);
-          if (idx < 0) {
-            container.scrollTo({ left: 0, behavior: "smooth" });
-            return;
-          }
-          const slotWidth = container.scrollWidth / n;
-          const slotCenter = idx * slotWidth + slotWidth / 2;
-          const maxLeft = Math.max(0, container.scrollWidth - container.clientWidth);
-          const targetLeft = Math.max(0, Math.min(maxLeft, slotCenter - container.clientWidth / 2));
-          container.scrollTo({ left: targetLeft, behavior: "smooth" });
-        });
+  const scrollScheduleChartToProduct = useCallback((key: ScheduleProductKey, turnedOn: boolean) => {
+    if (!turnedOn) return;
+    const rows = scheduleTimelineDataRef.current;
+    queueMicrotask(() => {
+      const container = scheduleTimelineScrollRef.current;
+      if (!container) return;
+      const n = rows.length || 1;
+      const idx = rows.findIndex((row) => (row[key] ?? 0) > 0);
+      if (idx < 0) {
+        container.scrollTo({ left: 0, behavior: "smooth" });
+        return;
       }
-      return next;
+      const slotWidth = container.scrollWidth / n;
+      const slotCenter = idx * slotWidth + slotWidth / 2;
+      const maxLeft = Math.max(0, container.scrollWidth - container.clientWidth);
+      const targetLeft = Math.max(0, Math.min(maxLeft, slotCenter - container.clientWidth / 2));
+      container.scrollTo({ left: targetLeft, behavior: "smooth" });
     });
   }, []);
+
+  const toggleScheduleProduct = useCallback(
+    (key: ScheduleProductKey) => {
+      scheduleLegendSessionRef.current = { restore: null, isolateFocus: null };
+      setScheduleLegendUiEpoch((e) => e + 1);
+      setScheduleProductVisibility((prev) => {
+        const turningOn = !prev[key];
+        const next = { ...prev, [key]: !prev[key] };
+        scrollScheduleChartToProduct(key, turningOn);
+        return next;
+      });
+    },
+    [scrollScheduleChartToProduct],
+  );
+
+  const handleScheduleLegendIsolate = useCallback(
+    (key: ScheduleProductKey) => {
+      setScheduleProductVisibility((vis) => {
+        const session = scheduleLegendSessionRef.current;
+        if (
+          session.restore &&
+          session.isolateFocus === key &&
+          scheduleOnlyProductVisible(vis, key)
+        ) {
+          scheduleLegendSessionRef.current = { restore: null, isolateFocus: null };
+          return { ...session.restore };
+        }
+        scheduleLegendSessionRef.current = { restore: { ...vis }, isolateFocus: key };
+        queueMicrotask(() => {
+          scrollScheduleChartToProduct(key, true);
+        });
+        return scheduleVisibilityOnlyOne(key);
+      });
+      setScheduleLegendUiEpoch((e) => e + 1);
+    },
+    [scrollScheduleChartToProduct],
+  );
+
+  const clearScheduleLegendPendingClick = useCallback(() => {
+    const p = scheduleLegendClickTimerRef.current;
+    if (p) {
+      clearTimeout(p.id);
+      scheduleLegendClickTimerRef.current = null;
+    }
+  }, []);
+
+  const onScheduleLegendItemClick = useCallback(
+    (key: ScheduleProductKey) => {
+      const pending = scheduleLegendClickTimerRef.current;
+      if (pending && pending.key === key) {
+        clearTimeout(pending.id);
+        scheduleLegendClickTimerRef.current = null;
+        return;
+      }
+      if (pending) {
+        clearTimeout(pending.id);
+        scheduleLegendClickTimerRef.current = null;
+      }
+      const id = setTimeout(() => {
+        scheduleLegendClickTimerRef.current = null;
+        toggleScheduleProduct(key);
+      }, 280);
+      scheduleLegendClickTimerRef.current = { id, key };
+    },
+    [toggleScheduleProduct],
+  );
+
+  const onScheduleLegendItemDoubleClick = useCallback(
+    (e: MouseEvent, key: ScheduleProductKey) => {
+      e.preventDefault();
+      clearScheduleLegendPendingClick();
+      handleScheduleLegendIsolate(key);
+    },
+    [clearScheduleLegendPendingClick, handleScheduleLegendIsolate],
+  );
+
+  const onScheduleLegendItemKeyDown = useCallback(
+    (e: KeyboardEvent, key: ScheduleProductKey) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (e.shiftKey) {
+          clearScheduleLegendPendingClick();
+          handleScheduleLegendIsolate(key);
+        } else {
+          clearScheduleLegendPendingClick();
+          toggleScheduleProduct(key);
+        }
+      }
+    },
+    [clearScheduleLegendPendingClick, handleScheduleLegendIsolate, toggleScheduleProduct],
+  );
+
+  const restoreScheduleLegendView = useCallback(() => {
+    const snap = scheduleLegendSessionRef.current.restore;
+    if (!snap) return;
+    scheduleLegendSessionRef.current = { restore: null, isolateFocus: null };
+    setScheduleProductVisibility({ ...snap });
+    setScheduleLegendUiEpoch((e) => e + 1);
+  }, []);
+
+  const dismissScheduleLegendHint = useCallback(() => {
+    try {
+      window.localStorage.setItem("scheduleLegendHintSeen", "1");
+    } catch {
+      /* ignore */
+    }
+    setScheduleLegendHintOpen(false);
+  }, []);
+
+  useEffect(
+    () => () => {
+      const p = scheduleLegendClickTimerRef.current;
+      if (p) clearTimeout(p.id);
+    },
+    [],
+  );
 
   const dashboardAgeLabel = useMemo(() => {
     void dashboardAgeTick;
@@ -1094,8 +1312,8 @@ export default function HomePage() {
                 )}
             <Card className="border-slate-200 bg-white shadow-sm">
               <CardHeader className="space-y-3 py-3">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
                     <CardTitle className="text-base font-semibold text-slate-800">
                       Pendientes por franja de programacion
                     </CardTitle>
@@ -1104,37 +1322,83 @@ export default function HomePage() {
                       desplaza horizontalmente si hay mas franjas.
                     </p>
                   </div>
-                  <div className="grid grid-cols-2 gap-1 sm:grid-cols-3">
-                    {SCHEDULE_TOOLTIP_ORDER.map((key) => (
-                      <button
-                        key={key}
-                        type="button"
-                        onClick={() => toggleScheduleProduct(key)}
-                        className={`rounded-md border px-2 py-1 text-[10px] font-semibold transition ${
-                          scheduleProductVisibility[key]
-                            ? "border-slate-300 bg-white text-slate-700"
-                            : "border-slate-200 bg-slate-100 text-slate-400"
-                        }`}
-                      >
-                        <span
-                          className="mr-1 inline-block h-2 w-2 rounded-full"
-                          style={{ backgroundColor: SCHEDULE_PRODUCT_COLORS[key] }}
-                        />
-                        {key === "OTROS" ? "Otros" : key}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {SCHEDULE_TOOLTIP_ORDER.map((key) => (
-                    <span
-                      key={`legend-${key}`}
-                      className="inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-semibold text-white"
-                      style={{ backgroundColor: SCHEDULE_PRODUCT_COLORS[key] }}
-                    >
-                      {key === "OTROS" ? "Otros" : key}
-                    </span>
-                  ))}
+                  {(() => {
+                    void scheduleLegendUiEpoch;
+                    const session = scheduleLegendSessionRef.current;
+                    const isolated =
+                      session.isolateFocus !== null &&
+                      scheduleOnlyProductVisible(scheduleProductVisibility, session.isolateFocus);
+                    const canRestore = session.restore !== null;
+                    return (
+                      <div className="flex min-w-0 flex-col items-stretch gap-2 sm:max-w-[min(100%,520px)] sm:items-end">
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          {canRestore && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-7 shrink-0 text-xs"
+                              onClick={restoreScheduleLegendView}
+                            >
+                              Restaurar vista
+                            </Button>
+                          )}
+                          <div
+                            className="flex flex-wrap justify-end gap-2"
+                            title="Click: mostrar u ocultar en la grafica. Doble click: ver solo este producto. Teclado: Enter alterna; Mayus+Enter aísla."
+                          >
+                            {SCHEDULE_TOOLTIP_ORDER.map((key) => {
+                              const vis = scheduleProductVisibility[key];
+                              const isHidden = !vis;
+                              const isIsolateChip =
+                                isolated && session.isolateFocus === key;
+                              const isDimmed = isolated && session.isolateFocus !== key;
+                              return (
+                                <button
+                                  key={`legend-${key}`}
+                                  type="button"
+                                  tabIndex={0}
+                                  onClick={() => onScheduleLegendItemClick(key)}
+                                  onDoubleClick={(e) => onScheduleLegendItemDoubleClick(e, key)}
+                                  onKeyDown={(e) => onScheduleLegendItemKeyDown(e, key)}
+                                  className={`inline-flex cursor-pointer items-center rounded-md border border-transparent px-2 py-0.5 text-[10px] font-semibold text-white outline-offset-2 transition hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-400 ${
+                                    isHidden ? "opacity-40" : isDimmed ? "opacity-50" : ""
+                                  } ${isIsolateChip ? "z-[1] ring-2 ring-white shadow-md" : ""}`}
+                                  style={{ backgroundColor: SCHEDULE_PRODUCT_COLORS[key] }}
+                                  aria-pressed={vis}
+                                  aria-label={
+                                    key === "OTROS"
+                                      ? `Otros, ${vis ? "visible" : "oculto"} en la grafica`
+                                      : `${key}, ${vis ? "visible" : "oculto"} en la grafica`
+                                  }
+                                >
+                                  {key === "OTROS" ? "Otros" : key}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                        {scheduleLegendHintOpen && (
+                          <div className="flex max-w-full flex-col gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-left sm:items-end">
+                            <p className="text-[10px] leading-snug text-slate-600">
+                              <span className="font-semibold text-slate-700">Leyenda:</span> click para
+                              mostrar u ocultar · doble click para ver solo ese producto (otro doble click o
+                              &quot;Restaurar vista&quot; revierte).
+                            </p>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 self-end px-2 text-[10px]"
+                              onClick={dismissScheduleLegendHint}
+                            >
+                              Entendido
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               </CardHeader>
               <CardContent className="pb-4">
@@ -1187,7 +1451,7 @@ export default function HomePage() {
                             allowDecimals={false}
                             domain={[0, scheduleYAxisMax]}
                           />
-                          <Tooltip content={ScheduleProductTooltip} />
+                          <Tooltip content={<ScheduleStackBarTooltip />} />
                           {visibleScheduleKeys.map((key, idx) => (
                             <Bar
                               key={key}

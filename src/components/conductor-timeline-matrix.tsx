@@ -9,6 +9,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   colorForConductorEstado,
   sortEstadoEntriesForMatrix,
   sortEstadosForLegend,
@@ -119,7 +126,13 @@ type MatrixSlot = {
 const EMPTY_TRIPS: ViajeSlotTrip[] = [];
 
 /** Interior de celda; `trips` es la lista de servicios en esa franja horaria (referencia estable por celda en el Map). */
-const MatrixCellBody = memo(function MatrixCellBody({ trips }: { trips: ViajeSlotTrip[] | undefined }) {
+const MatrixCellBody = memo(function MatrixCellBody({
+  trips,
+  overlapHighlight,
+}: {
+  trips: ViajeSlotTrip[] | undefined;
+  overlapHighlight?: boolean;
+}) {
   const { entries, total, multi } = useMemo(() => {
     const list = trips ?? [];
     const counts = new Map<string, number>();
@@ -132,11 +145,17 @@ const MatrixCellBody = memo(function MatrixCellBody({ trips }: { trips: ViajeSlo
     return { entries, total, multi: entries.length > 1 };
   }, [trips]);
 
+  const showOverlapAlert = Boolean(overlapHighlight && total >= 2);
+
   if (total === 0) {
     return <div className="h-full w-full rounded-md bg-slate-50/90" />;
   }
   return (
-    <>
+    <div
+      className={`relative h-full w-full rounded-md ${
+        showOverlapAlert ? "ring-2 ring-red-600 ring-offset-0" : ""
+      }`}
+    >
       <div className="relative flex h-full min-h-0 w-full gap-0.5 overflow-hidden rounded-md bg-slate-100/90 p-0.5">
         {entries.map(([estado, cnt]) => (
           <div
@@ -147,16 +166,26 @@ const MatrixCellBody = memo(function MatrixCellBody({ trips }: { trips: ViajeSlo
               backgroundColor: colorForConductorEstado(estado),
             }}
           >
-            {!multi ? cnt : null}
+            {!multi ? (showOverlapAlert ? null : cnt) : null}
           </div>
         ))}
       </div>
       {multi ? (
-        <span className="pointer-events-none absolute inset-0 flex items-center justify-center text-[10px] font-bold text-white drop-shadow-[0_1px_1px_rgba(0,0,0,0.85)]">
+        <span
+          className={`pointer-events-none absolute inset-0 flex items-center justify-center text-[10px] font-bold text-white drop-shadow-[0_1px_1px_rgba(0,0,0,0.85)] ${
+            showOverlapAlert
+              ? "rounded-full bg-red-600 px-1.5 py-0.5 shadow-md ring-1 ring-white/30"
+              : ""
+          }`}
+        >
+          {total}
+        </span>
+      ) : showOverlapAlert ? (
+        <span className="pointer-events-none absolute right-0.5 top-0.5 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-orange-600 px-1 text-[9px] font-bold leading-none text-white shadow ring-1 ring-white/40">
           {total}
         </span>
       ) : null}
-    </>
+    </div>
   );
 });
 
@@ -180,6 +209,8 @@ export function ConductorTimelineMatrix({
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [conductorSearch, setConductorSearch] = useState("");
+  /** Filtro local: conductores con 2+ servicios en la misma franja horaria. */
+  const [serviceOverlapFilter, setServiceOverlapFilter] = useState<"all" | "suspicious">("all");
   const [selectedRowCounts, setSelectedRowCounts] = useState<Set<number>>(new Set());
   const [hover, setHover] = useState<{
     conductor: string;
@@ -289,15 +320,39 @@ export function ConductorTimelineMatrix({
     return Array.from(s).sort((a, b) => a - b);
   }, [conductorTotals]);
 
+  /** Conductores con al menos una celda (misma hora) con 2 o más servicios. */
+  const conductorsWithSlotOverlap = useMemo(() => {
+    const out = new Set<string>();
+    for (const [name, bySlot] of cellMap) {
+      for (const trips of bySlot.values()) {
+        if (trips.length >= 2) {
+          out.add(name);
+          break;
+        }
+      }
+    }
+    return out;
+  }, [cellMap]);
+
   const filteredConductors = useMemo(() => {
     const q = conductorSearch.trim().toLowerCase();
     return conductorOrder.filter((name) => {
+      if (serviceOverlapFilter === "suspicious" && !conductorsWithSlotOverlap.has(name)) {
+        return false;
+      }
       if (q && !name.toLowerCase().includes(q)) return false;
       const total = conductorTotals.get(name) ?? 0;
       if (selectedRowCounts.size > 0 && !selectedRowCounts.has(total)) return false;
       return true;
     });
-  }, [conductorOrder, conductorTotals, conductorSearch, selectedRowCounts]);
+  }, [
+    conductorOrder,
+    conductorTotals,
+    conductorSearch,
+    selectedRowCounts,
+    serviceOverlapFilter,
+    conductorsWithSlotOverlap,
+  ]);
 
   const rowCount = filteredConductors.length;
   const colCount = slots.length;
@@ -414,14 +469,31 @@ export function ConductorTimelineMatrix({
               </Button>
             )}
           </div>
-          <div className="w-full max-w-sm space-y-1">
-            <Label className="text-xs text-slate-600">Nombre del conductor</Label>
-            <Input
-              value={conductorSearch}
-              onChange={(e) => setConductorSearch(e.target.value)}
-              placeholder="Buscar..."
-              className="h-9 text-sm"
-            />
+          <div className="flex w-full min-w-0 flex-col gap-3 sm:flex-row sm:items-end">
+            <div className="min-w-0 flex-1 space-y-1">
+              <Label className="text-xs text-slate-600">Nombre del conductor</Label>
+              <Input
+                value={conductorSearch}
+                onChange={(e) => setConductorSearch(e.target.value)}
+                placeholder="Buscar..."
+                className="h-9 text-sm"
+              />
+            </div>
+            <div className="w-full shrink-0 space-y-1 sm:w-[min(100%,280px)]">
+              <Label className="text-xs text-slate-600">Servicios en misma hora</Label>
+              <Select
+                value={serviceOverlapFilter}
+                onValueChange={(v) => setServiceOverlapFilter(v as "all" | "suspicious")}
+              >
+                <SelectTrigger className="h-9 w-full border-slate-200 bg-white text-sm">
+                  <SelectValue placeholder="Filtro" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos</SelectItem>
+                  <SelectItem value="suspicious">Sospechosos (2+ en misma hora)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         </div>
 
@@ -598,7 +670,10 @@ export function ConductorTimelineMatrix({
                               }}
                               onMouseLeave={() => setHover(null)}
                             >
-                              <MatrixCellBody trips={tripsCell} />
+                              <MatrixCellBody
+                                trips={tripsCell}
+                                overlapHighlight={serviceOverlapFilter === "suspicious"}
+                              />
                             </div>
                           );
                         })}

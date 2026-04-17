@@ -2,7 +2,7 @@
 
 import { formatDistanceToNow } from "date-fns";
 import { es } from "date-fns/locale";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Bar,
@@ -109,10 +109,117 @@ type ScheduleTimelineDatum = {
   hourLabel: string;
   dateLabel: string;
   dateKey: string;
-  barColor: string;
   showDayLabel: boolean;
   dayDividerBefore: boolean;
+  OTROS: number;
+  BUS: number;
+  FURGON: number;
+  VAN: number;
+  SPRINTER: number;
+  LOGISTICA: number;
+  "PROVINCIA VIP": number;
 };
+
+const SCHEDULE_CRITICAL_PRODUCTS = [
+  "BUS",
+  "FURGON",
+  "VAN",
+  "SPRINTER",
+  "LOGISTICA",
+  "PROVINCIA VIP",
+] as const;
+const SCHEDULE_OTHER_KEY = "OTROS" as const;
+const SCHEDULE_STACK_ORDER = [SCHEDULE_OTHER_KEY, ...SCHEDULE_CRITICAL_PRODUCTS] as const;
+const SCHEDULE_TOOLTIP_ORDER = [...SCHEDULE_CRITICAL_PRODUCTS, SCHEDULE_OTHER_KEY] as const;
+const SCHEDULE_PRODUCT_COLORS: Record<(typeof SCHEDULE_STACK_ORDER)[number], string> = {
+  OTROS: "#d1d5db",
+  BUS: "#1d4ed8",
+  FURGON: "#16a34a",
+  VAN: "#f97316",
+  SPRINTER: "#06b6d4",
+  LOGISTICA: "#7c3aed",
+  "PROVINCIA VIP": "#e11d48",
+};
+
+/** Ancho lógico por columna de franja (px): scroll, ventana visible y grosor de barras. */
+const SCHEDULE_SLOT_PX = 28;
+/** Columnas extra a cada lado del viewport para scroll suave. */
+const SCHEDULE_VIEW_BUFFER_COLUMNS = 16;
+
+function buildScheduleWindowSlice(
+  full: ScheduleTimelineDatum[],
+  start: number,
+  end: number,
+): ScheduleTimelineDatum[] {
+  const n = full.length;
+  if (n === 0 || end <= start) return [];
+  const s = Math.max(0, Math.min(start, n - 1));
+  const e = Math.max(s + 1, Math.min(end, n));
+  const prevDateKey = s > 0 ? (full[s - 1]?.dateKey ?? "") : "";
+  return full.slice(s, e).map((row, i) => {
+    if (i > 0) return row;
+    return {
+      ...row,
+      dayDividerBefore: s > 0 && Boolean(row.dateKey) && row.dateKey !== prevDateKey,
+    };
+  });
+}
+
+type ScheduleTooltipRenderProps = {
+  active?: boolean;
+  payload?: ReadonlyArray<{ payload?: ScheduleTimelineDatum }>;
+};
+
+const ScheduleProductTooltip = memo(function ScheduleProductTooltip(props: ScheduleTooltipRenderProps) {
+  const { active, payload } = props;
+  if (!active || !payload?.length) return null;
+  const p = payload[0]?.payload;
+  if (!p) return null;
+  const detailRows = SCHEDULE_TOOLTIP_ORDER.map((k) => ({
+    key: k,
+    label: k === "OTROS" ? "Otros" : k,
+    value: p[k],
+  })).filter((x) => x.value > 0);
+  return (
+    <div className="min-w-[200px] space-y-1 p-2" style={CHART_TOOLTIP_STYLE}>
+      <ChartTooltipRow label="Franja" value={p.etiqueta} />
+      {detailRows.map((row) => (
+        <div key={row.key} className="flex items-center justify-between gap-3 text-xs">
+          <span className="inline-flex items-center gap-1.5 text-white/90">
+            <span
+              className="inline-block h-2 w-2 rounded-full"
+              style={{ backgroundColor: SCHEDULE_PRODUCT_COLORS[row.key] }}
+            />
+            {row.label}
+          </span>
+          <span className="font-semibold text-white">{row.value}</span>
+        </div>
+      ))}
+      <ChartTooltipRow label="Total columna" value={p.total} />
+    </div>
+  );
+});
+
+function normalizeProductoKey(value: unknown): string {
+  return asText(value)
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function scheduleBucketForProducto(value: unknown): (typeof SCHEDULE_STACK_ORDER)[number] {
+  const key = normalizeProductoKey(value);
+  const compact = key.replace(/\s+/g, "");
+  if (key === "VIP" || compact === "PROVINCIAVIP") {
+    return "PROVINCIA VIP";
+  }
+  if ((SCHEDULE_CRITICAL_PRODUCTS as readonly string[]).includes(key)) {
+    return key as (typeof SCHEDULE_STACK_ORDER)[number];
+  }
+  return SCHEDULE_OTHER_KEY;
+}
 
 function parseScheduleLabelParts(value: unknown): { time: string; date: string; dateKey: string } {
   const raw = asText(value);
@@ -159,6 +266,28 @@ function extractHour24FromScheduleEtiqueta(raw: string): number | null {
   return h;
 }
 
+function parseViajeScheduledDate(v: Viaje): Date | null {
+  const candidate = asText(v.fecha) || asText(v.fecha_registro);
+  if (!candidate) return null;
+  const isoTry = new Date(candidate);
+  if (!Number.isNaN(isoTry.getTime())) return isoTry;
+  const m = candidate.match(
+    /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(a\.?\s*m\.?|p\.?\s*m\.?)?)?/i,
+  );
+  if (!m) return null;
+  const day = Number(m[1]);
+  const month = Number(m[2]) - 1;
+  const year = Number(m[3]);
+  let hour = m[4] !== undefined ? Number(m[4]) : 0;
+  const minute = m[5] !== undefined ? Number(m[5]) : 0;
+  const second = m[6] !== undefined ? Number(m[6]) : 0;
+  const meridiem = m[7] ? String(m[7]).toLowerCase().replace(/\./g, "") : "";
+  if (meridiem.startsWith("p") && hour < 12) hour += 12;
+  if (meridiem.startsWith("a") && hour === 12) hour = 0;
+  const d = new Date(year, month, day, hour, minute, second);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 function asText(value: unknown): string {
   if (value === null || value === undefined) return "";
   return String(value).trim();
@@ -194,6 +323,21 @@ export default function HomePage() {
   const [reservasEndDate, setReservasEndDate] = useState("");
   const [mainTab, setMainTab] = useState("datos");
   const [dashboardSubTab, setDashboardSubTab] = useState("reservas");
+  const [scheduleProductVisibility, setScheduleProductVisibility] = useState<
+    Record<(typeof SCHEDULE_STACK_ORDER)[number], boolean>
+  >({
+    OTROS: true,
+    BUS: true,
+    FURGON: true,
+    VAN: true,
+    SPRINTER: true,
+    LOGISTICA: true,
+    "PROVINCIA VIP": true,
+  });
+  const scheduleTimelineScrollRef = useRef<HTMLDivElement | null>(null);
+  const scheduleTimelineDataRef = useRef<ScheduleTimelineDatum[]>([]);
+  const scheduleScrollRafRef = useRef<number | null>(null);
+  const [scheduleViewWindow, setScheduleViewWindow] = useState({ start: 0, end: 0 });
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
   const [dashboardRefreshedAt, setDashboardRefreshedAt] = useState<Date | null>(null);
   const [dashboardAgeTick, setDashboardAgeTick] = useState(0);
@@ -387,16 +531,13 @@ export default function HomePage() {
 
   const reservasEmpresaOptions = dashboardData?.filters.empresas ?? [];
 
-  /** Ancho por franja (px); el resto de horas se ve con scroll horizontal. */
-  const SCHEDULE_SLOT_PX = 28;
   const scheduleChartData = dashboardData?.charts.pendingBySchedule ?? [];
   const scheduleChartWidth = Math.max(scheduleChartData.length * SCHEDULE_SLOT_PX, 320);
+  const visibleScheduleKeys = useMemo(
+    () => SCHEDULE_STACK_ORDER.filter((k) => scheduleProductVisibility[k]),
+    [scheduleProductVisibility],
+  );
   const scheduleTimelineData = useMemo<ScheduleTimelineDatum[]>(() => {
-    const today = new Date();
-    const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(
-      today.getDate(),
-    ).padStart(2, "0")}`;
-
     const grouped = scheduleChartData.reduce<Record<string, Array<{ index: number; time: string }>>>(
       (acc, item, index) => {
         const parts = parseScheduleLabelParts(item.etiqueta);
@@ -413,12 +554,11 @@ export default function HomePage() {
       centerIndexByDay.set(dateKey, items[Math.floor((items.length - 1) / 2)]?.index ?? -1);
     });
 
-    return scheduleChartData.map((item, index) => {
+    const baseData = scheduleChartData.map((item, index) => {
       const { time, date, dateKey } = parseScheduleLabelParts(item.etiqueta);
       const hour24 = extractHour24FromScheduleEtiqueta(item.etiqueta);
       const prevDateKey =
         index > 0 ? parseScheduleLabelParts(scheduleChartData[index - 1]?.etiqueta).dateKey : "";
-      const isFuture = Boolean(dateKey) && dateKey > todayKey;
 
       return {
         etiqueta: item.etiqueta,
@@ -426,12 +566,156 @@ export default function HomePage() {
         hourLabel: hour24 !== null ? String(hour24).padStart(2, "0") : time ? time.slice(0, 2) : "",
         dateLabel: date,
         dateKey,
-        barColor: isFuture ? "rgba(30, 136, 229, 0.6)" : "#1e88e5",
         showDayLabel: centerIndexByDay.get(dateKey || `fallback-${index}`) === index,
         dayDividerBefore: index > 0 && Boolean(dateKey) && dateKey !== prevDateKey,
+        OTROS: 0,
+        BUS: 0,
+        FURGON: 0,
+        VAN: 0,
+        SPRINTER: 0,
+        LOGISTICA: 0,
+        "PROVINCIA VIP": 0,
       };
     });
-  }, [scheduleChartData]);
+
+    const bySlot = new Map<string, ScheduleTimelineDatum>();
+    for (const item of baseData) {
+      const hour = extractHour24FromScheduleEtiqueta(item.etiqueta);
+      const slotKey = `${item.dateKey}|${hour !== null ? String(hour).padStart(2, "0") : ""}`;
+      bySlot.set(slotKey, item);
+    }
+
+    for (const viaje of dashboardData?.data ?? []) {
+      const d = parseViajeScheduledDate(viaje);
+      if (!d) continue;
+      const slotKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}|${String(d.getHours()).padStart(2, "0")}`;
+      const slot = bySlot.get(slotKey);
+      if (!slot) continue;
+      const bucket = scheduleBucketForProducto(viaje.producto);
+      slot[bucket] += 1;
+    }
+
+    for (const item of baseData) {
+      const sum =
+        item.OTROS +
+        item.BUS +
+        item.FURGON +
+        item.VAN +
+        item.SPRINTER +
+        item.LOGISTICA +
+        item["PROVINCIA VIP"];
+      item.total = sum > 0 ? sum : item.total;
+    }
+
+    return baseData;
+  }, [dashboardData?.data, scheduleChartData]);
+
+  scheduleTimelineDataRef.current = scheduleTimelineData;
+
+  const scheduleSlotCount = scheduleTimelineData.length;
+  const scheduleViewUnset = scheduleViewWindow.end === 0 && scheduleSlotCount > 0;
+  const scheduleViewStart = scheduleViewUnset ? 0 : scheduleViewWindow.start;
+  const scheduleViewEnd = scheduleViewUnset ? scheduleSlotCount : scheduleViewWindow.end;
+
+  const scheduleChartViewportSlice = useMemo(
+    () => buildScheduleWindowSlice(scheduleTimelineData, scheduleViewStart, scheduleViewEnd),
+    [scheduleTimelineData, scheduleViewStart, scheduleViewEnd],
+  );
+
+  const scheduleYAxisMax = useMemo(() => {
+    let m = 0;
+    for (const row of scheduleTimelineData) {
+      if (row.total > m) m = row.total;
+    }
+    return Math.max(1, m);
+  }, [scheduleTimelineData]);
+
+  const scheduleDatumByEtiqueta = useMemo(() => {
+    const map = new Map<string, ScheduleTimelineDatum>();
+    for (const row of scheduleTimelineData) {
+      map.set(row.etiqueta, row);
+    }
+    return map;
+  }, [scheduleTimelineData]);
+
+  const syncScheduleViewport = useCallback(() => {
+    const el = scheduleTimelineScrollRef.current;
+    const n = scheduleTimelineDataRef.current.length;
+    if (!el || n === 0) {
+      setScheduleViewWindow((prev) => (prev.start === 0 && prev.end === 0 ? prev : { start: 0, end: 0 }));
+      return;
+    }
+    const buffer = SCHEDULE_VIEW_BUFFER_COLUMNS;
+    const scrollLeft = el.scrollLeft;
+    const clientW = Math.max(1, el.clientWidth);
+    const totalW = Math.max(n * SCHEDULE_SLOT_PX, 320);
+    const slotW = totalW / n;
+    const first = Math.max(0, Math.floor(scrollLeft / slotW) - buffer);
+    const rawLast = Math.ceil((scrollLeft + clientW) / slotW) + buffer;
+    const last = Math.min(n, Math.max(first + 1, rawLast));
+    setScheduleViewWindow((prev) => {
+      if (prev.start === first && prev.end === last) return prev;
+      return { start: first, end: last };
+    });
+  }, []);
+
+  const onScheduleChartScroll = useCallback(() => {
+    if (scheduleScrollRafRef.current != null) return;
+    scheduleScrollRafRef.current = window.requestAnimationFrame(() => {
+      scheduleScrollRafRef.current = null;
+      syncScheduleViewport();
+    });
+  }, [syncScheduleViewport]);
+
+  useLayoutEffect(() => {
+    scheduleTimelineDataRef.current = scheduleTimelineData;
+    syncScheduleViewport();
+  }, [scheduleTimelineData, syncScheduleViewport]);
+
+  useEffect(
+    () => () => {
+      if (scheduleScrollRafRef.current != null) {
+        cancelAnimationFrame(scheduleScrollRafRef.current);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const el = scheduleTimelineScrollRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      syncScheduleViewport();
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [syncScheduleViewport]);
+
+  const toggleScheduleProduct = useCallback((key: (typeof SCHEDULE_STACK_ORDER)[number]) => {
+    setScheduleProductVisibility((prev) => {
+      const turningOn = !prev[key];
+      const next = { ...prev, [key]: !prev[key] };
+      if (turningOn) {
+        const rows = scheduleTimelineDataRef.current;
+        queueMicrotask(() => {
+          const container = scheduleTimelineScrollRef.current;
+          if (!container) return;
+          const n = rows.length || 1;
+          const idx = rows.findIndex((row) => (row[key] ?? 0) > 0);
+          if (idx < 0) {
+            container.scrollTo({ left: 0, behavior: "smooth" });
+            return;
+          }
+          const slotWidth = container.scrollWidth / n;
+          const slotCenter = idx * slotWidth + slotWidth / 2;
+          const maxLeft = Math.max(0, container.scrollWidth - container.clientWidth);
+          const targetLeft = Math.max(0, Math.min(maxLeft, slotCenter - container.clientWidth / 2));
+          container.scrollTo({ left: targetLeft, behavior: "smooth" });
+        });
+      }
+      return next;
+    });
+  }, []);
 
   const dashboardAgeLabel = useMemo(() => {
     void dashboardAgeTick;
@@ -443,7 +727,7 @@ export default function HomePage() {
     () =>
       function ScheduleXAxisTickFn(props: { x?: number; y?: number; payload?: { value: unknown } }) {
         const { x = 0, y = 0, payload } = props;
-        const entry = scheduleTimelineData.find((item) => item.etiqueta === payload?.value);
+        const entry = scheduleDatumByEtiqueta.get(asText(payload?.value));
         if (!entry) return null;
         return (
           <g transform={`translate(${x},${y})`}>
@@ -472,7 +756,12 @@ export default function HomePage() {
           </g>
         );
       },
-    [scheduleTimelineData],
+    [scheduleDatumByEtiqueta],
+  );
+
+  const scheduleViewportChartWidth = Math.max(
+    (scheduleViewEnd - scheduleViewStart) * SCHEDULE_SLOT_PX,
+    240,
   );
 
   return (
@@ -804,77 +1093,121 @@ export default function HomePage() {
                   </p>
                 )}
             <Card className="border-slate-200 bg-white shadow-sm">
-              <CardHeader className="py-3">
-                <CardTitle className="text-base font-semibold text-slate-800">
-                  Pendientes por franja de programacion
-                </CardTitle>
-                <p className="text-xs text-slate-500">
-                  Desde la primera hora con viaje pendiente hasta la ultima. Minimo 24 h en el eje; desplaza
-                  horizontalmente si hay mas franjas.
-                </p>
+              <CardHeader className="space-y-3 py-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <CardTitle className="text-base font-semibold text-slate-800">
+                      Pendientes por franja de programacion
+                    </CardTitle>
+                    <p className="text-xs text-slate-500">
+                      Desde la primera hora con viaje pendiente hasta la ultima. Minimo 24 h en el eje;
+                      desplaza horizontalmente si hay mas franjas.
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1 sm:grid-cols-3">
+                    {SCHEDULE_TOOLTIP_ORDER.map((key) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => toggleScheduleProduct(key)}
+                        className={`rounded-md border px-2 py-1 text-[10px] font-semibold transition ${
+                          scheduleProductVisibility[key]
+                            ? "border-slate-300 bg-white text-slate-700"
+                            : "border-slate-200 bg-slate-100 text-slate-400"
+                        }`}
+                      >
+                        <span
+                          className="mr-1 inline-block h-2 w-2 rounded-full"
+                          style={{ backgroundColor: SCHEDULE_PRODUCT_COLORS[key] }}
+                        />
+                        {key === "OTROS" ? "Otros" : key}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {SCHEDULE_TOOLTIP_ORDER.map((key) => (
+                    <span
+                      key={`legend-${key}`}
+                      className="inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-semibold text-white"
+                      style={{ backgroundColor: SCHEDULE_PRODUCT_COLORS[key] }}
+                    >
+                      {key === "OTROS" ? "Otros" : key}
+                    </span>
+                  ))}
+                </div>
               </CardHeader>
               <CardContent className="pb-4">
-                <div className="overflow-x-auto overflow-y-hidden rounded-lg border border-slate-100 bg-slate-50/50 [-webkit-overflow-scrolling:touch]">
-                  <div style={{ width: scheduleChartWidth, height: 350 }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart
-                        data={scheduleTimelineData}
-                        margin={{ top: 10, right: 12, left: 4, bottom: 28 }}
-                      >
-                        <CartesianGrid stroke={CHART_GRID} vertical={false} />
-                        {scheduleTimelineData
-                          .filter((item) => item.dayDividerBefore)
-                          .map((item) => (
-                            <ReferenceLine
-                              key={`divider-${item.etiqueta}`}
-                              x={item.etiqueta}
-                              position="start"
-                              ifOverflow="visible"
-                              stroke="rgba(6, 182, 212, 0.3)"
-                              strokeDasharray="4 4"
-                              strokeWidth={1}
+                <div
+                  ref={scheduleTimelineScrollRef}
+                  onScroll={onScheduleChartScroll}
+                  className="overflow-x-auto overflow-y-hidden rounded-lg border border-slate-100 bg-slate-50/50 [-webkit-overflow-scrolling:touch]"
+                >
+                  <div className="relative" style={{ width: scheduleChartWidth, height: 350 }}>
+                    <div
+                      className="absolute top-0"
+                      style={{
+                        left: scheduleViewStart * SCHEDULE_SLOT_PX,
+                        width: scheduleViewportChartWidth,
+                        height: 350,
+                      }}
+                    >
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          data={scheduleChartViewportSlice}
+                          margin={{ top: 10, right: 12, left: 4, bottom: 28 }}
+                        >
+                          <CartesianGrid stroke={CHART_GRID} vertical={false} />
+                          {scheduleChartViewportSlice
+                            .filter((item) => item.dayDividerBefore)
+                            .map((item) => (
+                              <ReferenceLine
+                                key={`divider-${item.etiqueta}`}
+                                x={item.etiqueta}
+                                position="start"
+                                ifOverflow="visible"
+                                stroke="rgba(6, 182, 212, 0.3)"
+                                strokeDasharray="4 4"
+                                strokeWidth={1}
+                              />
+                            ))}
+                          <XAxis
+                            dataKey="etiqueta"
+                            tickLine={false}
+                            axisLine={{ stroke: CHART_GRID }}
+                            tick={<ScheduleXAxisTick />}
+                            interval={0}
+                            height={48}
+                          />
+                          <YAxis
+                            tick={CHART_AXIS}
+                            width={40}
+                            tickLine={false}
+                            axisLine={{ stroke: CHART_GRID }}
+                            allowDecimals={false}
+                            domain={[0, scheduleYAxisMax]}
+                          />
+                          <Tooltip content={ScheduleProductTooltip} />
+                          {visibleScheduleKeys.map((key, idx) => (
+                            <Bar
+                              key={key}
+                              dataKey={key}
+                              name={key === "OTROS" ? "Otros" : key}
+                              stackId="productos"
+                              isAnimationActive={false}
+                              barSize={SCHEDULE_SLOT_PX - 8}
+                              maxBarSize={SCHEDULE_SLOT_PX - 6}
+                              fill={SCHEDULE_PRODUCT_COLORS[key]}
+                              radius={
+                                idx === visibleScheduleKeys.length - 1
+                                  ? [4, 4, 0, 0]
+                                  : [0, 0, 0, 0]
+                              }
                             />
                           ))}
-                        <XAxis
-                          dataKey="etiqueta"
-                          tickLine={false}
-                          axisLine={{ stroke: CHART_GRID }}
-                          tick={<ScheduleXAxisTick />}
-                          interval={0}
-                          height={48}
-                        />
-                        <YAxis
-                          tick={CHART_AXIS}
-                          width={40}
-                          tickLine={false}
-                          axisLine={{ stroke: CHART_GRID }}
-                          allowDecimals={false}
-                        />
-                        <Tooltip
-                          content={({ active, payload }) => {
-                            if (!active || !payload?.length) return null;
-                            const p = payload[0].payload as { etiqueta: string; total: number };
-                            return (
-                              <div className="min-w-[200px] space-y-1 p-2" style={CHART_TOOLTIP_STYLE}>
-                                <ChartTooltipRow label="Franja" value={p.etiqueta} />
-                                <ChartTooltipRow label="Viajes pendientes" value={p.total} />
-                              </div>
-                            );
-                          }}
-                        />
-                        <Bar
-                          dataKey="total"
-                          name="Viajes"
-                          barSize={SCHEDULE_SLOT_PX - 8}
-                          radius={[4, 4, 0, 0]}
-                          maxBarSize={SCHEDULE_SLOT_PX - 6}
-                        >
-                          {scheduleTimelineData.map((item) => (
-                            <Cell key={`schedule-bar-${item.etiqueta}`} fill={item.barColor} />
-                          ))}
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
                   </div>
                 </div>
               </CardContent>

@@ -109,8 +109,16 @@ async function main() {
       console.log(`[sync] page=${page} items=${items.length}`);
       totalRead += items.length;
 
+      if (page === 1 && items.length > 0) {
+        const first10 = items.slice(0, 10).map((it) => it.id);
+        console.log(
+          `[sync][debug] page1 first_id=${items[0].id} last_id=${items[items.length - 1].id} first10_ids=${JSON.stringify(first10)}`,
+        );
+      }
+
       if (items.length === 0) {
         reachedSyncPoint = true;
+        console.log("[sync][debug] fin por items.length === 0");
         break;
       }
 
@@ -121,13 +129,27 @@ async function main() {
           collected.push(it);
         } else {
           reachedSyncPoint = true;
+          console.log(
+            `[sync][debug] BREAK en page ${page} por id ${it.id} <= lastId ${lastId.toString()}`,
+          );
         }
       }
 
-      if (reachedSyncPoint) break;
+      if (reachedSyncPoint) {
+        if (items.length < PAGE_SIZE) {
+          console.log("[sync][debug] fin por items.length < PAGE_SIZE");
+        } else {
+          console.log("[sync][debug] fin por reachedSyncPoint");
+        }
+        break;
+      }
 
       // pequeña pausa entre páginas para ser amable con la API
       if (page < MAX_PAGES) await sleep(DELAY_MS);
+    }
+
+    if (!reachedSyncPoint) {
+      console.log("[sync][debug] fin por MAX_PAGES");
     }
 
     console.log(`[sync] total leído (items): ${totalRead}`);

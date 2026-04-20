@@ -13,7 +13,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Bar,
   BarChart,
@@ -50,6 +50,10 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ConductorTimelineMatrix } from "@/components/conductor-timeline-matrix";
+import {
+  LogsSyncHealthBanner,
+  type SyncMonitorRow,
+} from "@/components/logs-sync-health-banner";
 import { MouseRevealHeaderLayout } from "@/components/mouse-reveal-header-layout";
 import { useRefreshData } from "@/context/refresh-data-context";
 
@@ -83,6 +87,9 @@ type DashboardResponse = {
 };
 
 const PAGE_SIZE = 50;
+
+/** Query `datosSub` y valor de la sub-pestaña "Viajes activos" dentro de Datos. */
+const DATOS_SUB_VIAJES_ACTIVOS = "viajes-activos" as const;
 const PIE_COLORS = [
   "#00e676",
   "#1e88e5",
@@ -391,6 +398,8 @@ function formatMoney(value: unknown): string {
 
 export default function HomePage() {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const { refreshKey, triggerRefresh } = useRefreshData();
   const [viajes, setViajes] = useState<Viaje[]>([]);
   const [loading, setLoading] = useState(false);
@@ -412,6 +421,10 @@ export default function HomePage() {
   const [reservasStartDate, setReservasStartDate] = useState("");
   const [reservasEndDate, setReservasEndDate] = useState("");
   const [mainTab, setMainTab] = useState("datos");
+  const [datosSubTab, setDatosSubTab] = useState<string>(DATOS_SUB_VIAJES_ACTIVOS);
+  const [syncMonitorRow, setSyncMonitorRow] = useState<SyncMonitorRow | null>(null);
+  const [syncMonitorLoading, setSyncMonitorLoading] = useState(true);
+  const [syncMonitorError, setSyncMonitorError] = useState<string | null>(null);
   const [dashboardSubTab, setDashboardSubTab] = useState("reservas");
   const [scheduleProductVisibility, setScheduleProductVisibility] = useState<
     Record<(typeof SCHEDULE_STACK_ORDER)[number], boolean>
@@ -472,6 +485,80 @@ export default function HomePage() {
   useEffect(() => {
     void loadViajes();
   }, [loadViajes]);
+
+  const setDatosSubInUrl = useCallback(
+    (value: string) => {
+      const p = new URLSearchParams(searchParams.toString());
+      p.set("datosSub", value);
+      const qs = p.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    },
+    [pathname, router, searchParams],
+  );
+
+  const handleMainTabChange = useCallback(
+    (value: string) => {
+      setMainTab(value);
+      if (value !== "datos") {
+        const p = new URLSearchParams(searchParams.toString());
+        if (!p.has("datosSub")) return;
+        p.delete("datosSub");
+        const qs = p.toString();
+        router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+      }
+    },
+    [pathname, router, searchParams],
+  );
+
+  const handleDatosSubTabChange = useCallback(
+    (value: string) => {
+      if (value !== DATOS_SUB_VIAJES_ACTIVOS) return;
+      setDatosSubTab(value);
+      setDatosSubInUrl(value);
+    },
+    [setDatosSubInUrl],
+  );
+
+  useEffect(() => {
+    if (mainTab !== "datos") return;
+    const raw = searchParams.get("datosSub");
+    if (raw === DATOS_SUB_VIAJES_ACTIVOS) {
+      setDatosSubTab(DATOS_SUB_VIAJES_ACTIVOS);
+      return;
+    }
+    setDatosSubTab(DATOS_SUB_VIAJES_ACTIVOS);
+    setDatosSubInUrl(DATOS_SUB_VIAJES_ACTIVOS);
+  }, [mainTab, searchParams, setDatosSubInUrl]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadSyncMonitor() {
+      setSyncMonitorLoading(true);
+      setSyncMonitorError(null);
+      try {
+        const res = await fetch("/api/sync-monitor/latest", { cache: "no-store" });
+        const body = (await res.json()) as { row?: SyncMonitorRow | null; error?: string | null };
+        if (cancelled) return;
+        if (!res.ok) {
+          setSyncMonitorRow(null);
+          setSyncMonitorError(body?.error ?? "No se pudo cargar sync_monitor.");
+          return;
+        }
+        setSyncMonitorRow(body.row ?? null);
+        setSyncMonitorError(body.error ?? null);
+      } catch (e) {
+        if (cancelled) return;
+        setSyncMonitorRow(null);
+        setSyncMonitorError(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (!cancelled) setSyncMonitorLoading(false);
+      }
+    }
+    void loadSyncMonitor();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!syncNotice) return;
@@ -984,7 +1071,7 @@ export default function HomePage() {
 
   return (
     <main className="flex min-h-screen flex-col bg-slate-100 text-slate-900">
-      <Tabs value={mainTab} onValueChange={setMainTab} className="flex min-h-0 flex-1 flex-col">
+      <Tabs value={mainTab} onValueChange={handleMainTabChange} className="flex min-h-0 flex-1 flex-col">
         <MouseRevealHeaderLayout
           header={
             <div className="border-b border-white/10 text-white">
@@ -1020,12 +1107,18 @@ export default function HomePage() {
               </div>
             </div>
 
-            <TabsList className="h-8 w-full max-w-md bg-white/10 p-0.5 md:h-9">
+            <TabsList className="h-8 w-full max-w-lg bg-white/10 p-0.5 md:h-9">
               <TabsTrigger
                 value="datos"
                 className="flex-1 text-xs data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
               >
                 Datos
+              </TabsTrigger>
+              <TabsTrigger
+                value="logs"
+                className="flex-1 text-xs data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
+              >
+                Logs
               </TabsTrigger>
               <TabsTrigger
                 value="dashboard"
@@ -1035,76 +1128,88 @@ export default function HomePage() {
               </TabsTrigger>
             </TabsList>
 
-            {mainTab === "datos" && (
-              <div className="flex flex-col gap-2 border-t border-white/10 pt-2 pb-1">
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
-                  <Select value={empresaFilter} onValueChange={setEmpresaFilter}>
-                    <SelectTrigger className="h-9 w-full border-white/20 bg-white/10 text-xs text-white md:text-sm">
-                      <SelectValue placeholder="Empresa" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="TODAS">Todas las empresas</SelectItem>
-                      {empresas.map((empresa) => (
-                        <SelectItem key={empresa} value={empresa}>
-                          {empresa}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Select value={estadoFilter} onValueChange={setEstadoFilter}>
-                    <SelectTrigger className="h-9 w-full border-white/20 bg-white/10 text-xs text-white md:text-sm">
-                      <SelectValue placeholder="Estado" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="TODOS">Todos los estados</SelectItem>
-                      {estados.map((estado) => (
-                        <SelectItem key={estado} value={estado}>
-                          {estado}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Select value={conductorFilter} onValueChange={setConductorFilter}>
-                    <SelectTrigger className="h-9 w-full border-white/20 bg-white/10 text-xs text-white md:text-sm">
-                      <SelectValue placeholder="Conductor" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="TODOS">Todos los conductores</SelectItem>
-                      {conductores.map((conductor) => (
-                        <SelectItem key={conductor} value={conductor}>
-                          {conductor}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Input
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Buscar..."
-                    className="h-9 border-white/20 bg-white/10 text-xs text-white placeholder:text-white/50 md:text-sm lg:col-span-2"
-                  />
-                  <div className="flex flex-wrap gap-2 sm:col-span-2 lg:col-span-2 xl:col-span-1 xl:justify-end">
-                    {selectedIds.length > 0 && (
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        onClick={() => void handleDelete(selectedIds)}
-                        disabled={deleting}
-                      >
-                        {deleting ? "..." : `Eliminar (${selectedIds.length})`}
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
               </div>
             </div>
           }
         >
         <div className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-6 md:px-6">
           <TabsContent value="datos" className="mt-0 outline-none">
-            <Card className="border-slate-200 bg-white text-slate-900 shadow-sm">
+            <Tabs value={datosSubTab} onValueChange={handleDatosSubTabChange} className="w-full">
+              <TabsList className="mb-3 h-10 w-full max-w-md bg-slate-200/90 p-1">
+                <TabsTrigger
+                  value={DATOS_SUB_VIAJES_ACTIVOS}
+                  className="flex-1 text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm"
+                >
+                  Viajes Activos
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value={DATOS_SUB_VIAJES_ACTIVOS} className="mt-0 space-y-4 outline-none">
+                <div className="rounded-lg border border-white/10 bg-[#0b1131] text-white shadow-sm">
+                  <div className="flex flex-col gap-2 border-t border-white/10 px-3 pt-2 pb-1 md:px-4">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
+                    <Select value={empresaFilter} onValueChange={setEmpresaFilter}>
+                      <SelectTrigger className="h-9 w-full border-white/20 bg-white/10 text-xs text-white md:text-sm">
+                        <SelectValue placeholder="Empresa" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="TODAS">Todas las empresas</SelectItem>
+                        {empresas.map((empresa) => (
+                          <SelectItem key={empresa} value={empresa}>
+                            {empresa}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Select value={estadoFilter} onValueChange={setEstadoFilter}>
+                      <SelectTrigger className="h-9 w-full border-white/20 bg-white/10 text-xs text-white md:text-sm">
+                        <SelectValue placeholder="Estado" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="TODOS">Todos los estados</SelectItem>
+                        {estados.map((estado) => (
+                          <SelectItem key={estado} value={estado}>
+                            {estado}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Select value={conductorFilter} onValueChange={setConductorFilter}>
+                      <SelectTrigger className="h-9 w-full border-white/20 bg-white/10 text-xs text-white md:text-sm">
+                        <SelectValue placeholder="Conductor" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="TODOS">Todos los conductores</SelectItem>
+                        {conductores.map((conductor) => (
+                          <SelectItem key={conductor} value={conductor}>
+                            {conductor}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Input
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      placeholder="Buscar..."
+                      className="h-9 border-white/20 bg-white/10 text-xs text-white placeholder:text-white/50 md:text-sm lg:col-span-2"
+                    />
+                    <div className="flex flex-wrap gap-2 sm:col-span-2 lg:col-span-2 xl:col-span-1 xl:justify-end">
+                      {selectedIds.length > 0 && (
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          onClick={() => void handleDelete(selectedIds)}
+                          disabled={deleting}
+                        >
+                          {deleting ? "..." : `Eliminar (${selectedIds.length})`}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  </div>
+                </div>
+
+                <Card className="border-slate-200 bg-white text-slate-900 shadow-sm">
               <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 border-b border-slate-100 py-3">
                 <CardTitle className="text-base font-semibold">Viajes activos</CardTitle>
                 <Badge variant="secondary" className="bg-slate-100 text-slate-700">
@@ -1242,6 +1347,16 @@ export default function HomePage() {
                 </div>
               </CardContent>
             </Card>
+              </TabsContent>
+            </Tabs>
+          </TabsContent>
+
+          <TabsContent value="logs" className="mt-0 space-y-4 outline-none">
+            <LogsSyncHealthBanner
+              row={syncMonitorRow}
+              fetchError={syncMonitorError}
+              loading={syncMonitorLoading}
+            />
           </TabsContent>
 
           <TabsContent value="dashboard" className="mt-0 space-y-4 outline-none">

@@ -8,7 +8,8 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MOOBIZ_LOGS_TOKEN = process.env.MOOBIZ_LOGS_TOKEN;
 const MOOBIZ_LOGS_URL = "https://app.moobiz.pe/api/admin/logs";
 
-const PAGE_SIZE = 1000;
+/** Diagnóstico: límite alto para observar respuesta y orden del API; volver a 1000 en producción. */
+const PAGE_SIZE = 5000;
 const MAX_PAGES = 10; // límite por corrida (10000 registros max)
 const DELAY_MS = 300;
 const SUPABASE_BATCH_SIZE = 200;
@@ -108,6 +109,14 @@ async function main() {
       const items = moobizData.items || [];
       console.log(`[sync] page=${page} items=${items.length}`);
       totalRead += items.length;
+
+      {
+        const firstId = items.length > 0 ? String(items[0].id) : "—";
+        const lastItemId = items.length > 0 ? String(items[items.length - 1].id) : "—";
+        console.log(
+          `[sync][debug] page=${page} PAGE_SIZE=${PAGE_SIZE} items.length=${items.length} first_id=${firstId} last_id=${lastItemId}`,
+        );
+      }
 
       if (page === 1 && items.length > 0) {
         const first10 = items.slice(0, 10).map((it) => it.id);

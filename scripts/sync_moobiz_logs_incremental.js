@@ -157,14 +157,14 @@ async function sync() {
     console.log(`[sync] total insertados: ${nuevos.length}`);
     console.log(`[sync] last_id final: ${lastIdAfter.toString()}`);
     console.log(
-      JSON.stringify({
-        status,
-        records_fetched: totalRead,
-        records_inserted: nuevos.length,
-        pages_queried: lastPageQuerado, // <- nota: asegúrate de que el nombre coincide
-        last_id_after: lastIdAfter.toString(),
-      })
-    );
+        JSON.stringify({
+          status,
+          records_fetched: totalRead,
+          records_inserted: nuevos.length,
+          pages_queried: pagesQueried,
+          last_id_after: lastIdAfter.toString(),
+        })
+      );
     console.log("✅ Sync completado con éxito");
   } catch (err) {
     status = "error";

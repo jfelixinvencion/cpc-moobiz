@@ -492,7 +492,7 @@ export default function HomePage() {
   const [reservasEmpresa, setReservasEmpresa] = useState("Todas");
   const [reservasStartDate, setReservasStartDate] = useState("");
   const [reservasEndDate, setReservasEndDate] = useState("");
-  const [mainTab, setMainTab] = useState("datos");
+  const [mainTab, setMainTab] = useState("dashboard");
   const [datosSubTab, setDatosSubTab] = useState<string>(DATOS_SUB_VIAJES_ACTIVOS);
   const [logsCleanSearch, setLogsCleanSearch] = useState("");
   const [logsCleanSearchDebounced, setLogsCleanSearchDebounced] = useState("");
@@ -1258,7 +1258,13 @@ export default function HomePage() {
               </div>
             </div>
 
-            <TabsList className="h-8 w-full max-w-lg bg-white/10 p-0.5 md:h-9">
+            <TabsList className="h-8 w-full max-w-xl bg-white/10 p-0.5 md:h-9">
+              <TabsTrigger
+                value="dashboard"
+                className="flex-1 text-xs data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
+              >
+                Dashboard
+              </TabsTrigger>
               <TabsTrigger
                 value="datos"
                 className="flex-1 text-xs data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
@@ -1270,12 +1276,6 @@ export default function HomePage() {
                 className="flex-1 text-xs data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
               >
                 Logs
-              </TabsTrigger>
-              <TabsTrigger
-                value="dashboard"
-                className="flex-1 text-xs data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
-              >
-                Dashboard
               </TabsTrigger>
             </TabsList>
 

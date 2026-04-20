@@ -4,8 +4,8 @@ import { createClient } from "@supabase/supabase-js";
 export const runtime = "nodejs";
 
 const TABLE = "moobiz_logs_clean";
-/** Solo columnas necesarias para la tabla de solo lectura. */
-const SELECT_FIELDS = "id, date_created, parent_id, id_session, id_target";
+/** Todas las columnas expuestas por la vista (PostgREST devuelve el shape real de `moobiz_logs_clean`). */
+const SELECT_FIELDS = "*";
 
 function getEnvTrimmed(keys: string[]): string | null {
   for (const key of keys) {
@@ -48,10 +48,10 @@ export async function GET(req: NextRequest) {
     const to = from + pageSize - 1;
 
     const supabase = getSupabase();
-    let query = supabase
-      .from(TABLE)
-      .select(SELECT_FIELDS, { count: "exact" })
-      .order("date_created", { ascending: false, nullsFirst: false });
+    let query = supabase.from(TABLE).select(SELECT_FIELDS, { count: "exact" });
+
+    // Orden por columna de tiempo usada en filtros (debe existir en la vista).
+    query = query.order("date_created", { ascending: false, nullsFirst: false });
 
     if (dateFrom) {
       query = query.gte("date_created", `${dateFrom}T00:00:00.000Z`);

@@ -74,13 +74,8 @@ type Viaje = {
   operador?: string | null;
 };
 
-type MoobizLogCleanRow = {
-  id: string | number;
-  date_created?: string | null;
-  parent_id?: string | number | null;
-  id_session?: string | number | null;
-  id_target?: string | number | null;
-};
+/** Fila de `moobiz_logs_clean`: columnas definidas solo por la vista en Supabase. */
+type MoobizLogCleanRow = Record<string, unknown>;
 
 type DashboardResponse = {
   data: Viaje[];
@@ -401,12 +396,70 @@ function asText(value: unknown): string {
   return String(value).trim();
 }
 
-function formatMoobizLogDate(value: unknown): string {
-  const s = asText(value);
-  if (!s) return "—";
-  const d = new Date(s);
-  if (Number.isNaN(d.getTime())) return s;
-  return d.toLocaleString("es-PE", { dateStyle: "short", timeStyle: "short" });
+/** Todas las claves presentes en el lote (orden de primera aparición en esas filas). */
+function mergeLogCleanColumnKeys(rows: ReadonlyArray<MoobizLogCleanRow>): string[] {
+  const order: string[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    for (const k of Object.keys(row)) {
+      if (seen.has(k)) continue;
+      seen.add(k);
+      order.push(k);
+    }
+  }
+  return order;
+}
+
+/** Prioriza el orden del lote actual; conserva columnas ya vistas en páginas anteriores al final. */
+function mergeColumnKeysPreferBatch(previous: string[], batchRows: ReadonlyArray<MoobizLogCleanRow>): string[] {
+  const batchKeys = mergeLogCleanColumnKeys(batchRows);
+  if (batchKeys.length === 0) return previous.length > 0 ? previous : [];
+  const seen = new Set(batchKeys);
+  const out = [...batchKeys];
+  for (const k of previous) {
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(k);
+  }
+  return out;
+}
+
+function isLikelyTimestampColumn(name: string): boolean {
+  const n = name.toLowerCase();
+  return (
+    n === "date_created" ||
+    n === "created_at" ||
+    n === "updated_at" ||
+    n.endsWith("_at") ||
+    n.includes("fecha") ||
+    n.includes("date")
+  );
+}
+
+function formatLogCleanCell(column: string, value: unknown): { text: string; title?: string } {
+  if (value === null || value === undefined) return { text: "—" };
+  if (typeof value === "object") {
+    try {
+      const raw = JSON.stringify(value);
+      return raw.length > 240
+        ? { text: `${raw.slice(0, 240)}…`, title: raw }
+        : { text: raw, title: raw.length > 80 ? raw : undefined };
+    } catch {
+      return { text: String(value) };
+    }
+  }
+  const s = String(value);
+  if (isLikelyTimestampColumn(column)) {
+    const d = new Date(s);
+    if (!Number.isNaN(d.getTime())) {
+      return {
+        text: d.toLocaleString("es-PE", { dateStyle: "short", timeStyle: "short" }),
+      };
+    }
+  }
+  if (s.length > 240) return { text: `${s.slice(0, 240)}…`, title: s };
+  return { text: s };
 }
 
 function formatMoney(value: unknown): string {
@@ -450,6 +503,7 @@ export default function HomePage() {
   const [logsCleanTotal, setLogsCleanTotal] = useState(0);
   const [logsCleanLoading, setLogsCleanLoading] = useState(false);
   const [logsCleanError, setLogsCleanError] = useState<string | null>(null);
+  const [logsCleanColumnKeys, setLogsCleanColumnKeys] = useState<string[]>([]);
   const [syncMonitorRow, setSyncMonitorRow] = useState<SyncMonitorRow | null>(null);
   const [syncMonitorLoading, setSyncMonitorLoading] = useState(true);
   const [syncMonitorError, setSyncMonitorError] = useState<string | null>(null);
@@ -590,13 +644,17 @@ export default function HomePage() {
       if (logsCleanDateTo) p.set("dateTo", logsCleanDateTo);
       const res = await fetch(`/api/moobiz-logs-clean?${p.toString()}`, { cache: "no-store" });
       const body = (await res.json()) as {
-        data?: MoobizLogCleanRow[];
+        data?: unknown[];
         total?: number;
         error?: string;
       };
       if (!res.ok) throw new Error(body?.error || "No se pudieron cargar los registros.");
-      setLogsCleanRows(Array.isArray(body.data) ? body.data : []);
+      const rows = Array.isArray(body.data)
+        ? (body.data.filter((r) => r && typeof r === "object") as MoobizLogCleanRow[])
+        : [];
+      setLogsCleanRows(rows);
       setLogsCleanTotal(typeof body.total === "number" ? body.total : 0);
+      setLogsCleanColumnKeys((prev) => mergeColumnKeysPreferBatch(prev, rows));
     } catch (e) {
       setLogsCleanError(e instanceof Error ? e.message : String(e));
       setLogsCleanRows([]);
@@ -670,6 +728,12 @@ export default function HomePage() {
     [logsCleanTotal],
   );
   const logsCleanPageClamped = Math.min(logsCleanPage, logsCleanTotalPages);
+
+  useEffect(() => {
+    if (datosSubTab !== DATOS_SUB_REGISTRO_ACTIVIDADES) {
+      setLogsCleanColumnKeys([]);
+    }
+  }, [datosSubTab]);
 
   const filteredViajes = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -1503,51 +1567,70 @@ export default function HomePage() {
                         {logsCleanError}
                       </p>
                     )}
-                    <div className="overflow-hidden rounded-lg border border-slate-200">
+                    <div className="overflow-x-auto rounded-lg border border-slate-200">
                       <Table>
                         <TableHeader>
                           <TableRow className="border-slate-200 bg-slate-50 hover:bg-slate-50">
-                            <TableHead className="text-xs font-semibold text-slate-700">ID</TableHead>
-                            <TableHead className="text-xs font-semibold text-slate-700">Fecha</TableHead>
-                            <TableHead className="text-xs font-semibold text-slate-700">Parent ID</TableHead>
-                            <TableHead className="text-xs font-semibold text-slate-700">Session ID</TableHead>
-                            <TableHead className="text-xs font-semibold text-slate-700">Target ID</TableHead>
+                            {logsCleanColumnKeys.length > 0 ? (
+                              logsCleanColumnKeys.map((col) => (
+                                <TableHead
+                                  key={col}
+                                  className="max-w-[220px] whitespace-nowrap text-xs font-semibold text-slate-700"
+                                  title={col}
+                                >
+                                  {col}
+                                </TableHead>
+                              ))
+                            ) : (
+                              <TableHead className="text-xs font-semibold text-slate-700">—</TableHead>
+                            )}
                           </TableRow>
                         </TableHeader>
                         <TableBody>
                           {logsCleanLoading ? (
                             <TableRow>
-                              <TableCell colSpan={5} className="py-10 text-center text-sm text-slate-500">
+                              <TableCell
+                                colSpan={Math.max(1, logsCleanColumnKeys.length)}
+                                className="py-10 text-center text-sm text-slate-500"
+                              >
                                 Cargando registros…
                               </TableCell>
                             </TableRow>
                           ) : logsCleanRows.length === 0 ? (
                             <TableRow>
-                              <TableCell colSpan={5} className="py-10 text-center text-sm text-slate-500">
+                              <TableCell
+                                colSpan={Math.max(1, logsCleanColumnKeys.length)}
+                                className="py-10 text-center text-sm text-slate-500"
+                              >
                                 No hay registros para los filtros seleccionados.
                               </TableCell>
                             </TableRow>
                           ) : (
-                            logsCleanRows.map((row) => (
-                              <TableRow
-                                key={String(row.id)}
-                                className="border-slate-100 text-sm hover:bg-slate-50/80"
-                              >
-                                <TableCell className="font-mono text-xs">{asText(row.id) || "—"}</TableCell>
-                                <TableCell className="whitespace-nowrap text-xs">
-                                  {formatMoobizLogDate(row.date_created)}
-                                </TableCell>
-                                <TableCell className="max-w-[120px] truncate font-mono text-xs">
-                                  {row.parent_id != null && row.parent_id !== "" ? asText(row.parent_id) : "—"}
-                                </TableCell>
-                                <TableCell className="max-w-[140px] truncate font-mono text-xs">
-                                  {row.id_session != null && row.id_session !== "" ? asText(row.id_session) : "—"}
-                                </TableCell>
-                                <TableCell className="max-w-[140px] truncate font-mono text-xs">
-                                  {row.id_target != null && row.id_target !== "" ? asText(row.id_target) : "—"}
-                                </TableCell>
-                              </TableRow>
-                            ))
+                            logsCleanRows.map((row, rowIdx) => {
+                              const rk =
+                                row.id != null && String(row.id).length > 0
+                                  ? String(row.id)
+                                  : `p${logsCleanPage}-r${rowIdx}`;
+                              return (
+                                <TableRow
+                                  key={rk}
+                                  className="border-slate-100 text-sm hover:bg-slate-50/80"
+                                >
+                                  {logsCleanColumnKeys.map((col) => {
+                                    const { text, title } = formatLogCleanCell(col, row[col]);
+                                    return (
+                                      <TableCell
+                                        key={`${rk}-${col}`}
+                                        className="max-w-[220px] truncate align-top font-mono text-xs text-slate-800"
+                                        title={title ?? (text.length > 60 ? text : undefined)}
+                                      >
+                                        {text}
+                                      </TableCell>
+                                    );
+                                  })}
+                                </TableRow>
+                              );
+                            })
                           )}
                         </TableBody>
                       </Table>

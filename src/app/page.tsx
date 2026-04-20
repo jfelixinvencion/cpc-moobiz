@@ -33,6 +33,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -73,6 +74,14 @@ type Viaje = {
   operador?: string | null;
 };
 
+type MoobizLogCleanRow = {
+  id: string | number;
+  date_created?: string | null;
+  parent_id?: string | number | null;
+  id_session?: string | number | null;
+  id_target?: string | number | null;
+};
+
 type DashboardResponse = {
   data: Viaje[];
   kpi: { totalPendientes: number };
@@ -88,8 +97,10 @@ type DashboardResponse = {
 
 const PAGE_SIZE = 50;
 
-/** Query `datosSub` y valor de la sub-pestaña "Viajes activos" dentro de Datos. */
+/** Query `datosSub` y valores de sub-pestañas dentro de Datos. */
 const DATOS_SUB_VIAJES_ACTIVOS = "viajes-activos" as const;
+const DATOS_SUB_REGISTRO_ACTIVIDADES = "registro-actividades" as const;
+const LOGS_CLEAN_PAGE_SIZE = 50;
 const PIE_COLORS = [
   "#00e676",
   "#1e88e5",
@@ -390,6 +401,14 @@ function asText(value: unknown): string {
   return String(value).trim();
 }
 
+function formatMoobizLogDate(value: unknown): string {
+  const s = asText(value);
+  if (!s) return "—";
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return s;
+  return d.toLocaleString("es-PE", { dateStyle: "short", timeStyle: "short" });
+}
+
 function formatMoney(value: unknown): string {
   const num = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(num)) return asText(value) || "0";
@@ -422,6 +441,15 @@ export default function HomePage() {
   const [reservasEndDate, setReservasEndDate] = useState("");
   const [mainTab, setMainTab] = useState("datos");
   const [datosSubTab, setDatosSubTab] = useState<string>(DATOS_SUB_VIAJES_ACTIVOS);
+  const [logsCleanSearch, setLogsCleanSearch] = useState("");
+  const [logsCleanSearchDebounced, setLogsCleanSearchDebounced] = useState("");
+  const [logsCleanDateFrom, setLogsCleanDateFrom] = useState("");
+  const [logsCleanDateTo, setLogsCleanDateTo] = useState("");
+  const [logsCleanPage, setLogsCleanPage] = useState(1);
+  const [logsCleanRows, setLogsCleanRows] = useState<MoobizLogCleanRow[]>([]);
+  const [logsCleanTotal, setLogsCleanTotal] = useState(0);
+  const [logsCleanLoading, setLogsCleanLoading] = useState(false);
+  const [logsCleanError, setLogsCleanError] = useState<string | null>(null);
   const [syncMonitorRow, setSyncMonitorRow] = useState<SyncMonitorRow | null>(null);
   const [syncMonitorLoading, setSyncMonitorLoading] = useState(true);
   const [syncMonitorError, setSyncMonitorError] = useState<string | null>(null);
@@ -510,25 +538,78 @@ export default function HomePage() {
     [pathname, router, searchParams],
   );
 
+  const datosSubAllowed = useMemo(
+    () => new Set<string>([DATOS_SUB_VIAJES_ACTIVOS, DATOS_SUB_REGISTRO_ACTIVIDADES]),
+    [],
+  );
+
   const handleDatosSubTabChange = useCallback(
     (value: string) => {
-      if (value !== DATOS_SUB_VIAJES_ACTIVOS) return;
+      if (!datosSubAllowed.has(value)) return;
       setDatosSubTab(value);
       setDatosSubInUrl(value);
     },
-    [setDatosSubInUrl],
+    [datosSubAllowed, setDatosSubInUrl],
   );
 
   useEffect(() => {
     if (mainTab !== "datos") return;
     const raw = searchParams.get("datosSub");
-    if (raw === DATOS_SUB_VIAJES_ACTIVOS) {
-      setDatosSubTab(DATOS_SUB_VIAJES_ACTIVOS);
+    if (raw === DATOS_SUB_VIAJES_ACTIVOS || raw === DATOS_SUB_REGISTRO_ACTIVIDADES) {
+      setDatosSubTab(raw);
       return;
     }
     setDatosSubTab(DATOS_SUB_VIAJES_ACTIVOS);
     setDatosSubInUrl(DATOS_SUB_VIAJES_ACTIVOS);
   }, [mainTab, searchParams, setDatosSubInUrl]);
+
+  useEffect(() => {
+    const id = window.setTimeout(() => setLogsCleanSearchDebounced(logsCleanSearch), 400);
+    return () => window.clearTimeout(id);
+  }, [logsCleanSearch]);
+
+  useEffect(() => {
+    setLogsCleanPage(1);
+  }, [logsCleanDateFrom, logsCleanDateTo, logsCleanSearchDebounced]);
+
+  useEffect(() => {
+    if (datosSubTab !== DATOS_SUB_REGISTRO_ACTIVIDADES) return;
+    setLogsCleanPage(1);
+  }, [datosSubTab]);
+
+  const loadLogsClean = useCallback(async () => {
+    setLogsCleanLoading(true);
+    setLogsCleanError(null);
+    try {
+      const p = new URLSearchParams();
+      p.set("page", String(logsCleanPage));
+      p.set("pageSize", String(LOGS_CLEAN_PAGE_SIZE));
+      const q = logsCleanSearchDebounced.trim();
+      if (q) p.set("q", q);
+      if (logsCleanDateFrom) p.set("dateFrom", logsCleanDateFrom);
+      if (logsCleanDateTo) p.set("dateTo", logsCleanDateTo);
+      const res = await fetch(`/api/moobiz-logs-clean?${p.toString()}`, { cache: "no-store" });
+      const body = (await res.json()) as {
+        data?: MoobizLogCleanRow[];
+        total?: number;
+        error?: string;
+      };
+      if (!res.ok) throw new Error(body?.error || "No se pudieron cargar los registros.");
+      setLogsCleanRows(Array.isArray(body.data) ? body.data : []);
+      setLogsCleanTotal(typeof body.total === "number" ? body.total : 0);
+    } catch (e) {
+      setLogsCleanError(e instanceof Error ? e.message : String(e));
+      setLogsCleanRows([]);
+      setLogsCleanTotal(0);
+    } finally {
+      setLogsCleanLoading(false);
+    }
+  }, [logsCleanPage, logsCleanSearchDebounced, logsCleanDateFrom, logsCleanDateTo]);
+
+  useEffect(() => {
+    if (mainTab !== "datos" || datosSubTab !== DATOS_SUB_REGISTRO_ACTIVIDADES) return;
+    void loadLogsClean();
+  }, [mainTab, datosSubTab, loadLogsClean]);
 
   useEffect(() => {
     let cancelled = false;
@@ -583,6 +664,12 @@ export default function HomePage() {
   const conductores = useMemo(() => {
     return Array.from(new Set(viajes.map((v) => asText(v.conductor)).filter(Boolean))).sort();
   }, [viajes]);
+
+  const logsCleanTotalPages = useMemo(
+    () => Math.max(1, Math.ceil(logsCleanTotal / LOGS_CLEAN_PAGE_SIZE)),
+    [logsCleanTotal],
+  );
+  const logsCleanPageClamped = Math.min(logsCleanPage, logsCleanTotalPages);
 
   const filteredViajes = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -1135,12 +1222,18 @@ export default function HomePage() {
         <div className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-6 md:px-6">
           <TabsContent value="datos" className="mt-0 outline-none">
             <Tabs value={datosSubTab} onValueChange={handleDatosSubTabChange} className="w-full">
-              <TabsList className="mb-3 h-10 w-full max-w-md bg-slate-200/90 p-1">
+              <TabsList className="mb-3 h-10 w-full max-w-xl bg-slate-200/90 p-1">
                 <TabsTrigger
                   value={DATOS_SUB_VIAJES_ACTIVOS}
                   className="flex-1 text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm"
                 >
                   Viajes Activos
+                </TabsTrigger>
+                <TabsTrigger
+                  value={DATOS_SUB_REGISTRO_ACTIVIDADES}
+                  className="flex-1 text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm"
+                >
+                  Registro Actividades
                 </TabsTrigger>
               </TabsList>
 
@@ -1347,6 +1440,145 @@ export default function HomePage() {
                 </div>
               </CardContent>
             </Card>
+              </TabsContent>
+
+              <TabsContent value={DATOS_SUB_REGISTRO_ACTIVIDADES} className="mt-0 space-y-4 outline-none">
+                <div className="rounded-lg border border-white/10 bg-[#0b1131] text-white shadow-sm">
+                  <div className="flex flex-col gap-3 border-t border-white/10 px-3 pt-2 pb-1 md:px-4">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-12 lg:items-end">
+                      <div className="flex flex-col gap-1 lg:col-span-5">
+                        <Label htmlFor="logs-clean-search" className="text-[10px] font-medium uppercase tracking-wide text-white/70">
+                          Buscar (session o target)
+                        </Label>
+                        <Input
+                          id="logs-clean-search"
+                          value={logsCleanSearch}
+                          onChange={(e) => setLogsCleanSearch(e.target.value)}
+                          placeholder="id_session o id_target…"
+                          className="h-9 border-white/20 bg-white/10 text-xs text-white placeholder:text-white/50 md:text-sm"
+                          autoComplete="off"
+                        />
+                      </div>
+                      <div className="flex flex-col gap-1 sm:col-span-1 lg:col-span-3">
+                        <Label htmlFor="logs-clean-from" className="text-[10px] font-medium uppercase tracking-wide text-white/70">
+                          Desde (date_created)
+                        </Label>
+                        <Input
+                          id="logs-clean-from"
+                          type="date"
+                          value={logsCleanDateFrom}
+                          onChange={(e) => setLogsCleanDateFrom(e.target.value)}
+                          className="h-9 border-white/20 bg-white/10 text-xs text-white md:text-sm [color-scheme:dark]"
+                        />
+                      </div>
+                      <div className="flex flex-col gap-1 sm:col-span-1 lg:col-span-3">
+                        <Label htmlFor="logs-clean-to" className="text-[10px] font-medium uppercase tracking-wide text-white/70">
+                          Hasta (date_created)
+                        </Label>
+                        <Input
+                          id="logs-clean-to"
+                          type="date"
+                          value={logsCleanDateTo}
+                          onChange={(e) => setLogsCleanDateTo(e.target.value)}
+                          className="h-9 border-white/20 bg-white/10 text-xs text-white md:text-sm [color-scheme:dark]"
+                        />
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-white/55">
+                      Solo lectura: datos sincronizados desde Moobiz; no se pueden editar ni eliminar aquí.
+                    </p>
+                  </div>
+                </div>
+
+                <Card className="border-slate-200 bg-white text-slate-900 shadow-sm">
+                  <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 border-b border-slate-100 py-3">
+                    <CardTitle className="text-base font-semibold">Registro de actividades</CardTitle>
+                    <Badge variant="secondary" className="bg-slate-100 text-slate-700">
+                      {logsCleanTotal} registro{logsCleanTotal === 1 ? "" : "s"}
+                    </Badge>
+                  </CardHeader>
+                  <CardContent className="space-y-4 pt-4">
+                    {logsCleanError && (
+                      <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                        {logsCleanError}
+                      </p>
+                    )}
+                    <div className="overflow-hidden rounded-lg border border-slate-200">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="border-slate-200 bg-slate-50 hover:bg-slate-50">
+                            <TableHead className="text-xs font-semibold text-slate-700">ID</TableHead>
+                            <TableHead className="text-xs font-semibold text-slate-700">Fecha</TableHead>
+                            <TableHead className="text-xs font-semibold text-slate-700">Parent ID</TableHead>
+                            <TableHead className="text-xs font-semibold text-slate-700">Session ID</TableHead>
+                            <TableHead className="text-xs font-semibold text-slate-700">Target ID</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {logsCleanLoading ? (
+                            <TableRow>
+                              <TableCell colSpan={5} className="py-10 text-center text-sm text-slate-500">
+                                Cargando registros…
+                              </TableCell>
+                            </TableRow>
+                          ) : logsCleanRows.length === 0 ? (
+                            <TableRow>
+                              <TableCell colSpan={5} className="py-10 text-center text-sm text-slate-500">
+                                No hay registros para los filtros seleccionados.
+                              </TableCell>
+                            </TableRow>
+                          ) : (
+                            logsCleanRows.map((row) => (
+                              <TableRow
+                                key={String(row.id)}
+                                className="border-slate-100 text-sm hover:bg-slate-50/80"
+                              >
+                                <TableCell className="font-mono text-xs">{asText(row.id) || "—"}</TableCell>
+                                <TableCell className="whitespace-nowrap text-xs">
+                                  {formatMoobizLogDate(row.date_created)}
+                                </TableCell>
+                                <TableCell className="max-w-[120px] truncate font-mono text-xs">
+                                  {row.parent_id != null && row.parent_id !== "" ? asText(row.parent_id) : "—"}
+                                </TableCell>
+                                <TableCell className="max-w-[140px] truncate font-mono text-xs">
+                                  {row.id_session != null && row.id_session !== "" ? asText(row.id_session) : "—"}
+                                </TableCell>
+                                <TableCell className="max-w-[140px] truncate font-mono text-xs">
+                                  {row.id_target != null && row.id_target !== "" ? asText(row.id_target) : "—"}
+                                </TableCell>
+                              </TableRow>
+                            ))
+                          )}
+                        </TableBody>
+                      </Table>
+                    </div>
+                    <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
+                      <p className="text-xs text-slate-600">
+                        Página {logsCleanPageClamped} de {logsCleanTotalPages} · {LOGS_CLEAN_PAGE_SIZE} por página
+                      </p>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setLogsCleanPage((prev) => Math.max(1, prev - 1))}
+                          disabled={logsCleanPageClamped <= 1 || logsCleanLoading}
+                        >
+                          Anterior
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            setLogsCleanPage((prev) => Math.min(logsCleanTotalPages, prev + 1))
+                          }
+                          disabled={logsCleanPageClamped >= logsCleanTotalPages || logsCleanLoading}
+                        >
+                          Siguiente
+                        </Button>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
               </TabsContent>
             </Tabs>
           </TabsContent>

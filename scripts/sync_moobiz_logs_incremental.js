@@ -1,64 +1,225 @@
+// scripts/sync_moobiz_logs_incremental.js
+// Reemplazar por este archivo. Pagina con page+limit, dedup, upsert en lotes,
+// actualiza sync_state y registra en sync_monitor.
+// Recomendado: crear rama y backup antes de reemplazar.
+
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MOOBIZ_LOGS_TOKEN = process.env.MOOBIZ_LOGS_TOKEN;
 const MOOBIZ_LOGS_URL = "https://app.moobiz.pe/api/admin/logs";
-const LIMIT = 5000;
 
-async function sync() {
-  console.log("Iniciando sync en GitHub...");
-  
-  // 1. Obtener último ID de Supabase
-  const lastIdRes = await fetch(`${SUPABASE_URL}/rest/v1/sync_state?key=eq.last_id&select=value`, {
-    headers: { 'apikey': SUPABASE_SERVICE_ROLE_KEY, 'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` }
-  });
-  const lastIdData = await lastIdRes.json();
-  const lastId = lastIdData.length ? BigInt(lastIdData[0].value) : 0n;
-  console.log("Last ID en Supabase:", lastId.toString());
+const PAGE_SIZE = 1000;
+const MAX_PAGES = 10; // límite por corrida (10000 registros max)
+const DELAY_MS = 300;
+const SUPABASE_BATCH_SIZE = 200;
 
-  // 2. Obtener logs de Moobiz
-  const moobizRes = await fetch(`${MOOBIZ_LOGS_URL}?limit=${LIMIT}`, {
-    headers: { 'Authorization': `Bearer ${MOOBIZ_LOGS_TOKEN}` }
-  });
-  const moobizData = await moobizRes.json();
-  const items = moobizData.items || [];
-  console.log("Items recibidos de Moobiz:", items.length);
-
-  // 3. Filtrar nuevos
-  const nuevos = items.filter(it => BigInt(it.id) > lastId);
-  console.log("Nuevos detectados:", nuevos.length);
-
-  if (nuevos.length > 0) {
-    // 4. Upsert a Supabase
-    const toInsert = nuevos.map(it => ({ original_id: String(it.id), raw: it }));
-    await fetch(`${SUPABASE_URL}/rest/v1/moobiz_logs`, {
-      method: 'POST',
-      headers: { 
-        'apikey': SUPABASE_SERVICE_ROLE_KEY, 
-        'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'resolution=merge-duplicates'
-      },
-      body: JSON.stringify(toInsert)
-    });
-
-    // 5. Actualizar Last ID
-    const maxId = nuevos.reduce((max, it) => BigInt(it.id) > max ? BigInt(it.id) : max, lastId);
-    await fetch(`${SUPABASE_URL}/rest/v1/sync_state?key=eq.last_id`, {
-      method: 'POST',
-      headers: { 
-        'apikey': SUPABASE_SERVICE_ROLE_KEY, 
-        'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'resolution=merge-duplicates'
-      },
-      body: JSON.stringify({ key: 'last_id', value: maxId.toString() })
-    });
-  }
-
-  console.log("✅ Sync completado con éxito");
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-sync().catch(err => {
-  console.error("❌ Error:", err);
+async function fetchJsonOrThrow(url, options, label) {
+  const res = await fetch(url, options);
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`${label} failed (${res.status}): ${text}`);
+  }
+  return text ? JSON.parse(text) : null;
+}
+
+/**
+ * Inserta una fila en public.sync_monitor vía PostgREST.
+ * No lanza: errores de red o de API solo se registran en consola.
+ */
+async function safeInsertSyncMonitor(row) {
+  const url = `${SUPABASE_URL}/rest/v1/sync_monitor`;
+  const body = JSON.stringify({
+    status: row.status,
+    records_inserted: row.records_inserted,
+    pages_queried: row.pages_queried,
+    last_id: row.last_id,
+    error_message: row.error_message,
+  });
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        "Content-Type": "application/json",
+        Prefer: "return=minimal",
+      },
+      body,
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error(
+        "[sync] sync_monitor: insert falló",
+        `HTTP ${res.status}`,
+        errText || "(cuerpo vacío)"
+      );
+      return;
+    }
+    console.log("[sync] sync_monitor: insert OK", `(HTTP ${res.status})`);
+  } catch (e) {
+    console.error(
+      "[sync] sync_monitor: error de red o excepción al insertar:",
+      e instanceof Error ? e.message : String(e)
+    );
+  }
+}
+
+async function main() {
+  console.log("🚀 Iniciando sync_moobiz_logs_incremental...");
+  let status = "success";
+  let recordsInserted = 0;
+  let pagesQueried = 0;
+  let lastIdAfter = "0";
+  let errorMessage = null;
+
+  try {
+    // 1) Leer last_id desde sync_state
+    const lastIdData = await fetchJsonOrThrow(
+      `${SUPABASE_URL}/rest/v1/sync_state?key=eq.last_id&select=value`,
+      {
+        headers: {
+          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        },
+      },
+      "Read sync_state"
+    );
+    const lastId = lastIdData.length ? BigInt(lastIdData[0].value) : 0n;
+    lastIdAfter = lastId.toString();
+    console.log(`[sync] last_id inicial: ${lastId.toString()}`);
+
+    // 2) Paginación controlada: page=1..MAX_PAGES
+    const collected = [];
+    let totalRead = 0;
+    let reachedSyncPoint = false;
+
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      pagesQueried = page;
+      const moobizData = await fetchJsonOrThrow(
+        `${MOOBIZ_LOGS_URL}?limit=${PAGE_SIZE}&page=${page}`,
+        { headers: { Authorization: `Bearer ${MOOBIZ_LOGS_TOKEN}` } },
+        `Fetch Moobiz page ${page}`
+      );
+
+      const items = moobizData.items || [];
+      console.log(`[sync] page=${page} items=${items.length}`);
+      totalRead += items.length;
+
+      if (items.length === 0) {
+        reachedSyncPoint = true;
+        break;
+      }
+
+      // Recorrer la página y recolectar solo id > lastId; si encontramos id <= lastId, hemos alcanzado punto
+      for (const it of items) {
+        const idBig = BigInt(it.id);
+        if (idBig > lastId) {
+          collected.push(it);
+        } else {
+          reachedSyncPoint = true;
+        }
+      }
+
+      if (reachedSyncPoint) break;
+
+      // pequeña pausa entre páginas para ser amable con la API
+      if (page < MAX_PAGES) await sleep(DELAY_MS);
+    }
+
+    console.log(`[sync] total leído (items): ${totalRead}`);
+    console.log(`[sync] recolectados antes dedup: ${collected.length}`);
+
+    // 3) Deduplicar por ID (porque la API puede solapar entre páginas)
+    const uniqueMap = new Map();
+    for (const it of collected) {
+      const k = String(it.id);
+      if (!uniqueMap.has(k)) uniqueMap.set(k, it);
+    }
+    const nuevos = Array.from(uniqueMap.values()).sort((a, b) => Number(BigInt(a.id) - BigInt(b.id)));
+    console.log(`[sync] nuevos deduplicados: ${nuevos.length}`);
+
+    // 4) Insertar en lotes en Supabase (upsert)
+    for (let i = 0; i < nuevos.length; i += SUPABASE_BATCH_SIZE) {
+      const batch = nuevos.slice(i, i + SUPABASE_BATCH_SIZE);
+      const payload = batch.map((it) => ({ original_id: String(it.id), raw: it }));
+      await fetchJsonOrThrow(
+        `${SUPABASE_URL}/rest/v1/moobiz_logs`,
+        {
+          method: "POST",
+          headers: {
+            apikey: SUPABASE_SERVICE_ROLE_KEY,
+            Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+            "Content-Type": "application/json",
+            Prefer: "resolution=merge-duplicates",
+          },
+          body: JSON.stringify(payload),
+        },
+        `Upsert moobiz_logs batch ${Math.floor(i / SUPABASE_BATCH_SIZE) + 1}`
+      );
+    }
+    recordsInserted = nuevos.length;
+
+    // 5) Actualizar sync_state.last_id al mayor id realmente insertado
+    if (nuevos.length > 0) {
+      const maxId = nuevos.reduce((max, it) => {
+        const idB = BigInt(it.id);
+        return idB > max ? idB : max;
+      }, BigInt(lastIdAfter));
+      await fetchJsonOrThrow(
+        `${SUPABASE_URL}/rest/v1/sync_state`,
+        {
+          method: "POST",
+          headers: {
+            apikey: SUPABASE_SERVICE_ROLE_KEY,
+            Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+            "Content-Type": "application/json",
+            Prefer: "resolution=merge-duplicates",
+          },
+          body: JSON.stringify({ key: "last_id", value: maxId.toString() }),
+        },
+        "Upsert sync_state"
+      );
+      lastIdAfter = maxId.toString();
+      console.log(`[sync] sync_state actualizado a: ${lastIdAfter}`);
+    } else {
+      console.log("[sync] No hubo nuevos para actualizar sync_state.");
+    }
+
+    // Estado final
+    status = reachedSyncPoint ? "success" : "warning_backlog";
+    console.log(
+      JSON.stringify({
+        status,
+        records_fetched: totalRead,
+        records_inserted: recordsInserted,
+        pages_queried: pagesQueried,
+        last_id_after: lastIdAfter,
+      })
+    );
+    console.log("✅ Sync completado");
+  } catch (err) {
+    status = "error";
+    errorMessage = err instanceof Error ? err.message : String(err);
+    console.error("[sync] Error detectado:", errorMessage);
+    // Re-throw para que GitHub Actions marque el job como failed si quieres
+    throw err;
+  } finally {
+    // Siempre intentar registrar en public.sync_monitor (no debe abortar el flujo).
+    await safeInsertSyncMonitor({
+      status,
+      records_inserted: recordsInserted,
+      pages_queried: pagesQueried,
+      last_id: lastIdAfter,
+      error_message: errorMessage,
+    });
+  }
+}
+
+main().catch((err) => {
+  console.error("❌ Ejecución terminada con error:", err instanceof Error ? err.message : String(err));
   process.exit(1);
 });

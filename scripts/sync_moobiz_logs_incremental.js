@@ -2,7 +2,10 @@
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MOOBIZ_LOGS_TOKEN = process.env.MOOBIZ_LOGS_TOKEN;
-const MOOBIZ_LOGS_URL = "https://app.moobiz.pe/api/admin/logs";
+/** Misma base que en `.env`; se puede sobreescribir con `MOOBIZ_LOGS_URL` si Moobiz cambia el path. */
+const MOOBIZ_LOGS_URL =
+  (process.env.MOOBIZ_LOGS_URL && String(process.env.MOOBIZ_LOGS_URL).trim()) ||
+  "https://app.moobiz.pe/api/admin/logs";
 const PAGE_SIZE = 1000; // recomendado en producción
 const MAX_PAGES = 10;
 const DELAY_MS = 300;
@@ -30,6 +33,12 @@ async function sync() {
   let errorMessage = null;
 
   try {
+    if (!MOOBIZ_LOGS_TOKEN || !String(MOOBIZ_LOGS_TOKEN).trim()) {
+      throw new Error(
+        "Falta MOOBIZ_LOGS_TOKEN: en GitHub Actions debe existir el secret MOOBIZ_LOGS_TOKEN y pasarse en workflow env.",
+      );
+    }
+
     const lastIdData = await fetchJsonOrThrow(
       `${SUPABASE_URL}/rest/v1/sync_state?key=eq.last_id&select=value`,
       {
@@ -71,7 +80,9 @@ async function sync() {
       // Chequeo rápido: si el primer id ya está por detrás del cursor, salgo
       if (BigInt(items[0].id) <= lastId) {
         reachedSyncPoint = true;
-        console.log(`[sync][debug] primera fila page ${page} (${items[0].id}) <= lastId ${lastId.toString()} — fin temprano`);
+        console.log(
+          `[sync] fin temprano pagina ${page}: primer id ${items[0].id} <= lastId ${lastId.toString()}`,
+        );
         break;
       }
 

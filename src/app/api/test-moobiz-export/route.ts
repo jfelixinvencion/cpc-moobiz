@@ -17,16 +17,17 @@ function buildCookieHeader() {
 
 export async function GET() {
   try {
-    const headers = {
-      'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/octet-stream,*/*',
-      'Origin': 'https://app.moobiz.pe',
-      'Referer': 'https://app.moobiz.pe/actives',
-      'X-Requested-With': 'XMLHttpRequest',
-      'Authorization': process.env.MOOBIZ_TOKEN ? 'Bearer ' + process.env.MOOBIZ_TOKEN : ''
-    }
+    const headers: Record<string, string> = {
+      Accept:
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/octet-stream,*/*",
+      Origin: "https://app.moobiz.pe",
+      Referer: "https://app.moobiz.pe/actives",
+      "X-Requested-With": "XMLHttpRequest",
+      Authorization: process.env.MOOBIZ_TOKEN ? "Bearer " + process.env.MOOBIZ_TOKEN : "",
+    };
 
-    const cookieHeader = buildCookieHeader()
-    if (cookieHeader) headers['Cookie'] = cookieHeader
+    const cookieHeader = buildCookieHeader();
+    if (cookieHeader) headers.Cookie = cookieHeader;
 
     const body = new URLSearchParams()
     body.set('export', 'xlsx')
@@ -56,6 +57,7 @@ export async function GET() {
       headers: rows[0] ? Object.keys(rows[0]) : [],
     })
   } catch (err) {
-    return NextResponse.json({ ok: false, error: err.message }, { status: 500 })
+    const message = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
 }

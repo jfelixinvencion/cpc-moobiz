@@ -1,9 +1,20 @@
 "use client";
 
-import { formatDistanceToNow } from "date-fns";
+import {
+  endOfISOWeek,
+  format,
+  formatDistanceToNow,
+  getISOWeek,
+  getISOWeeksInYear,
+  getISOWeekYear,
+  setISOWeek,
+  setISOWeekYear,
+  startOfISOWeek,
+} from "date-fns";
 import { es } from "date-fns/locale";
 import {
   memo,
+  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -76,6 +87,77 @@ type Viaje = {
 
 /** Fila de `moobiz_logs_clean`: columnas definidas solo por la vista en Supabase. */
 type MoobizLogCleanRow = Record<string, unknown>;
+
+type ProductividadSeriesRow = { us_name: string; count: number };
+type ProductividadApiResponse = {
+  series?: ProductividadSeriesRow[];
+  typeLogOptions?: string[];
+  meta?: {
+    year: number;
+    week: number;
+    rowCount: number;
+    capped: boolean;
+    start: string;
+    end: string;
+  } | null;
+  error?: string;
+};
+
+const PROD_WEEKDAY_SELECT = [
+  { value: "all", label: "Toda la semana" },
+  { value: "1", label: "Lunes" },
+  { value: "2", label: "Martes" },
+  { value: "3", label: "Miércoles" },
+  { value: "4", label: "Jueves" },
+  { value: "5", label: "Viernes" },
+  { value: "6", label: "Sábado" },
+  { value: "7", label: "Domingo" },
+] as const;
+
+/** Semana ISO: lunes 00:00 → domingo fin (mismo criterio que la API si se envía `from`/`to`). */
+function prodIsoWeekBounds(isoWeekYear: number, week: number): { start: Date; end: Date } {
+  const ref = new Date(isoWeekYear, 5, 15, 12, 0, 0, 0);
+  const inWeek = setISOWeek(setISOWeekYear(ref, isoWeekYear), week);
+  return { start: startOfISOWeek(inWeek), end: endOfISOWeek(inWeek) };
+}
+
+function formatProdWeekSelectLabel(isoWeekYear: number, week: number): string {
+  const { start, end } = prodIsoWeekBounds(isoWeekYear, week);
+  return `Semana ${week} (${format(start, "dd/MM")} al ${format(end, "dd/MM")})`;
+}
+
+function defaultProdWeekKey(): string {
+  const d = new Date();
+  return `${getISOWeekYear(d)}-${getISOWeek(d)}`;
+}
+
+function parseProdWeekKey(key: string): { y: number; w: number } | null {
+  const m = /^(\d{4})-(\d{1,2})$/.exec(key.trim());
+  if (!m) return null;
+  const y = Number.parseInt(m[1], 10);
+  const w = Number.parseInt(m[2], 10);
+  if (!Number.isFinite(y) || !Number.isFinite(w) || w < 1 || w > 53) return null;
+  return { y, w };
+}
+
+function buildProdWeekSelectOptions(): { value: string; label: string }[] {
+  const cy = getISOWeekYear(new Date());
+  const out: { value: string; label: string }[] = [];
+  for (const y of [cy - 1, cy, cy + 1]) {
+    const weeksInYear = getISOWeeksInYear(new Date(y, 5, 15));
+    for (let w = 1; w <= weeksInYear; w++) {
+      out.push({ value: `${y}-${w}`, label: formatProdWeekSelectLabel(y, w) });
+    }
+  }
+  out.sort((a, b) => {
+    const pa = parseProdWeekKey(a.value);
+    const pb = parseProdWeekKey(b.value);
+    if (!pa || !pb) return 0;
+    if (pa.y !== pb.y) return pb.y - pa.y;
+    return pb.w - pa.w;
+  });
+  return out;
+}
 
 type DashboardResponse = {
   data: Viaje[];
@@ -468,7 +550,7 @@ function formatMoney(value: unknown): string {
   return num.toLocaleString("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-export default function HomePage() {
+function DashboardContent() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -508,6 +590,14 @@ export default function HomePage() {
   const [syncMonitorLoading, setSyncMonitorLoading] = useState(true);
   const [syncMonitorError, setSyncMonitorError] = useState<string | null>(null);
   const [dashboardSubTab, setDashboardSubTab] = useState("reservas");
+  const [prodWeekKey, setProdWeekKey] = useState(() => defaultProdWeekKey());
+  const [prodWeekday, setProdWeekday] = useState<string>("all");
+  const [prodTypeLog, setProdTypeLog] = useState<string>("__all__");
+  const [prodSeries, setProdSeries] = useState<ProductividadSeriesRow[]>([]);
+  const [prodTypeOptions, setProdTypeOptions] = useState<string[]>([]);
+  const [prodMeta, setProdMeta] = useState<ProductividadApiResponse["meta"]>(null);
+  const [prodLoading, setProdLoading] = useState(false);
+  const [prodError, setProdError] = useState<string | null>(null);
   const [scheduleProductVisibility, setScheduleProductVisibility] = useState<
     Record<(typeof SCHEDULE_STACK_ORDER)[number], boolean>
   >({
@@ -874,6 +964,47 @@ export default function HomePage() {
     if (mainTab !== "dashboard" || dashboardSubTab !== "reservas") return;
     void loadDashboard();
   }, [mainTab, dashboardSubTab, loadDashboard, refreshKey]);
+
+  const loadProductividad = useCallback(async () => {
+    setProdLoading(true);
+    setProdError(null);
+    try {
+      const parsed = parseProdWeekKey(prodWeekKey);
+      if (!parsed) throw new Error("Semana invalida.");
+      const { start, end } = prodIsoWeekBounds(parsed.y, parsed.w);
+      const p = new URLSearchParams();
+      p.set("from", start.toISOString());
+      p.set("to", end.toISOString());
+      if (prodWeekday !== "all") p.set("weekday", prodWeekday);
+      if (prodTypeLog !== "__all__") p.set("typeLogName", prodTypeLog);
+      const res = await fetch(`/api/moobiz-logs-clean/productivity?${p.toString()}`, {
+        cache: "no-store",
+      });
+      const body = (await res.json()) as ProductividadApiResponse;
+      if (!res.ok) throw new Error(body?.error || "No se pudo cargar productividad.");
+      setProdSeries(Array.isArray(body.series) ? body.series : []);
+      setProdTypeOptions(Array.isArray(body.typeLogOptions) ? body.typeLogOptions : []);
+      setProdMeta(body.meta ?? null);
+    } catch (e) {
+      setProdError(e instanceof Error ? e.message : String(e));
+      setProdSeries([]);
+      setProdTypeOptions([]);
+      setProdMeta(null);
+    } finally {
+      setProdLoading(false);
+    }
+  }, [prodWeekKey, prodWeekday, prodTypeLog]);
+
+  useEffect(() => {
+    if (mainTab !== "dashboard" || dashboardSubTab !== "productividad") return;
+    void loadProductividad();
+  }, [mainTab, dashboardSubTab, loadProductividad, refreshKey]);
+
+  const prodWeekSelectOptions = useMemo(() => buildProdWeekSelectOptions(), []);
+  const prodChartHeight = useMemo(
+    () => Math.min(880, Math.max(300, prodSeries.length * 24 + 80)),
+    [prodSeries.length],
+  );
 
   const reservasEmpresaOptions = dashboardData?.filters.empresas ?? [];
 
@@ -1675,25 +1806,31 @@ export default function HomePage() {
           </TabsContent>
 
           <TabsContent value="dashboard" className="mt-0 space-y-4 outline-none">
-            {dashboardError && (
+            {dashboardError && dashboardSubTab === "reservas" && (
               <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
                 {dashboardError}
               </p>
             )}
 
             <Tabs value={dashboardSubTab} onValueChange={setDashboardSubTab} className="w-full">
-              <TabsList className="mb-3 h-10 w-full max-w-xl bg-slate-200/90 p-1">
+              <TabsList className="mb-3 grid h-auto min-h-10 w-full max-w-3xl grid-cols-1 gap-1 bg-slate-200/90 p-1 sm:grid-cols-3 sm:gap-0">
                 <TabsTrigger
                   value="reservas"
-                  className="flex-1 text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm"
+                  className="text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm sm:flex-1"
                 >
                   Reservas
                 </TabsTrigger>
                 <TabsTrigger
                   value="conductores"
-                  className="flex-1 text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm"
+                  className="text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm sm:flex-1"
                 >
                   Conductores en el tiempo
+                </TabsTrigger>
+                <TabsTrigger
+                  value="productividad"
+                  className="text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm sm:flex-1"
+                >
+                  Productividad
                 </TabsTrigger>
               </TabsList>
 
@@ -2082,6 +2219,146 @@ export default function HomePage() {
               </Card>
             </div>
               </TabsContent>
+
+              <TabsContent value="productividad" className="mt-0 space-y-4 outline-none">
+                {prodError && (
+                  <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                    {prodError}
+                  </p>
+                )}
+                <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    <div className="flex min-w-0 flex-col gap-1 sm:col-span-2 lg:col-span-1">
+                      <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                        Semana (lun–dom)
+                      </span>
+                      <Select value={prodWeekKey} onValueChange={setProdWeekKey}>
+                        <SelectTrigger className="h-9 w-full border-slate-200 bg-white text-sm">
+                          <SelectValue placeholder="Semana" />
+                        </SelectTrigger>
+                        <SelectContent className="max-h-72">
+                          {prodWeekSelectOptions.map((o) => (
+                            <SelectItem key={o.value} value={o.value}>
+                              {o.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="flex min-w-0 flex-col gap-1">
+                      <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                        Día de la semana
+                      </span>
+                      <Select value={prodWeekday} onValueChange={setProdWeekday}>
+                        <SelectTrigger className="h-9 w-full border-slate-200 bg-white text-sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {PROD_WEEKDAY_SELECT.map((o) => (
+                            <SelectItem key={o.value} value={o.value}>
+                              {o.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="flex min-w-0 flex-col gap-1">
+                      <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                        type_log_name
+                      </span>
+                      <Select value={prodTypeLog} onValueChange={setProdTypeLog}>
+                        <SelectTrigger className="h-9 w-full border-slate-200 bg-white text-sm">
+                          <SelectValue placeholder="Todos" />
+                        </SelectTrigger>
+                        <SelectContent className="max-h-60">
+                          <SelectItem value="__all__">Todos</SelectItem>
+                          {prodTypeOptions.map((t) => (
+                            <SelectItem key={t} value={t}>
+                              {t}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  {prodLoading && (
+                    <p className="mt-3 text-xs text-slate-500">Cargando registros de logs...</p>
+                  )}
+                  {!prodLoading && prodMeta?.capped && (
+                    <p className="mt-3 text-xs text-amber-700">
+                      Se alcanzó el límite de filas en la semana; el conteo puede estar truncado.
+                    </p>
+                  )}
+                </div>
+
+                <Card className="border-slate-200 bg-white shadow-sm">
+                  <CardHeader className="space-y-1 py-3">
+                    <CardTitle className="text-base font-semibold text-slate-800">
+                      Registros por usuario (moobiz_logs_clean)
+                    </CardTitle>
+                    <p className="text-xs text-slate-500">
+                      Eje Y: us_name · Eje X: cantidad de filas · Semana calendario ISO (lun–dom), dia
+                      opcional (1=lun … 7=dom), type_log_name.
+                    </p>
+                  </CardHeader>
+                  <CardContent className="pb-4">
+                    <div style={{ height: prodChartHeight }} className="w-full min-h-[300px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          data={prodSeries}
+                          layout="vertical"
+                          margin={{ top: 8, right: 20, left: 8, bottom: 8 }}
+                        >
+                          <CartesianGrid stroke={CHART_GRID} horizontal={false} />
+                          <XAxis
+                            type="number"
+                            tick={CHART_AXIS}
+                            tickLine={false}
+                            axisLine={{ stroke: CHART_GRID }}
+                            allowDecimals={false}
+                          />
+                          <YAxis
+                            dataKey="us_name"
+                            type="category"
+                            width={140}
+                            tick={{ ...CHART_AXIS, fontSize: 10 }}
+                            tickFormatter={(v) =>
+                              String(v).length > 22 ? `${String(v).slice(0, 20)}…` : String(v)
+                            }
+                            tickLine={false}
+                            axisLine={{ stroke: CHART_GRID }}
+                          />
+                          <Tooltip
+                            content={({ active, payload }) => {
+                              if (!active || !payload?.length) return null;
+                              const p = payload[0].payload as ProductividadSeriesRow;
+                              return (
+                                <div className="min-w-[200px] space-y-1 p-2" style={CHART_TOOLTIP_STYLE}>
+                                  <ChartTooltipRow label="Usuario" value={p.us_name} />
+                                  <ChartTooltipRow label="Registros" value={p.count} />
+                                </div>
+                              );
+                            }}
+                          />
+                          <Bar
+                            dataKey="count"
+                            name="Registros"
+                            fill="#00e676"
+                            radius={[0, 4, 4, 0]}
+                            maxBarSize={22}
+                            isAnimationActive={false}
+                          />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                    {!prodLoading && prodSeries.length === 0 && (
+                      <p className="mt-2 text-center text-xs text-slate-500">
+                        Sin datos para los filtros seleccionados.
+                      </p>
+                    )}
+                  </CardContent>
+                </Card>
+              </TabsContent>
             </Tabs>
           </TabsContent>
         </div>
@@ -2098,5 +2375,13 @@ export default function HomePage() {
         </div>
       ) : null}
     </main>
+  );
+}
+
+export default function Page() {
+  return (
+    <Suspense fallback={<div>Cargando...</div>}>
+      <DashboardContent />
+    </Suspense>
   );
 }

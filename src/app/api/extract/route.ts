@@ -1,13 +1,19 @@
 import { createClient } from "@supabase/supabase-js";
 import * as XLSX from "xlsx";
 
+import {
+  loginAndGetMoobizToken,
+  moobizFetch,
+  readMoobizTokenFromDb,
+  redactMoobizToken,
+  writeMoobizTokenToDb,
+} from "@/lib/moobiz-auth";
+
 type JsonRecord = Record<string, unknown>;
 
 export const runtime = "nodejs";
 
 const DISPATCHER_URL = "https://app.moobiz.pe/api/admin/dispatcher";
-const DEFAULT_MOOBIZ_LOGIN_URL = "https://app.moobiz.pe/api/login";
-const DEFAULT_MOOBIZ_VERIFY_URL = "https://app.moobiz.pe/api/verify";
 /** Token de emergencia si login falla o sigue `not_logged` (override con MOOBIZ_FALLBACK_TOKEN). */
 const DEFAULT_MOOBIZ_FALLBACK_BEARER = "1a7271369ba2dfa7efcc2195f55272d1";
 const TARGET_TABLE = "viajes_activos";
@@ -101,203 +107,10 @@ function mergeCookieHeaders(...segments: (string | null | undefined)[]): string 
     .join("; ");
 }
 
-/** Extrae pares name=value del primer segmento de cada Set-Cookie (Node/undici). */
-function extractCookieHeaderFromLoginResponse(res: Response): string {
-  const h = res.headers as unknown as { getSetCookie?: () => string[] };
-  const lines = typeof h.getSetCookie === "function" ? h.getSetCookie() : [];
-  const fromGetSetCookie = lines
-    .map((line) => line.split(";")[0]?.trim())
-    .filter((pair): pair is string => Boolean(pair && pair.includes("=")));
-  if (fromGetSetCookie.length > 0) return fromGetSetCookie.join("; ");
-  const single = res.headers.get("set-cookie");
-  if (!single) return "";
-  return single
-    .split(/,(?=[^;]+?=)/)
-    .map((s) => s.split(";")[0]?.trim())
-    .filter((pair): pair is string => Boolean(pair && pair.includes("=")))
-    .join("; ");
-}
-
 function getMoobizFallbackBearerToken(): string {
   return (
     getEnvTrimmed(["MOOBIZ_FALLBACK_TOKEN", "MOOBIZ_EMERGENCY_TOKEN"]) ?? DEFAULT_MOOBIZ_FALLBACK_BEARER
   );
-}
-
-/**
- * Login en Moobiz y nuevo token Bearer.
- * Body JSON `{ user, pass }` (user = MOOBIZ_EMAIL, pass = MOOBIZ_PASSWORD) según Network.
- */
-async function refreshMoobizToken(): Promise<{ token: string; cookieFromLogin: string }> {
-  const user = getEnvTrimmed(["MOOBIZ_EMAIL"]);
-  const pass = getEnvTrimmed(["MOOBIZ_PASSWORD"]);
-  if (!user || !pass) {
-    throw new Error("MOOBIZ_LOGIN_FAILED: faltan MOOBIZ_EMAIL o MOOBIZ_PASSWORD en entorno.");
-  }
-
-  const loginUrl = getEnvTrimmed(["MOOBIZ_LOGIN_URL"]) ?? DEFAULT_MOOBIZ_LOGIN_URL;
-
-  console.log(
-    "[Moobiz] renovacion automatica: POST login en",
-    loginUrl,
-    "user",
-    user.replace(/(^.).*(@.*)$/, "$1***$2"),
-  );
-
-  const loginRes = await fetch(loginUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      Origin: "https://app.moobiz.pe",
-      Referer: "https://app.moobiz.pe/",
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    },
-    body: JSON.stringify({ user, pass }),
-    cache: "no-store",
-  });
-
-  const loginCt = loginRes.headers.get("content-type") || "";
-  const loginText = await loginRes.text();
-  console.log(
-    "[Moobiz] login respuesta status=",
-    loginRes.status,
-    "content-type=",
-    loginCt,
-    "preview=",
-    loginText.slice(0, 240),
-  );
-
-  if (!loginRes.ok) {
-    throw new Error(
-      `MOOBIZ_LOGIN_FAILED: HTTP ${loginRes.status} — ${loginText.slice(0, 400)}`,
-    );
-  }
-
-  let parsed: {
-    ok?: unknown;
-    token?: unknown;
-    msg?: unknown;
-    id?: unknown;
-    name?: unknown;
-    surname?: unknown;
-  };
-  try {
-    parsed = JSON.parse(loginText) as {
-      ok?: unknown;
-      token?: unknown;
-      msg?: unknown;
-      id?: unknown;
-      name?: unknown;
-      surname?: unknown;
-    };
-  } catch {
-    throw new Error(`MOOBIZ_LOGIN_FAILED: respuesta no JSON — ${loginText.slice(0, 300)}`);
-  }
-
-  if (parsed.ok !== true || typeof parsed.token !== "string" || !parsed.token.trim()) {
-    throw new Error(
-      `MOOBIZ_LOGIN_FAILED: JSON sin token valido — ${JSON.stringify(parsed).slice(0, 500)}`,
-    );
-  }
-
-  const token = parsed.token.trim();
-  console.log(
-    "[Moobiz] login OK (usuario Moobiz id=",
-    String(parsed.id ?? ""),
-    "nombre=",
-    [parsed.name, parsed.surname].filter(Boolean).join(" ").trim() || "—",
-    ")",
-  );
-
-  let cookieFromLogin = extractCookieHeaderFromLoginResponse(loginRes);
-  if (cookieFromLogin) {
-    console.log("[Moobiz] login Set-Cookie (pares):", cookieFromLogin.slice(0, 200));
-  } else {
-    console.log("[Moobiz] login sin Set-Cookie parseable.");
-  }
-
-  /** Tras login, Chrome llama `verify?token=...`; si falla no bloqueamos el export. */
-  try {
-    cookieFromLogin = await fetchMoobizVerifyAndMergeCookies(token, cookieFromLogin);
-  } catch (verifyErr) {
-    console.warn(
-      "[Moobiz] verify opcional fallo (se continua con token de login):",
-      verifyErr instanceof Error ? verifyErr.message : verifyErr,
-    );
-  }
-
-  return { token, cookieFromLogin };
-}
-
-/**
- * GET verify?token=... (como en Network tras login). Une nuevas cookies de la respuesta.
- */
-async function fetchMoobizVerifyAndMergeCookies(
-  token: string,
-  existingCookieHeader: string,
-): Promise<string> {
-  const rawBase = getEnvTrimmed(["MOOBIZ_VERIFY_URL"]);
-  const verifyUrl = rawBase ? new URL(rawBase) : new URL(DEFAULT_MOOBIZ_VERIFY_URL);
-  verifyUrl.searchParams.set("token", token);
-
-  console.log("[Moobiz] verify sesion GET", verifyUrl.origin + verifyUrl.pathname + "?token=***");
-
-  const headers: Record<string, string> = {
-    Accept: "application/json, text/plain, */*",
-    Authorization: `Bearer ${token}`,
-    "X-Auth-Token": token,
-    Origin: "https://app.moobiz.pe",
-    Referer: "https://app.moobiz.pe/",
-    "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-  };
-  const mergedIn = existingCookieHeader.trim();
-  if (mergedIn) headers.Cookie = mergedIn;
-
-  const verifyRes = await fetch(verifyUrl.toString(), {
-    method: "GET",
-    headers,
-    cache: "no-store",
-  });
-
-  const verifyText = await verifyRes.text();
-  const verifyCt = verifyRes.headers.get("content-type") || "";
-  console.log(
-    "[Moobiz] verify status=",
-    verifyRes.status,
-    "content-type=",
-    verifyCt,
-    "preview=",
-    verifyText.slice(0, 240),
-  );
-
-  if (!verifyRes.ok) {
-    throw new Error(
-      `MOOBIZ_LOGIN_FAILED: verify HTTP ${verifyRes.status} — ${verifyText.slice(0, 400)}`,
-    );
-  }
-
-  if (verifyCt.toLowerCase().includes("application/json")) {
-    try {
-      const v = JSON.parse(verifyText) as { ok?: unknown; msg?: unknown };
-      if (v.ok === false) {
-        throw new Error(
-          `MOOBIZ_LOGIN_FAILED: verify respondio ok=false — ${verifyText.slice(0, 400)}`,
-        );
-      }
-    } catch (e) {
-      if (e instanceof Error && e.message.startsWith("MOOBIZ_LOGIN_FAILED")) throw e;
-    }
-  }
-
-  const fromVerify = extractCookieHeaderFromLoginResponse(verifyRes);
-  if (fromVerify) {
-    console.log("[Moobiz] verify Set-Cookie (pares):", fromVerify.slice(0, 200));
-  }
-
-  return mergeCookieHeaders(existingCookieHeader, fromVerify);
 }
 
 function normalizeHeader(value: string): string {
@@ -392,48 +205,9 @@ type FetchDispatcherXlsxOptions = {
   attemptLabel?: string;
 };
 
-async function fetchDispatcherXlsx(
-  token: string,
-  options?: FetchDispatcherXlsxOptions,
-): Promise<ArrayBuffer> {
-  const body = new URLSearchParams();
-  body.append("export", "xlsx");
-
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${token}`,
-    "X-Auth-Token": token,
-    "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-    Accept:
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/octet-stream,*/*",
-    Origin: "https://app.moobiz.pe",
-    Referer: "https://app.moobiz.pe/actives",
-    "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-  };
-  const cookie = options?.cookieHeader?.trim();
-  if (cookie) headers.Cookie = cookie;
-
-  const label = options?.attemptLabel ?? "export";
-  console.log(
-    "[Moobiz] descarga XLSX",
-    label,
-    cookie ? "(con header Cookie)" : "(solo Bearer + X-Auth-Token)",
-  );
-
-  const exportRes = await fetch(DISPATCHER_URL, {
-    method: "POST",
-    headers,
-    body: body.toString(),
-    cache: "no-store",
-  });
-  console.log("[Moobiz] export status:", exportRes.status);
-  console.log("[Moobiz] export content-type:", exportRes.headers.get("content-type"));
-  const rawText = await exportRes.clone().text();
-  console.log("[Moobiz] export preview:", rawText.slice(0, 500));
-
+async function parseDispatcherResponse(exportRes: Response, rawText: string): Promise<ArrayBuffer> {
   if (!exportRes.ok) {
-    const details = await exportRes.text();
-    throw new Error(`MOOBIZ_EXPORT_FAILED: HTTP ${exportRes.status} — ${details.slice(0, 300)}`);
+    throw new Error(`MOOBIZ_EXPORT_FAILED: HTTP ${exportRes.status} — ${rawText.slice(0, 300)}`);
   }
 
   const contentType = (exportRes.headers.get("content-type") || "").toLowerCase();
@@ -460,14 +234,96 @@ async function fetchDispatcherXlsx(
   return exportRes.arrayBuffer();
 }
 
+/** Dispatcher usando `moobizFetch` (token en sync_state / renovación 401/403). */
+async function fetchDispatcherXlsxMoobizFetch(options?: FetchDispatcherXlsxOptions): Promise<ArrayBuffer> {
+  const body = new URLSearchParams();
+  body.append("export", "xlsx");
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+    Accept:
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/octet-stream,*/*",
+    Origin: "https://app.moobiz.pe",
+    Referer: "https://app.moobiz.pe/actives",
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  };
+  const cookie = options?.cookieHeader?.trim();
+  if (cookie) headers.Cookie = cookie;
+
+  const label = options?.attemptLabel ?? "export";
+  console.log("[Moobiz] descarga XLSX", label, cookie ? "(con Cookie env)" : "(sin Cookie env)");
+
+  const exportRes = await moobizFetch(DISPATCHER_URL, {
+    method: "POST",
+    headers,
+    body: body.toString(),
+  });
+
+  console.log("[Moobiz] export status:", exportRes.status);
+  const rawText = await exportRes.clone().text();
+  console.log("[Moobiz] export content-type:", exportRes.headers.get("content-type"));
+  console.log("[Moobiz] export preview:", rawText.slice(0, 500));
+
+  return await parseDispatcherResponse(exportRes, rawText);
+}
+
 /** `null` = respuesta JSON `not_logged` del dispatcher. */
-async function fetchDispatcherXlsxOrNotLogged(
+async function fetchDispatcherXlsxOrNotLoggedMoobiz(
+  cookieHeader: string,
+  attemptLabel: string,
+): Promise<ArrayBuffer | null> {
+  try {
+    return await fetchDispatcherXlsxMoobizFetch({
+      cookieHeader: cookieHeader || undefined,
+      attemptLabel,
+    });
+  } catch (e) {
+    if (e instanceof MoobizNotLoggedError) return null;
+    throw e;
+  }
+}
+
+/** Fallback: Bearer fijo (no pasa por sync_state / moobizFetch). */
+async function fetchDispatcherXlsxFixedToken(
+  token: string,
+  options?: FetchDispatcherXlsxOptions,
+): Promise<ArrayBuffer> {
+  const body = new URLSearchParams();
+  body.append("export", "xlsx");
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    "X-Auth-Token": token,
+    "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+    Accept:
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/octet-stream,*/*",
+    Origin: "https://app.moobiz.pe",
+    Referer: "https://app.moobiz.pe/actives",
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  };
+  const cookie = options?.cookieHeader?.trim();
+  if (cookie) headers.Cookie = cookie;
+
+  const exportRes = await fetch(DISPATCHER_URL, {
+    method: "POST",
+    headers,
+    body: body.toString(),
+    cache: "no-store",
+  });
+  const rawText = await exportRes.clone().text();
+  console.log("[Moobiz] export (fallback fijo) status:", exportRes.status);
+  return await parseDispatcherResponse(exportRes, rawText);
+}
+
+async function fetchDispatcherXlsxOrNotLoggedFixed(
   token: string,
   cookieHeader: string,
   attemptLabel: string,
 ): Promise<ArrayBuffer | null> {
   try {
-    return await fetchDispatcherXlsx(token, {
+    return await fetchDispatcherXlsxFixedToken(token, {
       cookieHeader: cookieHeader || undefined,
       attemptLabel,
     });
@@ -478,17 +334,17 @@ async function fetchDispatcherXlsxOrNotLogged(
 }
 
 async function resolveMoobizXlsxBuffer(): Promise<ArrayBuffer> {
-  const moobizToken = getEnvTrimmed(["MOOBIZ_TOKEN"]);
-  const moobizEmail = getEnvTrimmed(["MOOBIZ_EMAIL"]);
-  const moobizPassword = getEnvTrimmed(["MOOBIZ_PASSWORD"]);
-  const canAutoLogin = Boolean(moobizEmail && moobizPassword);
+  const email = getEnvTrimmed(["MOOBIZ_EMAIL"]);
+  const pass = getEnvTrimmed(["MOOBIZ_PASSWORD"]);
+  const envTok = getEnvTrimmed(["MOOBIZ_TOKEN"]);
+  const canAdminLogin = Boolean(email && pass);
   const fallbackBearer = getMoobizFallbackBearerToken();
-
   let cookieHeader = buildMoobizCookieFromEnv();
 
-  if (!moobizToken && !canAutoLogin) {
+  const dbTok = await readMoobizTokenFromDb();
+  if (!canAdminLogin && !envTok && !dbTok) {
     throw new Error(
-      "FALLA_CRITICA_MOOBIZ_LOGIN: falta MOOBIZ_TOKEN y no hay MOOBIZ_EMAIL/MOOBIZ_PASSWORD para login.",
+      "FALLA_CRITICA_MOOBIZ_LOGIN: faltan MOOBIZ_EMAIL/MOOBIZ_PASSWORD y no hay token en sync_state ni MOOBIZ_TOKEN para arrancar.",
     );
   }
 
@@ -496,8 +352,11 @@ async function resolveMoobizXlsxBuffer(): Promise<ArrayBuffer> {
     if (!fallbackBearer.trim()) {
       throw new Error(`FALLA_CRITICA_MOOBIZ_LOGIN: ${reason} (sin MOOBIZ_FALLBACK_TOKEN).`);
     }
-    console.log("[Moobiz] intento con token fallback de emergencia (MOOBIZ_FALLBACK_TOKEN / default)...");
-    const buf = await fetchDispatcherXlsxOrNotLogged(
+    console.log(
+      "[Moobiz] intento token fallback (emergencia), bearer:",
+      redactMoobizToken(fallbackBearer),
+    );
+    const buf = await fetchDispatcherXlsxOrNotLoggedFixed(
       fallbackBearer,
       cookieHeader,
       "C_fallback_emergency",
@@ -508,62 +367,19 @@ async function resolveMoobizXlsxBuffer(): Promise<ArrayBuffer> {
     );
   };
 
-  if (!moobizToken) {
-    console.log("[Moobiz] sin MOOBIZ_TOKEN; login automatico antes del primer export...");
-    let newToken: string;
-    try {
-      const refreshed = await refreshMoobizToken();
-      newToken = refreshed.token;
-      cookieHeader = mergeCookieHeaders(cookieHeader, refreshed.cookieFromLogin);
-    } catch (loginErr) {
-      return tryFallback(
-        `login inicial fallo: ${loginErr instanceof Error ? loginErr.message : String(loginErr)}`,
-      );
-    }
-    const buf = await fetchDispatcherXlsxOrNotLogged(newToken, cookieHeader, "B_post_login_sin_token_env");
+  let buf = await fetchDispatcherXlsxOrNotLoggedMoobiz(cookieHeader, "A_moobiz_fetch");
+  if (buf) return buf;
+
+  if (canAdminLogin) {
+    console.log("[Moobiz] not_logged con token actual; login admin + persistencia en sync_state…");
+    const { token, cookieFromLogin } = await loginAndGetMoobizToken();
+    await writeMoobizTokenToDb(token);
+    cookieHeader = mergeCookieHeaders(cookieHeader, cookieFromLogin);
+    buf = await fetchDispatcherXlsxOrNotLoggedMoobiz(cookieHeader, "B_post_admin_login");
     if (buf) return buf;
-    const bufFb = await fetchDispatcherXlsxOrNotLogged(fallbackBearer, cookieHeader, "C_fallback_tras_login");
-    if (bufFb) return bufFb;
-    throw new Error(
-      "FALLA_CRITICA_MOOBIZ_LOGIN: not_logged tras login inicial, nuevo token y token fallback.",
-    );
   }
 
-  let bufA = await fetchDispatcherXlsxOrNotLogged(moobizToken, cookieHeader, "A_token_env");
-  if (bufA) return bufA;
-
-  if (!canAutoLogin) {
-    const bufFb = await fetchDispatcherXlsxOrNotLogged(fallbackBearer, cookieHeader, "C_fallback_sin_login");
-    if (bufFb) return bufFb;
-    throw new Error(
-      "FALLA_CRITICA_MOOBIZ_LOGIN: not_logged con MOOBIZ_TOKEN y sin credenciales de login; fallback tambien not_logged.",
-    );
-  }
-
-  console.log(
-    "Token expirado, iniciando sesión automática para FLO FELIX (ID 128140)...",
-  );
-
-  let newToken: string;
-  try {
-    const refreshed = await refreshMoobizToken();
-    newToken = refreshed.token;
-    cookieHeader = mergeCookieHeaders(cookieHeader, refreshed.cookieFromLogin);
-  } catch (loginErr) {
-    return tryFallback(
-      `login automatico fallo: ${loginErr instanceof Error ? loginErr.message : String(loginErr)}`,
-    );
-  }
-
-  const bufB = await fetchDispatcherXlsxOrNotLogged(newToken, cookieHeader, "B_post_login");
-  if (bufB) return bufB;
-
-  const bufC = await fetchDispatcherXlsxOrNotLogged(fallbackBearer, cookieHeader, "C_fallback_emergency");
-  if (bufC) return bufC;
-
-  throw new Error(
-    "FALLA_CRITICA_MOOBIZ_LOGIN: not_logged tras login automatico, nuevo token y token fallback.",
-  );
+  return tryFallback("dispatcher not_logged despues de login admin");
 }
 
 export async function GET(): Promise<Response> {

@@ -1428,7 +1428,7 @@ function DashboardContent() {
                   value={DATOS_SUB_REGISTRO_ACTIVIDADES}
                   className="flex-1 text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm"
                 >
-                  Registro Actividades
+                  Registro logs
                 </TabsTrigger>
               </TabsList>
 
@@ -1687,7 +1687,7 @@ function DashboardContent() {
 
                 <Card className="border-slate-200 bg-white text-slate-900 shadow-sm">
                   <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 border-b border-slate-100 py-3">
-                    <CardTitle className="text-base font-semibold">Registro de actividades</CardTitle>
+                    <CardTitle className="text-base font-semibold">Registro de logs (Moobiz)</CardTitle>
                     <Badge variant="secondary" className="bg-slate-100 text-slate-700">
                       {logsCleanTotal} registro{logsCleanTotal === 1 ? "" : "s"}
                     </Badge>

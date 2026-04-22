@@ -551,13 +551,13 @@ export function ConductorTimelineMatrix({
                   height: totalInnerHeight,
                 }}
               >
-                {/* Cabecera: sticky arriba; esquina sticky izquierda con z-index mayor */}
+                {/* Cabecera: sticky + isolate para capas; overflow visible (scroll en el padre). */}
                 <div
-                  className="sticky top-0 z-40 flex bg-slate-100"
+                  className="sticky top-0 z-50 isolate flex overflow-visible bg-slate-100"
                   style={{ height: HEADER_ROW_HEIGHT, width: totalInnerWidth }}
                 >
                   <div
-                    className="sticky left-0 z-[55] flex shrink-0 items-center border-b border-r border-slate-200 px-2 text-[10px] font-semibold uppercase tracking-wide text-slate-600"
+                    className="sticky left-0 z-[60] flex shrink-0 items-center border-b border-r border-slate-200 bg-slate-100 px-2 text-[10px] font-semibold uppercase tracking-wide text-slate-600"
                     style={{
                       width: NAME_COL_WIDTH,
                       height: HEADER_ROW_HEIGHT,
@@ -567,7 +567,7 @@ export function ConductorTimelineMatrix({
                     Conductor
                   </div>
                   <div
-                    className="relative shrink-0 border-b border-slate-200 bg-slate-100"
+                    className="relative z-[50] shrink-0 overflow-visible border-b border-slate-200 bg-slate-100"
                     style={{
                       width: columnVirtualizer.getTotalSize(),
                       height: HEADER_ROW_HEIGHT,
@@ -579,19 +579,21 @@ export function ConductorTimelineMatrix({
                       return (
                         <div
                           key={vCol.key}
-                          className="absolute flex flex-col items-center justify-end overflow-hidden border-r border-slate-200 bg-slate-100 px-0.5 pb-0.5 text-center"
+                          className="absolute z-[51] flex flex-col items-center justify-end overflow-visible border-r border-slate-200 bg-slate-100 pb-0.5 pl-0.5 pr-2 text-center"
                           style={{
                             height: HEADER_ROW_HEIGHT,
                             width: vCol.size,
                             transform: `translateX(${vCol.start}px) translateY(0px)`,
                           }}
                         >
-                          <div className="flex h-[15px] w-full items-end justify-center leading-none">
+                          <div className="relative z-[52] flex min-h-[15px] w-full items-end justify-center overflow-visible bg-slate-100 leading-none">
                             {slot.showDateLabel ? (
-                              <span className="text-[13px] font-bold text-slate-800">{slot.dateDisplay}</span>
+                              <span className="relative z-[70] mr-0.5 inline-block whitespace-nowrap rounded-sm bg-slate-100 py-px pl-1.5 pr-3 text-[13px] font-bold leading-tight text-slate-800">
+                                {slot.dateDisplay}
+                              </span>
                             ) : null}
                           </div>
-                          <span className="mt-0.5 text-[10px] font-medium tabular-nums text-slate-600">
+                          <span className="relative z-[52] mt-0.5 whitespace-nowrap bg-slate-100 pr-1 text-[10px] font-medium tabular-nums text-slate-600">
                             {slot.hourDisplay}
                           </span>
                         </div>
@@ -683,13 +685,14 @@ export function ConductorTimelineMatrix({
                   );
                 })}
 
+                {/* Líneas verticales solo sobre la cuadrícula (no atraviesan la cabecera: evita tapar fechas). */}
                 <div
-                  className="pointer-events-none absolute z-[38]"
+                  className="pointer-events-none absolute z-[10]"
                   style={{
                     left: NAME_COL_WIDTH,
-                    top: 0,
+                    top: HEADER_ROW_HEIGHT,
                     width: columnVirtualizer.getTotalSize(),
-                    height: totalInnerHeight,
+                    height: Math.max(0, totalInnerHeight - HEADER_ROW_HEIGHT),
                   }}
                   aria-hidden
                 >

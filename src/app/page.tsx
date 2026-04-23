@@ -87,6 +87,16 @@ type Viaje = {
 
 /** Fila de `moobiz_logs_clean`: columnas definidas solo por la vista en Supabase. */
 type MoobizLogCleanRow = Record<string, unknown>;
+type MoobizHistoryRow = {
+  id: string | number;
+  service_id?: string | null;
+  date_finalized?: string | null;
+  date_scheduled?: string | null;
+  status?: string | null;
+  user_name?: string | null;
+  amount?: number | string | null;
+  raw_data?: unknown;
+};
 
 type ProductividadSeriesRow = { us_name: string; count: number };
 type ProductividadApiResponse = {
@@ -178,6 +188,7 @@ const PAGE_SIZE = 50;
 const DATOS_SUB_VIAJES_ACTIVOS = "viajes-activos" as const;
 const DATOS_SUB_REGISTRO_ACTIVIDADES = "registro-actividades" as const;
 const LOGS_CLEAN_PAGE_SIZE = 50;
+const HISTORY_PAGE_SIZE = 50;
 const PIE_COLORS = [
   "#00e676",
   "#1e88e5",
@@ -550,6 +561,22 @@ function formatMoney(value: unknown): string {
   return num.toLocaleString("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function formatDateTimeCell(value: unknown): string {
+  const s = asText(value);
+  if (!s) return "—";
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return s;
+  return d.toLocaleString("es-PE", { dateStyle: "short", timeStyle: "short" });
+}
+
+function historyStatusBadgeClass(status: unknown): string {
+  const s = asText(status).toLowerCase();
+  if (s.includes("cancel")) return "bg-red-100 text-red-700 border-red-200";
+  if (s.includes("final") || s.includes("complete")) return "bg-emerald-100 text-emerald-700 border-emerald-200";
+  if (s.includes("pend")) return "bg-amber-100 text-amber-700 border-amber-200";
+  return "bg-slate-100 text-slate-700 border-slate-200";
+}
+
 function DashboardContent() {
   const router = useRouter();
   const pathname = usePathname();
@@ -586,6 +613,14 @@ function DashboardContent() {
   const [logsCleanLoading, setLogsCleanLoading] = useState(false);
   const [logsCleanError, setLogsCleanError] = useState<string | null>(null);
   const [logsCleanColumnKeys, setLogsCleanColumnKeys] = useState<string[]>([]);
+  const [historyUserSearch, setHistoryUserSearch] = useState("");
+  const [historyDateFrom, setHistoryDateFrom] = useState("");
+  const [historyDateTo, setHistoryDateTo] = useState("");
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyRows, setHistoryRows] = useState<MoobizHistoryRow[]>([]);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [syncMonitorRow, setSyncMonitorRow] = useState<SyncMonitorRow | null>(null);
   const [syncMonitorLoading, setSyncMonitorLoading] = useState(true);
   const [syncMonitorError, setSyncMonitorError] = useState<string | null>(null);
@@ -717,9 +752,43 @@ function DashboardContent() {
   }, [logsCleanDateFrom, logsCleanDateTo, logsCleanSearchDebounced]);
 
   useEffect(() => {
+    setHistoryPage(1);
+  }, [historyUserSearch, historyDateFrom, historyDateTo]);
+
+  useEffect(() => {
     if (datosSubTab !== DATOS_SUB_REGISTRO_ACTIVIDADES) return;
     setLogsCleanPage(1);
   }, [datosSubTab]);
+
+  const loadHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      const p = new URLSearchParams();
+      p.set("page", String(historyPage));
+      p.set("pageSize", String(HISTORY_PAGE_SIZE));
+      const userQ = historyUserSearch.trim();
+      if (userQ) p.set("user", userQ);
+      if (historyDateFrom) p.set("dateFrom", historyDateFrom);
+      if (historyDateTo) p.set("dateTo", historyDateTo);
+
+      const res = await fetch(`/api/moobiz-history?${p.toString()}`, { cache: "no-store" });
+      const body = (await res.json()) as {
+        data?: MoobizHistoryRow[];
+        total?: number;
+        error?: string;
+      };
+      if (!res.ok) throw new Error(body?.error || "No se pudo cargar historial.");
+      setHistoryRows(Array.isArray(body.data) ? body.data : []);
+      setHistoryTotal(typeof body.total === "number" ? body.total : 0);
+    } catch (e) {
+      setHistoryError(e instanceof Error ? e.message : String(e));
+      setHistoryRows([]);
+      setHistoryTotal(0);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [historyPage, historyUserSearch, historyDateFrom, historyDateTo]);
 
   const loadLogsClean = useCallback(async () => {
     setLogsCleanLoading(true);
@@ -758,6 +827,11 @@ function DashboardContent() {
     if (mainTab !== "datos" || datosSubTab !== DATOS_SUB_REGISTRO_ACTIVIDADES) return;
     void loadLogsClean();
   }, [mainTab, datosSubTab, loadLogsClean]);
+
+  useEffect(() => {
+    if (mainTab !== "historial") return;
+    void loadHistory();
+  }, [mainTab, loadHistory, refreshKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -818,6 +892,11 @@ function DashboardContent() {
     [logsCleanTotal],
   );
   const logsCleanPageClamped = Math.min(logsCleanPage, logsCleanTotalPages);
+  const historyTotalPages = useMemo(
+    () => Math.max(1, Math.ceil(historyTotal / HISTORY_PAGE_SIZE)),
+    [historyTotal],
+  );
+  const historyPageClamped = Math.min(historyPage, historyTotalPages);
 
   useEffect(() => {
     if (datosSubTab !== DATOS_SUB_REGISTRO_ACTIVIDADES) {
@@ -1408,6 +1487,12 @@ function DashboardContent() {
               >
                 Logs
               </TabsTrigger>
+              <TabsTrigger
+                value="historial"
+                className="flex-1 text-xs data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
+              >
+                Historial
+              </TabsTrigger>
             </TabsList>
 
               </div>
@@ -1803,6 +1888,141 @@ function DashboardContent() {
               fetchError={syncMonitorError}
               loading={syncMonitorLoading}
             />
+          </TabsContent>
+
+          <TabsContent value="historial" className="mt-0 space-y-4 outline-none">
+            <div className="rounded-lg border border-white/10 bg-[#0b1131] text-white shadow-sm">
+              <div className="grid grid-cols-1 gap-3 border-t border-white/10 px-3 py-3 md:grid-cols-3 md:px-4">
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="history-user" className="text-[10px] font-medium uppercase tracking-wide text-white/70">
+                    Usuario
+                  </Label>
+                  <Input
+                    id="history-user"
+                    value={historyUserSearch}
+                    onChange={(e) => setHistoryUserSearch(e.target.value)}
+                    placeholder="Buscar por usuario..."
+                    className="h-9 border-white/20 bg-white/10 text-xs text-white placeholder:text-white/50 md:text-sm"
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="history-from" className="text-[10px] font-medium uppercase tracking-wide text-white/70">
+                    Desde (finalizado)
+                  </Label>
+                  <Input
+                    id="history-from"
+                    type="date"
+                    value={historyDateFrom}
+                    onChange={(e) => setHistoryDateFrom(e.target.value)}
+                    className="h-9 border-white/20 bg-white/10 text-xs text-white md:text-sm [color-scheme:dark]"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="history-to" className="text-[10px] font-medium uppercase tracking-wide text-white/70">
+                    Hasta (finalizado)
+                  </Label>
+                  <Input
+                    id="history-to"
+                    type="date"
+                    value={historyDateTo}
+                    onChange={(e) => setHistoryDateTo(e.target.value)}
+                    className="h-9 border-white/20 bg-white/10 text-xs text-white md:text-sm [color-scheme:dark]"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <Card className="border-slate-200 bg-white text-slate-900 shadow-sm">
+              <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 border-b border-slate-100 py-3">
+                <CardTitle className="text-base font-semibold">Historial de viajes</CardTitle>
+                <Badge variant="secondary" className="bg-slate-100 text-slate-700">
+                  {historyTotal} registro{historyTotal === 1 ? "" : "s"}
+                </Badge>
+              </CardHeader>
+              <CardContent className="space-y-4 pt-4">
+                {historyError && (
+                  <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                    {historyError}
+                  </p>
+                )}
+                <div className="overflow-x-auto rounded-lg border border-slate-200">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="border-slate-200 bg-slate-50 hover:bg-slate-50">
+                        <TableHead>ID</TableHead>
+                        <TableHead>Servicio</TableHead>
+                        <TableHead>Usuario</TableHead>
+                        <TableHead>Estado</TableHead>
+                        <TableHead>Monto</TableHead>
+                        <TableHead>Programado</TableHead>
+                        <TableHead>Finalizado</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {historyLoading ? (
+                        <TableRow>
+                          <TableCell colSpan={7} className="py-10 text-center text-sm text-slate-500">
+                            Cargando historial…
+                          </TableCell>
+                        </TableRow>
+                      ) : historyRows.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={7} className="py-10 text-center text-sm text-slate-500">
+                            No hay registros para los filtros seleccionados.
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        historyRows.map((row, idx) => {
+                          const rowKey = row.id != null ? String(row.id) : `history-${historyPage}-${idx}`;
+                          return (
+                            <TableRow key={rowKey} className="border-slate-100 text-sm hover:bg-slate-50/80">
+                              <TableCell className="font-mono text-xs">{asText(row.id) || "—"}</TableCell>
+                              <TableCell className="text-xs">{asText(row.service_id) || "—"}</TableCell>
+                              <TableCell className="text-xs">{asText(row.user_name) || "—"}</TableCell>
+                              <TableCell>
+                                <Badge
+                                  variant="outline"
+                                  className={`border text-[11px] ${historyStatusBadgeClass(row.status)}`}
+                                >
+                                  {asText(row.status) || "Sin estado"}
+                                </Badge>
+                              </TableCell>
+                              <TableCell className="text-xs">S/ {formatMoney(row.amount)}</TableCell>
+                              <TableCell className="text-xs">{formatDateTimeCell(row.date_scheduled)}</TableCell>
+                              <TableCell className="text-xs">{formatDateTimeCell(row.date_finalized)}</TableCell>
+                            </TableRow>
+                          );
+                        })
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
+                <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
+                  <p className="text-xs text-slate-600">
+                    Página {historyPageClamped} de {historyTotalPages} · {HISTORY_PAGE_SIZE} por página
+                  </p>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setHistoryPage((prev) => Math.max(1, prev - 1))}
+                      disabled={historyPageClamped <= 1 || historyLoading}
+                    >
+                      Anterior
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setHistoryPage((prev) => Math.min(historyTotalPages, prev + 1))}
+                      disabled={historyPageClamped >= historyTotalPages || historyLoading}
+                    >
+                      Siguiente
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
           </TabsContent>
 
           <TabsContent value="dashboard" className="mt-0 space-y-4 outline-none">

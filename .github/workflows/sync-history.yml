@@ -1,0 +1,31 @@
+on:
+  schedule:
+    # 07:17 America/Lima = 12:17 UTC
+    - cron: "17 12 * * *"
+    # 19:17 America/Lima = 00:17 UTC
+    - cron: "17 0 * * *"
+  workflow_dispatch:
+
+name: Moobiz History Sync
+
+jobs:
+  sync-history:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run history sync script
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          MOOBIZ_EMAIL: ${{ secrets.MOOBIZ_EMAIL }}
+          MOOBIZ_PASSWORD: ${{ secrets.MOOBIZ_PASSWORD }}
+          MOOBIZ_SERVICES_URL: ${{ secrets.MOOBIZ_SERVICES_URL }}
+        run: node scripts/sync_moobiz_history.js

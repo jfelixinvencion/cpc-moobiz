@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "sync:history": "node scripts/sync_moobiz_history.js"
   },
   "dependencies": {
     "@supabase/ssr": "^0.10.2",

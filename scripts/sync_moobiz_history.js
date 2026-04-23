@@ -22,6 +22,8 @@ const HISTORY_CURSOR_KEY = "moobiz_services_history_last_finalized";
 
 const PAGE_SIZE = 100;
 const INITIAL_LIMIT = 2000;
+const MAX_RECORDS = Number.parseInt(process.env.MOOBIZ_HISTORY_MAX_RECORDS || "", 10) || 2000;
+const MAX_PAGES = Number.parseInt(process.env.MOOBIZ_HISTORY_MAX_PAGES || "", 10) || 30;
 const OVERLAP_HOURS = 48;
 const SUPABASE_BATCH_SIZE = 200;
 const DELAY_MS = 300;
@@ -181,6 +183,16 @@ function toIsoDate(value) {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return null;
   return d.toISOString();
+}
+
+function finalizedMsFromRaw(raw) {
+  const iso =
+    toIsoDate(raw?.date_finalized) ||
+    toIsoDate(raw?.date_finished) ||
+    toIsoDate(raw?.date_completed) ||
+    toIsoDate(raw?.date_end);
+  if (!iso) return NaN;
+  return Date.parse(iso);
 }
 
 function parseMoney(value) {
@@ -347,36 +359,62 @@ async function sync() {
     } else {
       console.log(`[history-sync] carga inicial: máximo ${INITIAL_LIMIT} registros.`);
     }
+    console.log(`[history-sync] límites de seguridad: MAX_RECORDS=${MAX_RECORDS}, MAX_PAGES=${MAX_PAGES}`);
 
     const collected = [];
     const seen = new Set();
     let page = 1;
     let continueLoop = true;
+    const dateFromMs = dateFrom ? Date.parse(dateFrom) : NaN;
 
     while (continueLoop) {
+      if (page > MAX_PAGES) {
+        console.warn(`[history-sync] corte de seguridad: MAX_PAGES=${MAX_PAGES} alcanzado.`);
+        break;
+      }
       const items = await fetchServicesPage({
         page,
         dateFrom: dateFrom || undefined,
         dateTo: nowIso,
       });
       pagesQueried = page;
-      console.log(`[history-sync] page=${page} items=${items.length}`);
       if (items.length === 0) break;
 
+      let addedThisPage = 0;
+      let oldestFinalizedInPage = NaN;
       for (const raw of items) {
+        const ms = finalizedMsFromRaw(raw);
+        if (!Number.isNaN(ms) && (Number.isNaN(oldestFinalizedInPage) || ms < oldestFinalizedInPage)) {
+          oldestFinalizedInPage = ms;
+        }
+
         const normalized = normalizeServiceRow(raw);
         if (!normalized) continue;
         if (seen.has(normalized.id)) continue;
         seen.add(normalized.id);
         collected.push(normalized);
+        addedThisPage += 1;
         if (mode === "initial" && collected.length >= INITIAL_LIMIT) {
           continueLoop = false;
           break;
         }
+        if (collected.length >= MAX_RECORDS) {
+          continueLoop = false;
+          break;
+        }
       }
+      console.log(`[history-sync] Página ${page}: +${addedThisPage} registros (Total: ${collected.length})`);
 
       if (items.length < PAGE_SIZE) break;
       if (mode === "initial" && collected.length >= INITIAL_LIMIT) break;
+      if (collected.length >= MAX_RECORDS) {
+        console.warn(`[history-sync] corte de seguridad: MAX_RECORDS=${MAX_RECORDS} alcanzado.`);
+        break;
+      }
+      if (!Number.isNaN(dateFromMs) && !Number.isNaN(oldestFinalizedInPage) && oldestFinalizedInPage < dateFromMs) {
+        console.log("[history-sync] corte por rango: última fecha de página quedó por debajo de date_from.");
+        break;
+      }
       page += 1;
       await sleep(DELAY_MS);
     }

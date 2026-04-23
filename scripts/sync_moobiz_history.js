@@ -20,11 +20,11 @@ const ADMIN_LOGIN_URL = "https://app.moobiz.pe/api/admin/login/login";
 const MOOBIZ_TOKEN_KEY = "moobiz_token";
 const HISTORY_CURSOR_KEY = "moobiz_services_history_last_finalized";
 
-const PAGE_SIZE = 100;
-const INITIAL_LIMIT = 2000;
-const MAX_RECORDS = Number.parseInt(process.env.MOOBIZ_HISTORY_MAX_RECORDS || "", 10) || 2000;
-const MAX_PAGES = Number.parseInt(process.env.MOOBIZ_HISTORY_MAX_PAGES || "", 10) || 30;
-const OVERLAP_HOURS = 48;
+const PAGE_SIZE = Number.parseInt(process.env.MOOBIZ_HISTORY_PAGE_SIZE || "", 10) || 500;
+const MAX_RECORDS = Number.parseInt(process.env.MOOBIZ_HISTORY_MAX_RECORDS || "", 10) || 5000;
+const INITIAL_LIMIT = MAX_RECORDS;
+const MAX_PAGES = Number.parseInt(process.env.MOOBIZ_HISTORY_MAX_PAGES || "", 10) || 5;
+const OVERLAP_HOURS = 24;
 const SUPABASE_BATCH_SIZE = 200;
 const DELAY_MS = 300;
 
@@ -290,22 +290,32 @@ async function fetchServicesPage({ page, dateFrom, dateTo }) {
 }
 
 async function upsertHistoryRows(rows) {
-  if (rows.length === 0) return;
+  if (rows.length === 0) return { processed: 0, countedByApi: null };
+  let processed = 0;
+  let countedByApi = 0;
+  let countReliable = true;
   for (let i = 0; i < rows.length; i += SUPABASE_BATCH_SIZE) {
     const batch = rows.slice(i, i + SUPABASE_BATCH_SIZE);
-    await fetchJsonOrThrow(
+    const body = await fetchJsonOrThrow(
       `${SUPABASE_URL}/rest/v1/moobiz_services_history`,
       {
         method: "POST",
         headers: supabaseHeaders({
           "Content-Type": "application/json",
-          Prefer: "resolution=merge-duplicates",
+          Prefer: "resolution=merge-duplicates,count=exact,return=representation",
         }),
         body: JSON.stringify(batch),
       },
       `Upsert moobiz_services_history batch ${Math.floor(i / SUPABASE_BATCH_SIZE) + 1}`,
     );
+    processed += batch.length;
+    if (Array.isArray(body)) {
+      countedByApi += body.length;
+    } else {
+      countReliable = false;
+    }
   }
+  return { processed, countedByApi: countReliable ? countedByApi : null };
 }
 
 function computeCursorDate(rows, fallbackIso) {
@@ -321,7 +331,8 @@ function computeCursorDate(rows, fallbackIso) {
 async function sync() {
   console.log("[history-sync] Iniciando sincronización de historial...");
   let status = "success";
-  let recordsInserted = 0;
+  let recordsProcessed = 0;
+  let recordsReturnedByUpsert = null;
   let pagesQueried = 0;
   let errorMessage = null;
   let cursorAfter = "";
@@ -355,11 +366,15 @@ async function sync() {
 
     console.log(`[history-sync] modo=${mode} cursor=${cursorSaved || "none"} overlap_h=${OVERLAP_HOURS}`);
     if (dateFrom) {
-      console.log(`[history-sync] rango: ${dateFrom} -> ${nowIso}`);
+      console.log(`[history-sync] Iniciando barrido de seguridad desde ${dateFrom} hasta ${nowIso}`);
     } else {
-      console.log(`[history-sync] carga inicial: máximo ${INITIAL_LIMIT} registros.`);
+      console.log(
+        `[history-sync] carga inicial: máximo ${INITIAL_LIMIT} registros (page_size=${PAGE_SIZE}).`,
+      );
     }
-    console.log(`[history-sync] límites de seguridad: MAX_RECORDS=${MAX_RECORDS}, MAX_PAGES=${MAX_PAGES}`);
+    console.log(
+      `[history-sync] límites de seguridad: MAX_RECORDS=${MAX_RECORDS}, MAX_PAGES=${MAX_PAGES}, overlap_h=${OVERLAP_HOURS}`,
+    );
 
     const collected = [];
     const seen = new Set();
@@ -369,7 +384,9 @@ async function sync() {
 
     while (continueLoop) {
       if (page > MAX_PAGES) {
-        console.warn(`[history-sync] corte de seguridad: MAX_PAGES=${MAX_PAGES} alcanzado.`);
+        console.warn(
+          `[history-sync] corte de seguridad: se alcanzaron ${MAX_PAGES} páginas (${MAX_PAGES * PAGE_SIZE} registros teóricos) sin cerrar rango.`,
+        );
         break;
       }
       const items = await fetchServicesPage({
@@ -419,9 +436,20 @@ async function sync() {
       await sleep(DELAY_MS);
     }
 
-    recordsInserted = collected.length;
+    recordsProcessed = collected.length;
     console.log(`[history-sync] registros normalizados: ${collected.length}`);
-    await upsertHistoryRows(collected);
+    const upsertStats = await upsertHistoryRows(collected);
+    recordsProcessed = upsertStats.processed;
+    recordsReturnedByUpsert = upsertStats.countedByApi;
+    if (recordsReturnedByUpsert === null) {
+      console.log(
+        "[history-sync] Supabase no devolvió conteo confiable de filas nuevas/actualizadas; se reportan registros_procesados.",
+      );
+    } else {
+      console.log(
+        `[history-sync] filas devueltas por upsert (nuevas o actualizadas): ${recordsReturnedByUpsert}`,
+      );
+    }
 
     cursorAfter = computeCursorDate(collected, cursorSaved || nowIso) || nowIso;
     await writeSyncStateValue(HISTORY_CURSOR_KEY, cursorAfter);
@@ -430,7 +458,8 @@ async function sync() {
       JSON.stringify({
         status,
         mode,
-        records_inserted: recordsInserted,
+        registros_procesados: recordsProcessed,
+        filas_devueltas_upsert: recordsReturnedByUpsert,
         pages_queried: pagesQueried,
         date_from: dateFrom || null,
         date_to: nowIso,
@@ -453,7 +482,7 @@ async function sync() {
           }),
           body: JSON.stringify({
             status,
-            records_inserted: recordsInserted,
+            records_inserted: recordsProcessed,
             pages_queried: pagesQueried,
             last_id: "moobiz_services_history",
             error_message: errorMessage,

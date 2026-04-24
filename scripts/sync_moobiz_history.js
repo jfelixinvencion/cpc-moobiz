@@ -318,6 +318,25 @@ async function upsertHistoryRows(rows) {
   return { processed, countedByApi: countReliable ? countedByApi : null };
 }
 
+/** Cuenta cuántos de los ids ya existían en moobiz_services_history (solo lectura, en trozos). */
+async function countExistingHistoryIds(ids) {
+  const unique = [...new Set((ids || []).map((x) => String(x ?? "").trim()).filter(Boolean))];
+  if (unique.length === 0) return 0;
+  const CHUNK = 100;
+  let existing = 0;
+  for (let i = 0; i < unique.length; i += CHUNK) {
+    const chunk = unique.slice(i, i + CHUNK);
+    const inList = chunk.map((id) => encodeURIComponent(id)).join(",");
+    const rows = await fetchJsonOrThrow(
+      `${SUPABASE_URL}/rest/v1/moobiz_services_history?id=in.(${inList})&select=id`,
+      { headers: supabaseHeaders() },
+      `Count existing moobiz_services_history ids chunk ${Math.floor(i / CHUNK) + 1}`,
+    );
+    if (Array.isArray(rows)) existing += rows.length;
+  }
+  return existing;
+}
+
 function computeCursorDate(rows, fallbackIso) {
   let max = fallbackIso ? Date.parse(fallbackIso) : NaN;
   for (const row of rows) {
@@ -333,6 +352,9 @@ async function sync() {
   let status = "success";
   let recordsProcessed = 0;
   let recordsReturnedByUpsert = null;
+  let registrosNuevosEstimados = null;
+  let registrosActualizadosEstimados = null;
+  let reasonForStop = null;
   let pagesQueried = 0;
   let errorMessage = null;
   let cursorAfter = "";
@@ -387,6 +409,7 @@ async function sync() {
         console.warn(
           `[history-sync] corte de seguridad: se alcanzaron ${MAX_PAGES} páginas (${MAX_PAGES * PAGE_SIZE} registros teóricos) sin cerrar rango.`,
         );
+        reasonForStop = "max_pages_safety";
         break;
       }
       const items = await fetchServicesPage({
@@ -395,7 +418,10 @@ async function sync() {
         dateTo: nowIso,
       });
       pagesQueried = page;
-      if (items.length === 0) break;
+      if (items.length === 0) {
+        reasonForStop = "empty_page_response";
+        break;
+      }
 
       let addedThisPage = 0;
       let oldestFinalizedInPage = NaN;
@@ -422,14 +448,29 @@ async function sync() {
       }
       console.log(`[history-sync] Página ${page}: +${addedThisPage} registros (Total: ${collected.length})`);
 
-      if (items.length < PAGE_SIZE) break;
-      if (mode === "initial" && collected.length >= INITIAL_LIMIT) break;
+      if (!continueLoop) {
+        reasonForStop =
+          mode === "initial" && collected.length >= INITIAL_LIMIT
+            ? "initial_load_limit"
+            : "max_records_safety";
+        break;
+      }
+      if (items.length < PAGE_SIZE) {
+        reasonForStop = "partial_batch_last_page";
+        break;
+      }
+      if (mode === "initial" && collected.length >= INITIAL_LIMIT) {
+        reasonForStop = "initial_load_limit";
+        break;
+      }
       if (collected.length >= MAX_RECORDS) {
         console.warn(`[history-sync] corte de seguridad: MAX_RECORDS=${MAX_RECORDS} alcanzado.`);
+        reasonForStop = "max_records_safety";
         break;
       }
       if (!Number.isNaN(dateFromMs) && !Number.isNaN(oldestFinalizedInPage) && oldestFinalizedInPage < dateFromMs) {
         console.log("[history-sync] corte por rango: última fecha de página quedó por debajo de date_from.");
+        reasonForStop = "below_date_from_overlap";
         break;
       }
       page += 1;
@@ -438,16 +479,24 @@ async function sync() {
 
     recordsProcessed = collected.length;
     console.log(`[history-sync] registros normalizados: ${collected.length}`);
+    if (collected.length === 0) {
+      registrosActualizadosEstimados = 0;
+      registrosNuevosEstimados = 0;
+    } else {
+      const existedBefore = await countExistingHistoryIds(collected.map((r) => r.id));
+      registrosActualizadosEstimados = existedBefore;
+      registrosNuevosEstimados = Math.max(0, collected.length - existedBefore);
+    }
     const upsertStats = await upsertHistoryRows(collected);
     recordsProcessed = upsertStats.processed;
     recordsReturnedByUpsert = upsertStats.countedByApi;
     if (recordsReturnedByUpsert === null) {
       console.log(
-        "[history-sync] Supabase no devolvió conteo confiable de filas nuevas/actualizadas; se reportan registros_procesados.",
+        "[history-sync] Supabase no devolvió conteo confiable de filas devueltas por upsert; métricas sync_monitor usan estimación previa al upsert.",
       );
     } else {
       console.log(
-        `[history-sync] filas devueltas por upsert (nuevas o actualizadas): ${recordsReturnedByUpsert}`,
+        `[history-sync] filas devueltas por upsert (nuevas o actualizadas, no separables): ${recordsReturnedByUpsert}`,
       );
     }
 
@@ -460,6 +509,8 @@ async function sync() {
         mode,
         registros_procesados: recordsProcessed,
         filas_devueltas_upsert: recordsReturnedByUpsert,
+        registros_nuevos_estimados: registrosNuevosEstimados,
+        registros_actualizados_estimados: registrosActualizadosEstimados,
         pages_queried: pagesQueried,
         date_from: dateFrom || null,
         date_to: nowIso,
@@ -473,6 +524,20 @@ async function sync() {
     throw err;
   } finally {
     try {
+      const reasonResolved =
+        reasonForStop ?? (status === "error" ? "sync_exception" : "unknown_stop");
+      const monitorPayload = {
+        status,
+        records_procesados: recordsProcessed,
+        records_inserted: recordsProcessed,
+        registros_nuevos_estimados: registrosNuevosEstimados,
+        registros_actualizados_estimados: registrosActualizadosEstimados,
+        reason_for_stop: reasonResolved,
+        pages_queried: pagesQueried,
+        last_id: "moobiz_services_history",
+        error_message: errorMessage,
+      };
+      console.log("[history-sync] sync_monitor payload:", JSON.stringify(monitorPayload));
       await fetchJsonOrThrow(
         `${SUPABASE_URL}/rest/v1/sync_monitor`,
         {
@@ -480,13 +545,7 @@ async function sync() {
           headers: supabaseHeaders({
             "Content-Type": "application/json",
           }),
-          body: JSON.stringify({
-            status,
-            records_inserted: recordsProcessed,
-            pages_queried: pagesQueried,
-            last_id: "moobiz_services_history",
-            error_message: errorMessage,
-          }),
+          body: JSON.stringify(monitorPayload),
         },
         "Insert sync_monitor history",
       );

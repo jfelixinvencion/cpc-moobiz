@@ -42,7 +42,17 @@ export async function GET() {
       });
     }
 
-    const row = Array.isArray(data) && data.length > 0 ? data[0] : null;
+    const rawRow = Array.isArray(data) && data.length > 0 ? data[0] : null;
+    const row =
+      rawRow && typeof rawRow === "object"
+        ? {
+            ...rawRow,
+            records_procesados:
+              (rawRow as { records_procesados?: unknown }).records_procesados ??
+              (rawRow as { records_inserted?: unknown }).records_inserted ??
+              null,
+          }
+        : rawRow;
     return NextResponse.json({ row, error: null });
   } catch (err) {
     return NextResponse.json({

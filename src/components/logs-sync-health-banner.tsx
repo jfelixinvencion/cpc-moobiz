@@ -12,6 +12,7 @@ export type SyncMonitorRow = {
   created_at?: string | null;
   inserted_at?: string | null;
   status?: string | null;
+  records_procesados?: number | null;
   records_inserted?: number | null;
   pages_queried?: number | null;
   last_id?: string | null;
@@ -110,9 +111,10 @@ export function LogsSyncHealthBanner({ row, fetchError, loading }: Props) {
   }, [ts, relTick]);
 
   const lastId = row?.last_id != null && String(row.last_id).trim() !== "" ? String(row.last_id) : "—";
-  const inserted =
-    row?.records_inserted != null && Number.isFinite(Number(row.records_inserted))
-      ? String(row.records_inserted)
+  const processedRaw = row?.records_procesados ?? row?.records_inserted ?? null;
+  const processed =
+    processedRaw != null && Number.isFinite(Number(processedRaw))
+      ? String(processedRaw)
       : "0";
 
   return (
@@ -147,8 +149,8 @@ export function LogsSyncHealthBanner({ row, fetchError, loading }: Props) {
             <dd className="inline font-mono text-slate-900">{lastId}</dd>
           </div>
           <div>
-            <dt className="inline font-medium text-slate-500">Nuevos registros: </dt>
-            <dd className="inline font-semibold text-slate-900">{inserted}</dd>
+            <dt className="inline font-medium text-slate-500">Registros procesados: </dt>
+            <dd className="inline font-semibold text-slate-900">{processed}</dd>
           </div>
           <div>
             <dt className="inline font-medium text-slate-500">Fecha: </dt>

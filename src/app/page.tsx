@@ -705,6 +705,10 @@ function DashboardContent() {
 
   const handleMainTabChange = useCallback(
     (value: string) => {
+      if (value === "calidad") {
+        router.push("/calidad");
+        return;
+      }
       setMainTab(value);
       if (value !== "datos") {
         const p = new URLSearchParams(searchParams.toString());
@@ -1492,6 +1496,12 @@ function DashboardContent() {
                 className="flex-1 text-xs data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
               >
                 Historial
+              </TabsTrigger>
+              <TabsTrigger
+                value="calidad"
+                className="flex-1 text-xs data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
+              >
+                Calidad
               </TabsTrigger>
             </TabsList>
 

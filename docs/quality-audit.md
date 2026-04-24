@@ -32,7 +32,9 @@ Si ya tenias la tabla creada, ejecutar tambien `sql/20260424_add_driver_name_to_
 
 Para la pestaña **Seguimiento** (última auditoría por conductor con resultado Condicional o Rechazado), ejecutar:
 
-- `sql/20260425_quality_audits_seguimiento_views.sql`
+- `sql/20260425_quality_audits_seguimiento_views.sql` (vistas en esquema **`vista`**).
+
+En Supabase, si la API devuelve error al consultar `vista`, revisa **Settings → API → Exposed schemas** e incluye `vista` para que PostgREST exponga esas vistas.
 
 Incluye:
 
@@ -57,7 +59,7 @@ Crear bucket privado `audits-photos`.
 - `GET /api/quality/audits?page=&limit=&dateFrom=&dateTo=&driverId=&resultado=&status=`
   - listado paginado (la API admite varios filtros; la pantalla de Calidad solo usa `driverId` como filtro).
 - `GET /api/quality/audits/segimiento?page=&limit=&driverId=`
-  - listado desde la vista `quality_audits_seguimiento`: una fila por conductor (su última auditoría) con resultado Condicional o Rechazado; mismo filtro opcional `driverId`.
+  - listado desde `vista.quality_audits_seguimiento` (cliente: `supabase.schema("vista").from("quality_audits_seguimiento")`); una fila por conductor (su última auditoría) con resultado Condicional o Rechazado; mismo filtro opcional `driverId`.
 - `GET /api/quality/audits/{id}`
   - detalle + signed read URLs para fotos.
 - `PATCH /api/quality/audits/{id}`

@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
+import { formatApiError } from "@/lib/format-api-error";
 import { assertQualityReadAccess } from "@/lib/panel-session";
 import { getSupabaseAdmin } from "@/lib/quality-audit";
 
 export const runtime = "nodejs";
 
-/** Vista SQL: última auditoría por conductor con resultado Condicional o Rechazado. */
+/** Vistas en esquema `vista` (no `public`). */
+const SCHEMA = "vista";
+/** Última auditoría por conductor con resultado Condicional o Rechazado. */
 const VIEW = "quality_audits_seguimiento";
 const SELECT_FIELDS =
   "id,driver_id,driver_name,vehicle_plate,auditor_id,auditor_name,created_at,updated_at,status,fotos_count,foto_paths,estado,usuario_estado,resultado,score,checklist,raw_data,notes,created_by";
@@ -21,7 +24,8 @@ export async function GET(request: NextRequest) {
     const driverId = (url.searchParams.get("driverId") ?? "").trim();
 
     const supabase = getSupabaseAdmin();
-    let query = supabase.from(VIEW).select(SELECT_FIELDS, { count: "exact" });
+    // Esquema explícito `vista` (no public); PostgREST debe tener `vista` en esquemas expuestos.
+    let query = supabase.schema(SCHEMA).from(VIEW).select(SELECT_FIELDS, { count: "exact" });
 
     query = query.order("created_at", { ascending: false, nullsFirst: false }).order("id", { ascending: false });
     if (driverId) {
@@ -29,7 +33,19 @@ export async function GET(request: NextRequest) {
     }
 
     const { data, count, error } = await query.range(from, to);
-    if (error) throw error;
+    if (error) {
+      const msg = formatApiError(error);
+      return NextResponse.json(
+        {
+          error: msg,
+          hint:
+            "Comprueba en Supabase: Settings → API → Exposed schemas incluye `vista`, y que exista vista.quality_audits_seguimiento.",
+          data: [],
+          total: 0,
+        },
+        { status: 500 },
+      );
+    }
 
     return NextResponse.json({
       data: data ?? [],
@@ -38,7 +54,7 @@ export async function GET(request: NextRequest) {
       limit,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatApiError(error);
     const status = message.startsWith("AUTH_REQUIRED") ? 401 : 500;
     return NextResponse.json({ error: message, data: [], total: 0 }, { status });
   }

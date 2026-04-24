@@ -9,11 +9,13 @@ import { QualityAuditDetail } from "@/components/QualityAuditDetail";
 import { QualityAuditForm } from "@/components/QualityAuditForm";
 import { QualityAuditList } from "@/components/QualityAuditList";
 import type { QualityAuditRecord } from "@/components/quality-audit-types";
+import { formatApiError, formatErrorFromPayload } from "@/lib/format-api-error";
 
 type ListResponse = {
   data?: QualityAuditRecord[];
   total?: number;
-  error?: string;
+  error?: unknown;
+  hint?: string;
 };
 
 const fetchPanel: typeof fetch = (input, init) =>
@@ -59,7 +61,13 @@ export default function CalidadPage() {
         subTab === TAB_SEGUIMIENTO ? "/api/quality/audits/segimiento" : "/api/quality/audits";
       const res = await fetchPanel(`${base}?${qs}`, { signal: ac.signal });
       const data = (await res.json()) as ListResponse;
-      if (!res.ok) throw new Error(data.error || "No se pudo cargar auditorías.");
+      if (!res.ok) {
+        let msg = formatErrorFromPayload(data.error);
+        if (!msg && data.error != null) msg = formatApiError(data.error);
+        if (!msg) msg = `No se pudo cargar (${res.status}).`;
+        if (typeof data.hint === "string" && data.hint.trim()) msg += ` — ${data.hint}`;
+        throw new Error(msg);
+      }
       setAudits(data.data ?? []);
       setTotal(data.total ?? 0);
     } catch (err) {

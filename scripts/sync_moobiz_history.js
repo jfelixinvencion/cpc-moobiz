@@ -1,11 +1,14 @@
 /**
  * Sync de historial Moobiz -> Supabase (public.moobiz_services_history).
  *
- * Modo normal: 2 páginas (1000 c/u), date_from=hoy−7 y date_to=hoy (YYYY-MM-DD), API con
- * order_col=date_updated&order_dir=desc; dedupe por id; métricas nuevos/actualizados vía
- * fetchExistingIdsChunked; sync_state moobiz_services_history_last_run (informativo).
- * Todas las llamadas a admin/services incluyen orden por date_updated descendente.
- * pages_backfill, manual e --id sin cambios de rol.
+ * Modo normal (defecto): order_col=date_updated, order_dir=desc, date_from=hoy−20 (YYYY-MM-DD),
+ * date_to=ahora (ISO), 2×1000 salvo override con --limit / --page. --order-col / --order_col
+ * para date_scheduled u date_updated. Dedupe, fetchExistingIdsChunked, upsert, last_run;
+ * si order_col=date_updated también guarda moobiz_services_history_last_date_updated (máx.
+ * date_updated del run). Sin overlaps en sync_state.
+ *
+ * Prueba rápida:
+ *   DOTENV_CONFIG_PATH=.env.local node -r dotenv/config scripts/sync_moobiz_history.js --limit=20 --page=1 --print-sample
  */
 const { randomUUID } = require("node:crypto");
 
@@ -32,6 +35,7 @@ const MOOBIZ_WEB_ORIGIN = MOOBIZ_API_BASE_URL;
 const MOOBIZ_TOKEN_KEY = "moobiz_token";
 /** Solo modo normal: marca de última corrida (no se usa como filtro). */
 const LAST_RUN_KEY = "moobiz_services_history_last_run";
+const LAST_DATE_UPDATED_KEY = "moobiz_services_history_last_date_updated";
 const NORMAL_PAGES_FIXED = 2;
 const NORMAL_LIMIT_FIXED = 1000;
 const NORMAL_DELAY_MS_FIXED = 200;
@@ -52,7 +56,11 @@ function parseCliArgs(argv) {
   for (const raw of argv) {
     if (!raw.startsWith("--")) continue;
     const eq = raw.indexOf("=");
-    if (eq === -1) continue;
+    if (eq === -1) {
+      const key = raw.slice(2).trim();
+      if (key) out[key] = "true";
+      continue;
+    }
     const key = raw.slice(2, eq).trim();
     const value = raw.slice(eq + 1).trim();
     if (key) out[key] = value;
@@ -66,13 +74,19 @@ const PAGES_BACKFILL_MODE = RUN_MODE === "pages_backfill";
 const DATE_FROM_OVERRIDE = String(CLI_ARGS.date_from || "").trim();
 const DATE_TO_OVERRIDE = String(CLI_ARGS.date_to || "").trim();
 const SERVICE_ID_DEBUG = String(CLI_ARGS.id || "").trim();
+const PRINT_SAMPLE =
+  String(CLI_ARGS["print-sample"] || CLI_ARGS.print_sample || "").toLowerCase() === "true";
 const MANUAL_RANGE_MODE = Boolean(DATE_FROM_OVERRIDE || DATE_TO_OVERRIDE);
 const PAGE_SIZE = Number.parseInt(CLI_ARGS.page_size || "", 10) || PAGE_SIZE_DEFAULT;
 const MAX_RECORDS = Number.parseInt(CLI_ARGS.max_records || "", 10) || MAX_RECORDS_DEFAULT;
 const MAX_PAGES = Number.parseInt(CLI_ARGS.max_pages || "", 10) || MAX_PAGES_DEFAULT;
 const DELAY_MS = Number.parseInt(CLI_ARGS.delay_ms || "", 10) || DELAY_MS_DEFAULT;
-const BACKFILL_PAGES = Number.parseInt(CLI_ARGS.pages || "", 10) || 20;
-const BACKFILL_LIMIT = Number.parseInt(CLI_ARGS.limit || "", 10) || 1000;
+const BACKFILL_PAGES = PAGES_BACKFILL_MODE
+  ? Number.parseInt(String(CLI_ARGS.pages || "").trim(), 10) || 20
+  : 20;
+const BACKFILL_LIMIT = PAGES_BACKFILL_MODE
+  ? Number.parseInt(String(CLI_ARGS.limit || "").trim(), 10) || 1000
+  : 1000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -265,6 +279,64 @@ function toText(value) {
   return String(value).trim();
 }
 
+/** Diagnóstico --print-sample (tolerar top-level o raw_data). */
+function pickFechaProgramadaSample(r) {
+  if (!r) return "";
+  if (r.date_scheduled) return r.date_scheduled;
+  const raw = r.raw_data;
+  if (!raw || typeof raw !== "object") return "";
+  return (
+    toIsoDate(raw.date_scheduled) ||
+    toIsoDate(raw.date_programmed) ||
+    toIsoDate(raw.date_start) ||
+    ""
+  );
+}
+
+function pickFechaActualizadaSample(r) {
+  if (!r) return "";
+  const raw = r.raw_data;
+  if (raw && typeof raw === "object") {
+    const fromRaw =
+      toIsoDate(raw.date_updated) ||
+      toIsoDate(raw.updated_at) ||
+      toIsoDate(raw.date_modified) ||
+      toIsoDate(raw.modified_at) ||
+      toIsoDate(raw.last_update) ||
+      "";
+    if (fromRaw) return fromRaw;
+  }
+  return "";
+}
+
+/** Mayor date_updated (ISO) entre filas dedupe; timestamps vía Date.parse (sync_state). */
+function maxDateUpdatedIsoFromRows(rowsDedup) {
+  if (!rowsDedup || rowsDedup.length === 0) return null;
+  const cands = rowsDedup
+    .map((r) => (r.raw_data && r.raw_data.date_updated) || r.date_updated)
+    .slice(0, 50);
+  console.log("[history-sync] candidatos date_updated:", cands);
+  const maxTs = rowsDedup.reduce((acc, r) => {
+    const cand =
+      (r.raw_data && (r.raw_data.date_updated ?? r.raw_data["date_updated"])) || r.date_updated || null;
+    if (cand == null || cand === "") return acc;
+    const ts = Date.parse(String(cand));
+    if (Number.isNaN(ts)) return acc;
+    return acc === null || ts > acc ? ts : acc;
+  }, null);
+  return maxTs != null ? new Date(maxTs).toISOString() : null;
+}
+
+/** order_col permitido en modo normal (CLI --order-col= o --order_col=). */
+function normalizeNormalOrderCol(raw) {
+  const v = String(raw ?? "")
+    .trim()
+    .toLowerCase();
+  if (!v) return "date_updated";
+  if (v === "date_updated" || v === "date_scheduled") return v;
+  return "date_updated";
+}
+
 function normalizeServiceRow(raw) {
   const idVal = raw.id ?? raw.service_id ?? raw.id_service ?? raw.idService;
   const id = toText(idVal);
@@ -327,6 +399,9 @@ async function fetchServicesPage({
   limit,
   skipSyncStateToken,
   serviceId,
+  /** Modo normal por defecto date_updated; backfill/manual/--id igual. */
+  orderCol = "date_updated",
+  orderDir = "desc",
 }) {
   if (skipSyncStateToken) {
     await ensureMoobizBearerNoSyncState();
@@ -340,21 +415,38 @@ async function fetchServicesPage({
   if (dateFrom) p.set("date_from", dateFrom);
   if (dateTo) p.set("date_to", dateTo);
   if (serviceId) p.set("id", String(serviceId));
-  p.set("order_col", "date_updated");
-  p.set("order_dir", "desc");
+  p.set("order_col", orderCol);
+  p.set("order_dir", orderDir);
 
   const url = `${MOOBIZ_SERVICES_URL}?${p.toString()}`;
-  console.log(`[history-sync] GET (sin token, order_col=date_updated order_dir=desc): ${url}`);
+  console.log(`[history-sync] GET (order_col=${orderCol} order_dir=${orderDir}): ${url}`);
 
-  const buildHeaders = () => ({
-    Authorization: `Bearer ${moobizBearer}`,
-    "X-Auth-Token": moobizBearer,
-    Accept: "application/json",
-    Origin: MOOBIZ_WEB_ORIGIN,
-    Referer: `${MOOBIZ_WEB_ORIGIN}/`,
-    "User-Agent": CHROME_UA,
-  });
-  const doFetch = () => fetch(url, { method: "GET", headers: buildHeaders(), cache: "no-store" });
+  const buildHeaders = () => {
+    const t = String(moobizBearer || "").trim();
+    if (!t) {
+      throw new Error("[history-sync] Bearer vacío al construir headers GET services.");
+    }
+    return {
+      Authorization: `Bearer ${t}`,
+      "X-Auth-Token": t,
+      Accept: "application/json",
+      Origin: MOOBIZ_WEB_ORIGIN,
+      Referer: `${MOOBIZ_WEB_ORIGIN}/`,
+      "User-Agent": CHROME_UA,
+    };
+  };
+  const doFetch = () => {
+    const t = String(moobizBearer || "").trim();
+    if (!t) {
+      throw new Error("[history-sync] Bearer vacío: no se puede llamar a /api/admin/services sin token.");
+    }
+    const authHeader = `Bearer ${t}`;
+    console.log("[history-sync] REQUEST HEADERS:", {
+      Authorization: authHeader.slice(0, 12) + "...",
+      Accept: "application/json",
+    });
+    return fetch(url, { method: "GET", headers: buildHeaders(), cache: "no-store" });
+  };
 
   let res = await doFetch();
   if (res.status === 401 || res.status === 403) {
@@ -485,6 +577,11 @@ async function sync() {
     }
 
     moobizBearer = null;
+
+    const date_to = new Date().toISOString();
+    console.log(
+      `[history-sync] date_to_utc=${date_to} date_to_local=${new Date(date_to).toLocaleString()}`,
+    );
 
     if (RUN_MODE !== "normal" && RUN_MODE !== "pages_backfill") {
       throw new Error(`Modo no soportado: ${RUN_MODE}. Usa --mode=pages_backfill o sin --mode.`);
@@ -634,22 +731,41 @@ async function sync() {
     if (!MANUAL_RANGE_MODE) {
       const runStartedAt = new Date().toISOString();
       const mode = "normal_2pages";
-      const dateToYmd = formatYyyyMmDdFromDate(new Date());
-      const dateFromYmd = ymdDaysAgoLocal(7);
+      const normalOrderCol = normalizeNormalOrderCol(CLI_ARGS["order-col"] || CLI_ARGS.order_col);
+
+      const parsedLimit = Number.parseInt(String(CLI_ARGS.limit || "").trim(), 10);
+      const effectiveLimit =
+        Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : NORMAL_LIMIT_FIXED;
+
+      const parsedPageRounds = Number.parseInt(
+        String(CLI_ARGS.page || CLI_ARGS.pages || "").trim(),
+        10,
+      );
+      const effectivePageRounds =
+        Number.isFinite(parsedPageRounds) && parsedPageRounds > 0
+          ? Math.min(parsedPageRounds, 50)
+          : NORMAL_PAGES_FIXED;
+
+      const dateFromYmd = ymdDaysAgoLocal(20);
 
       console.log(
-        `[history-sync] modo=${mode} run_started_at=${runStartedAt} date_from=${dateFromYmd} date_to=${dateToYmd} pages=${NORMAL_PAGES_FIXED} limit=${NORMAL_LIMIT_FIXED} delay_ms=${NORMAL_DELAY_MS_FIXED} base=${MOOBIZ_API_BASE_URL}`,
+        `[history-sync] run params: order_col=${normalOrderCol} date_from=${dateFromYmd} date_to=${date_to} pages=${effectivePageRounds} limit=${effectiveLimit}`,
+      );
+      console.log(
+        `[history-sync] modo=${mode} run_started_at=${runStartedAt} delay_ms=${NORMAL_DELAY_MS_FIXED} base=${MOOBIZ_API_BASE_URL}`,
       );
 
       const byId = new Map();
 
-      for (let page = 1; page <= NORMAL_PAGES_FIXED; page += 1) {
+      for (let page = 1; page <= effectivePageRounds; page += 1) {
         const items = await fetchServicesPage({
           page,
           dateFrom: dateFromYmd,
-          dateTo: dateToYmd,
-          limit: NORMAL_LIMIT_FIXED,
+          dateTo: date_to,
+          limit: effectiveLimit,
           skipSyncStateToken: false,
+          orderCol: normalOrderCol,
+          orderDir: "desc",
         });
         pagesQueried = page;
 
@@ -660,14 +776,28 @@ async function sync() {
         }
 
         console.log(
-          `[history-sync] Página ${page}/${NORMAL_PAGES_FIXED}: API_items=${items.length} ids_unicos_acum=${byId.size}`,
+          `[history-sync] Página ${page}/${effectivePageRounds}: API_items=${items.length} ids_unicos_acum=${byId.size}`,
         );
 
-        if (page < NORMAL_PAGES_FIXED) await sleep(NORMAL_DELAY_MS_FIXED);
+        if (page < effectivePageRounds) await sleep(NORMAL_DELAY_MS_FIXED);
       }
 
       const collected = [...byId.values()];
       console.log(`[history-sync] filas unicas tras dedupe: ${collected.length}`);
+
+      if (PRINT_SAMPLE) {
+        console.log("[history-sync] SAMPLE first 20 (id, date_scheduled, date_updated):");
+        const sampleFirst20 = collected.slice(0, 20).map((r) => ({
+          id: r.id,
+          date_scheduled: pickFechaProgramadaSample(r) || "",
+          date_updated: pickFechaActualizadaSample(r) || "",
+        }));
+        if (typeof console.table === "function") {
+          console.table(sampleFirst20);
+        } else {
+          console.log(JSON.stringify(sampleFirst20, null, 2));
+        }
+      }
 
       const idsToProcess = collected.map((r) => r.id);
       const total = idsToProcess.length;
@@ -677,7 +807,7 @@ async function sync() {
       registrosNuevosEstimados = nuevos;
       registrosActualizadosEstimados = actualizados;
       console.log(
-        `[history-sync] métricas (pre-upsert, ids vs DB): total=${total} nuevos=${nuevos} actualizados=${actualizados}`,
+        `[history-sync] métricas (pre-upsert, ids vs DB): total_ids=${total} existentes=${actualizados} registros_nuevos=${nuevos} registros_actualizados=${actualizados}`,
       );
 
       const rowsForUpsert = collected.map(stripHistoryRowForUpsert);
@@ -697,23 +827,41 @@ async function sync() {
 
       await writeSyncStateValue(LAST_RUN_KEY, runStartedAt);
 
-      pagesQueried = NORMAL_PAGES_FIXED;
-      reasonForStop = `ok_2pages_sync;nuevos=${nuevos};actualizados=${actualizados};run_started_at=${runStartedAt}`;
+      let lastDateUpdatedSaved = null;
+      if (normalOrderCol === "date_updated") {
+        const maxUpd = maxDateUpdatedIsoFromRows(collected);
+        if (maxUpd) {
+          await writeSyncStateValue(LAST_DATE_UPDATED_KEY, maxUpd);
+          lastDateUpdatedSaved = maxUpd;
+          console.log(`[history-sync] saved last_date_updated=${maxUpd}`);
+        }
+      }
+
+      pagesQueried = effectivePageRounds;
+      reasonForStop = `ok_2pages_sync;order_col=${normalOrderCol};nuevos=${nuevos};actualizados=${actualizados};run_started_at=${runStartedAt}`;
       cursorAfter = runStartedAt;
 
       console.log(
         JSON.stringify({
           status,
           mode,
+          order_col: normalOrderCol,
           run_started_at: runStartedAt,
           registros_procesados: total,
           registros_nuevos_estimados: nuevos,
           registros_actualizados_estimados: actualizados,
           filas_devueltas_upsert: recordsReturnedByUpsert,
-          pages_queried: NORMAL_PAGES_FIXED,
+          pages_queried: effectivePageRounds,
+          limit: effectiveLimit,
           date_from: dateFromYmd,
-          date_to: dateToYmd,
+          date_to: date_to,
           last_run_saved_key: LAST_RUN_KEY,
+          ...(normalOrderCol === "date_updated"
+            ? {
+                last_date_updated_key: LAST_DATE_UPDATED_KEY,
+                last_date_updated_saved: lastDateUpdatedSaved,
+              }
+            : {}),
         }),
       );
       console.log("[history-sync] ✅ Sync completado");

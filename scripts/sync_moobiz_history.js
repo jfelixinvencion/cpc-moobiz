@@ -1,9 +1,10 @@
 /**
  * Sync de historial Moobiz -> Supabase (public.moobiz_services_history).
  *
- * Modo normal: siempre 2 páginas (1000 c/u), date_from=hoy−3 y date_to=hoy (YYYY-MM-DD),
- * sin filtro local; dedupe por id; antes del upsert, ids vs DB en chunks de 250 para
- * nuevos/actualizados exactos; sync_state moobiz_services_history_last_run (informativo).
+ * Modo normal: 2 páginas (1000 c/u), date_from=hoy−7 y date_to=hoy (YYYY-MM-DD), API con
+ * order_col=date_updated&order_dir=desc; dedupe por id; métricas nuevos/actualizados vía
+ * fetchExistingIdsChunked; sync_state moobiz_services_history_last_run (informativo).
+ * Todas las llamadas a admin/services incluyen orden por date_updated descendente.
  * pages_backfill, manual e --id sin cambios de rol.
  */
 const { randomUUID } = require("node:crypto");
@@ -339,9 +340,11 @@ async function fetchServicesPage({
   if (dateFrom) p.set("date_from", dateFrom);
   if (dateTo) p.set("date_to", dateTo);
   if (serviceId) p.set("id", String(serviceId));
+  p.set("order_col", "date_updated");
+  p.set("order_dir", "desc");
 
   const url = `${MOOBIZ_SERVICES_URL}?${p.toString()}`;
-  console.log(`[history-sync] GET (sin token): ${url}`);
+  console.log(`[history-sync] GET (sin token, order_col=date_updated order_dir=desc): ${url}`);
 
   const buildHeaders = () => ({
     Authorization: `Bearer ${moobizBearer}`,
@@ -632,7 +635,7 @@ async function sync() {
       const runStartedAt = new Date().toISOString();
       const mode = "normal_2pages";
       const dateToYmd = formatYyyyMmDdFromDate(new Date());
-      const dateFromYmd = ymdDaysAgoLocal(3);
+      const dateFromYmd = ymdDaysAgoLocal(7);
 
       console.log(
         `[history-sync] modo=${mode} run_started_at=${runStartedAt} date_from=${dateFromYmd} date_to=${dateToYmd} pages=${NORMAL_PAGES_FIXED} limit=${NORMAL_LIMIT_FIXED} delay_ms=${NORMAL_DELAY_MS_FIXED} base=${MOOBIZ_API_BASE_URL}`,

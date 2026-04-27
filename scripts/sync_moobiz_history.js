@@ -2,8 +2,9 @@
  * Sync de historial Moobiz -> Supabase (public.moobiz_services_history).
  *
  * Modo normal: siempre 2 páginas (1000 c/u), date_from=hoy−3 y date_to=hoy (YYYY-MM-DD),
- * sin filtro local; dedupe por id; sync_state solo guarda moobiz_services_history_last_run
- * (informativo). pages_backfill, manual --date_from/--date_to y --id sin cambios de rol.
+ * sin filtro local; dedupe por id; antes del upsert, ids vs DB en chunks de 250 para
+ * nuevos/actualizados exactos; sync_state moobiz_services_history_last_run (informativo).
+ * pages_backfill, manual e --id sin cambios de rol.
  */
 const { randomUUID } = require("node:crypto");
 
@@ -406,6 +407,31 @@ async function upsertHistoryRows(rows) {
   return { processed, countedByApi: countReliable ? countedByApi : null };
 }
 
+/** IDs ya presentes en moobiz_services_history (lectura por trozos; modo normal usa 250). */
+const EXISTING_IDS_CHUNK_SIZE_NORMAL = 250;
+
+async function fetchExistingIdsChunked(ids) {
+  const unique = [...new Set((ids || []).map((x) => String(x ?? "").trim()).filter(Boolean))];
+  const existing = new Set();
+  if (unique.length === 0) return existing;
+  for (let i = 0; i < unique.length; i += EXISTING_IDS_CHUNK_SIZE_NORMAL) {
+    const chunk = unique.slice(i, i + EXISTING_IDS_CHUNK_SIZE_NORMAL);
+    const inList = chunk.map((id) => encodeURIComponent(id)).join(",");
+    const rows = await fetchJsonOrThrow(
+      `${SUPABASE_URL}/rest/v1/moobiz_services_history?id=in.(${inList})&select=id`,
+      { headers: supabaseHeaders() },
+      `Fetch existing moobiz_services_history ids chunk ${Math.floor(i / EXISTING_IDS_CHUNK_SIZE_NORMAL) + 1}`,
+    );
+    if (Array.isArray(rows)) {
+      for (const row of rows) {
+        const id = row && typeof row.id === "string" ? row.id.trim() : "";
+        if (id) existing.add(id);
+      }
+    }
+  }
+  return existing;
+}
+
 /** Cuenta cuántos de los ids ya existían en moobiz_services_history (solo lectura, en trozos). */
 async function countExistingHistoryIds(ids) {
   const unique = [...new Set((ids || []).map((x) => String(x ?? "").trim()).filter(Boolean))];
@@ -608,9 +634,6 @@ async function sync() {
       const dateToYmd = formatYyyyMmDdFromDate(new Date());
       const dateFromYmd = ymdDaysAgoLocal(3);
 
-      registrosNuevosEstimados = null;
-      registrosActualizadosEstimados = null;
-
       console.log(
         `[history-sync] modo=${mode} run_started_at=${runStartedAt} date_from=${dateFromYmd} date_to=${dateToYmd} pages=${NORMAL_PAGES_FIXED} limit=${NORMAL_LIMIT_FIXED} delay_ms=${NORMAL_DELAY_MS_FIXED} base=${MOOBIZ_API_BASE_URL}`,
       );
@@ -643,25 +666,36 @@ async function sync() {
       const collected = [...byId.values()];
       console.log(`[history-sync] filas unicas tras dedupe: ${collected.length}`);
 
+      const idsToProcess = collected.map((r) => r.id);
+      const total = idsToProcess.length;
+      const existingIdsSet = await fetchExistingIdsChunked(idsToProcess);
+      const actualizados = idsToProcess.filter((id) => existingIdsSet.has(id)).length;
+      const nuevos = total - actualizados;
+      registrosNuevosEstimados = nuevos;
+      registrosActualizadosEstimados = actualizados;
+      console.log(
+        `[history-sync] métricas (pre-upsert, ids vs DB): total=${total} nuevos=${nuevos} actualizados=${actualizados}`,
+      );
+
       const rowsForUpsert = collected.map(stripHistoryRowForUpsert);
       const upsertStats = await upsertHistoryRows(rowsForUpsert);
-      recordsProcessed = upsertStats.processed;
+      recordsProcessed = total;
       recordsReturnedByUpsert = upsertStats.countedByApi;
 
       if (recordsReturnedByUpsert === null) {
         console.log(
-          "[history-sync] Supabase no devolvió conteo confiable de filas devueltas por upsert; métricas sync_monitor usan estimación previa al upsert.",
+          "[history-sync] Supabase no devolvió conteo confiable de filas devueltas por upsert; sync_monitor usa nuevos/actualizados exactos del pre-chequeo.",
         );
       } else {
         console.log(
-          `[history-sync] filas devueltas por upsert (nuevas o actualizadas, no separables): ${recordsReturnedByUpsert}`,
+          `[history-sync] filas devueltas por upsert (representación API): ${recordsReturnedByUpsert}`,
         );
       }
 
       await writeSyncStateValue(LAST_RUN_KEY, runStartedAt);
 
       pagesQueried = NORMAL_PAGES_FIXED;
-      reasonForStop = `ok_2pages_upsert;run_started_at=${runStartedAt}`;
+      reasonForStop = `ok_2pages_sync;nuevos=${nuevos};actualizados=${actualizados};run_started_at=${runStartedAt}`;
       cursorAfter = runStartedAt;
 
       console.log(
@@ -669,7 +703,9 @@ async function sync() {
           status,
           mode,
           run_started_at: runStartedAt,
-          registros_procesados: recordsProcessed,
+          registros_procesados: total,
+          registros_nuevos_estimados: nuevos,
+          registros_actualizados_estimados: actualizados,
           filas_devueltas_upsert: recordsReturnedByUpsert,
           pages_queried: NORMAL_PAGES_FIXED,
           date_from: dateFromYmd,

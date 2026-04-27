@@ -1,0 +1,496 @@
+/**
+ * Sync conductores Moobiz → Supabase: reemplazo total (dedupe + RPC TRUNCATE+INSERT).
+ *
+ * Descarga: **un solo GET** con `limit` alto (por defecto **3000**). Multi-página (`page`/`p`/`offset`) devolvió ventanas duplicadas en secuencia.
+ *
+ * Token: `MOOBIZ_DRIVERS_TOKEN` o `sync_state.moobiz_token` + login admin.
+ */
+const { randomUUID } = require("node:crypto");
+const path = require("node:path");
+
+try {
+  require("dotenv").config({ path: path.join(__dirname, "..", ".env.local") });
+  require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
+} catch {
+  /* dotenv opcional */
+}
+
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const MOOBIZ_EMAIL = process.env.MOOBIZ_EMAIL;
+const MOOBIZ_PASSWORD = process.env.MOOBIZ_PASSWORD;
+const MOOBIZ_DRIVERS_TOKEN = process.env.MOOBIZ_DRIVERS_TOKEN;
+
+const DRIVERS_BASE_URL =
+  (process.env.MOOBIZ_DRIVERS_URL && String(process.env.MOOBIZ_DRIVERS_URL).trim()) ||
+  "https://app.moobiz.pe/api/admin/drivers";
+
+const ADMIN_LOGIN_URL = "https://app.moobiz.pe/api/admin/login/login";
+const MOOBIZ_TOKEN_KEY = "moobiz_token";
+
+const PAGE_SIZE_RAW = Number.parseInt(String(process.env.MOOBIZ_DRIVERS_PAGE_SIZE ?? "3000"), 10);
+const PAGE_SIZE =
+  Number.isFinite(PAGE_SIZE_RAW) && PAGE_SIZE_RAW >= 1 && PAGE_SIZE_RAW <= 5000 ? PAGE_SIZE_RAW : 3000;
+
+const CHROME_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+function redactToken(token) {
+  const t = String(token ?? "").trim();
+  if (t.length < 10) return `[len=${t.length}]`;
+  return `${t.slice(0, 6)}...${t.slice(-4)}`;
+}
+
+function supabaseHeaders(extra = {}) {
+  return {
+    apikey: SUPABASE_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+    ...extra,
+  };
+}
+
+async function fetchJsonOrThrow(url, options, label) {
+  const res = await fetch(url, options);
+  if (!res.ok) {
+    throw new Error(`${label} failed (${res.status}): ${await res.text()}`);
+  }
+  const raw = await res.text();
+  return raw ? JSON.parse(raw) : null;
+}
+
+async function readSyncStateValue(key) {
+  const rows = await fetchJsonOrThrow(
+    `${SUPABASE_URL}/rest/v1/sync_state?key=eq.${encodeURIComponent(key)}&select=value`,
+    { headers: supabaseHeaders() },
+    `Read sync_state ${key}`,
+  );
+  if (!Array.isArray(rows) || rows.length === 0) return "";
+  const v = rows[0].value;
+  return typeof v === "string" ? v.trim() : "";
+}
+
+async function writeSyncStateValue(key, value) {
+  const trimmed = String(value ?? "").trim();
+  await fetchJsonOrThrow(
+    `${SUPABASE_URL}/rest/v1/sync_state`,
+    {
+      method: "POST",
+      headers: supabaseHeaders({
+        "Content-Type": "application/json",
+        Prefer: "resolution=merge-duplicates",
+      }),
+      body: JSON.stringify({ key, value: trimmed }),
+    },
+    `Upsert sync_state ${key}`,
+  );
+}
+
+async function moobizAdminLogin() {
+  const username = typeof MOOBIZ_EMAIL === "string" ? MOOBIZ_EMAIL.trim() : "";
+  const password = typeof MOOBIZ_PASSWORD === "string" ? MOOBIZ_PASSWORD.trim() : "";
+  if (!username || !password) {
+    throw new Error("Faltan MOOBIZ_EMAIL o MOOBIZ_PASSWORD para obtener token de Moobiz.");
+  }
+
+  const body = {
+    username,
+    password,
+    uuid: randomUUID(),
+    language: "es",
+    os: "Windows",
+    os_version: "10",
+    device_brand: "Chrome",
+    device_model: "147.0.0.0",
+    app_version_code: 193,
+    time_zone_offset: -5,
+    user_agent: CHROME_UA,
+    country_code: "US",
+  };
+
+  const res = await fetch(ADMIN_LOGIN_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      Origin: "https://app.moobiz.pe",
+      Referer: "https://app.moobiz.pe/",
+      "User-Agent": CHROME_UA,
+    },
+    body: JSON.stringify(body),
+  });
+
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`MOOBIZ_LOGIN_FAILED: HTTP ${res.status} — ${text.slice(0, 400)}`);
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error(`MOOBIZ_LOGIN_FAILED: respuesta no JSON — ${text.slice(0, 300)}`);
+  }
+
+  if (parsed.ok !== true || typeof parsed.token !== "string" || !parsed.token.trim()) {
+    const msg = typeof parsed.msg === "string" ? parsed.msg : "";
+    throw new Error(
+      `MOOBIZ_LOGIN_FAILED: sin token válido${msg ? ` — ${msg}` : ""} — ${text.slice(0, 280)}`,
+    );
+  }
+
+  const token = parsed.token.trim();
+  console.log("[drivers-sync] Login admin OK, token", redactToken(token));
+  return token;
+}
+
+let moobizBearer = null;
+
+async function ensureMoobizBearer() {
+  const only = typeof MOOBIZ_DRIVERS_TOKEN === "string" ? MOOBIZ_DRIVERS_TOKEN.trim() : "";
+  if (only) {
+    console.log("[drivers-sync] Bearer desde MOOBIZ_DRIVERS_TOKEN:", redactToken(only));
+    return only;
+  }
+
+  if (moobizBearer && moobizBearer.trim()) return moobizBearer;
+  const fromDb = await readSyncStateValue(MOOBIZ_TOKEN_KEY);
+  if (fromDb) {
+    moobizBearer = fromDb;
+    console.log("[drivers-sync] Bearer desde sync_state:", redactToken(moobizBearer));
+    return moobizBearer;
+  }
+
+  const fresh = await moobizAdminLogin();
+  await writeSyncStateValue(MOOBIZ_TOKEN_KEY, fresh);
+  moobizBearer = fresh;
+  return moobizBearer;
+}
+
+function extractItems(body) {
+  const raw = body && body.items;
+  return Array.isArray(raw) ? raw : [];
+}
+
+function extractTotal(body) {
+  const t = body && body.total;
+  if (typeof t === "number" && Number.isFinite(t)) return t;
+  if (typeof t === "string" && t.trim()) {
+    const n = Number.parseInt(t, 10);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+function toTextId(v) {
+  if (v === undefined || v === null) return null;
+  const s = String(v).trim();
+  return s.length ? s : null;
+}
+
+function toTextNullable(v) {
+  if (v === undefined || v === null) return null;
+  const s = String(v).trim();
+  return s.length ? s : null;
+}
+
+function toBoolNullable(v) {
+  if (v === undefined || v === null) return null;
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v !== 0;
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    if (s === "true" || s === "1" || s === "yes") return true;
+    if (s === "false" || s === "0" || s === "no") return false;
+  }
+  return null;
+}
+
+function mapDriverRow(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const id = toTextId(raw.id);
+  if (!id) return null;
+  return {
+    id,
+    id_branch: toTextNullable(raw.id_branch),
+    id_role: toTextNullable(raw.id_role),
+    id_company: toTextNullable(raw.id_company),
+    id_company_area: toTextNullable(raw.id_company_area),
+    show_data_fleets: toBoolNullable(raw.show_data_fleets),
+    raw_data: raw,
+  };
+}
+
+const AUTH_401_AFTER_REFRESH_MSG = "Error 401 tras intento de renovación";
+
+function moobizBodyLooksLikeAuthFailure(body) {
+  if (!body || typeof body !== "object") return false;
+  if (body.ok === true) return false;
+  const msg = `${typeof body.msg === "string" ? body.msg : ""} ${typeof body.error === "string" ? body.error : ""}`;
+  return /not_logged|not\s*authorized|unauthori|token\s*invalid|sesi[oó]n/i.test(msg);
+}
+
+function responseLooksLikeAuthFailure(res, text) {
+  if (res.status === 401 || res.status === 403) return true;
+  if (!res.ok || res.status !== 200) return false;
+  const ct = res.headers.get("content-type") || "";
+  if (!ct.includes("json")) return false;
+  try {
+    const body = text ? JSON.parse(text) : {};
+    return moobizBodyLooksLikeAuthFailure(body);
+  } catch {
+    return false;
+  }
+}
+
+async function fetchDriversSingleLimit(token, limit) {
+  const url = new URL(DRIVERS_BASE_URL);
+  url.searchParams.set("limit", String(limit));
+
+  const driverHeaders = (t) => ({
+    Authorization: `Bearer ${t}`,
+    "X-Auth-Token": t,
+    Accept: "application/json",
+    Origin: "https://app.moobiz.pe",
+    Referer: "https://app.moobiz.pe/",
+    "User-Agent": CHROME_UA,
+  });
+
+  let bearer = token;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const res = await fetch(url.toString(), {
+      method: "GET",
+      headers: driverHeaders(bearer),
+      cache: "no-store",
+    });
+    const text = await res.text();
+
+    if (responseLooksLikeAuthFailure(res, text)) {
+      if (attempt === 1) {
+        throw new Error(AUTH_401_AFTER_REFRESH_MSG);
+      }
+      console.warn(
+        `[drivers-sync] Sesión/token inválido (HTTP ${res.status} o ok!=true auth) — login + sync_state y reintento…`,
+      );
+      const fresh = await moobizAdminLogin();
+      await writeSyncStateValue(MOOBIZ_TOKEN_KEY, fresh);
+      moobizBearer = fresh;
+      bearer = fresh;
+      continue;
+    }
+
+    if (!res.ok) {
+      throw new Error(`MOOBIZ_DRIVERS_FETCH: HTTP ${res.status} — ${text.slice(0, 400)}`);
+    }
+    let body;
+    try {
+      body = text ? JSON.parse(text) : {};
+    } catch {
+      throw new Error(`MOOBIZ_DRIVERS_FETCH: respuesta no JSON — ${text.slice(0, 300)}`);
+    }
+    if (body.ok !== true) {
+      const msg =
+        typeof body.msg === "string"
+          ? body.msg
+          : typeof body.error === "string"
+            ? body.error
+            : JSON.stringify(body).slice(0, 300);
+      throw new Error(`MOOBIZ_DRIVERS_FETCH: ok!=true — ${msg}`);
+    }
+    if (attempt === 1) {
+      console.log("[drivers-sync] GET conductores OK tras renovar token");
+    }
+    return body;
+  }
+  throw new Error(AUTH_401_AFTER_REFRESH_MSG);
+}
+
+async function downloadAllDriversDeduped(token) {
+  const limit = PAGE_SIZE;
+  const byId = new Map();
+  let rawMappedRows = 0;
+
+  const body = await fetchDriversSingleLimit(token, limit);
+  const totalReported = extractTotal(body);
+  const items = extractItems(body);
+  const lastPageItemCount = items.length;
+
+  console.log(`[drivers-sync] GET único: limit=${limit}, ítems en respuesta=${items.length}`);
+
+  const mapped = items.map(mapDriverRow).filter(Boolean);
+  console.log(`[drivers-sync] Registros mapeables (con id)=${mapped.length}`);
+
+  for (const row of mapped) {
+    rawMappedRows += 1;
+    byId.set(String(row.id), row);
+  }
+
+  const rows = [...byId.values()];
+  const dupesRemoved = rawMappedRows - rows.length;
+  if (dupesRemoved > 0) {
+    console.log(
+      `[drivers-sync] Dedupe final: ${rawMappedRows} filas mapeadas → ${rows.length} únicos (eliminados ${dupesRemoved} duplicados por id).`,
+    );
+  }
+
+  const reachedFetchCap =
+    lastPageItemCount >= limit && totalReported !== null && totalReported > lastPageItemCount;
+
+  return {
+    rows,
+    uniqueCount: rows.length,
+    rawMappedRows,
+    totalReported,
+    pages: 1,
+    reachedFetchCap,
+  };
+}
+
+async function rpcFullReplace(rows) {
+  return fetchJsonOrThrow(
+    `${SUPABASE_URL}/rest/v1/rpc/moobiz_drivers_full_replace`,
+    {
+      method: "POST",
+      headers: supabaseHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ p_rows: rows }),
+    },
+    "RPC moobiz_drivers_full_replace",
+  );
+}
+
+async function countDriversInDb() {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/moobiz_drivers?select=id`, {
+    headers: supabaseHeaders({ Prefer: "count=exact", Accept: "application/json" }),
+  });
+  if (!res.ok) {
+    throw new Error(`COUNT moobiz_drivers: ${res.status} ${await res.text()}`);
+  }
+  const cr = res.headers.get("content-range") || "";
+  const m = /\d+-\d+\/(\d+)/.exec(cr);
+  if (m) return Number.parseInt(m[1], 10);
+  return 0;
+}
+
+async function insertSyncMonitor(payload) {
+  await fetchJsonOrThrow(
+    `${SUPABASE_URL}/rest/v1/sync_monitor`,
+    {
+      method: "POST",
+      headers: supabaseHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(payload),
+    },
+    "Insert sync_monitor drivers",
+  );
+}
+
+async function sync() {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error("Faltan SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY.");
+  }
+
+  const token = await ensureMoobizBearer();
+  let pagesQueried = 0;
+
+  console.log(
+    `[drivers-sync] GET único limit=${PAGE_SIZE} (MOOBIZ_DRIVERS_PAGE_SIZE), modo=reemplazo_total`,
+  );
+
+  try {
+    const dl = await downloadAllDriversDeduped(token);
+    pagesQueried = dl.pages;
+
+    if (dl.uniqueCount === 0) {
+      throw new Error("MOOBIZ_DRIVERS_SYNC: 0 conductores descargados; la tabla no se modifica.");
+    }
+
+    console.log(
+      `[drivers-sync] Resumen descarga: únicos=${dl.uniqueCount}, rawMapped=${dl.rawMappedRows}, total API(campo)=${dl.totalReported ?? "?"}, peticiones=${dl.pages}, reachedCap=${dl.reachedFetchCap}`,
+    );
+
+    const rpcResult = await rpcFullReplace(dl.rows);
+    const inserted = typeof rpcResult === "number" ? rpcResult : dl.uniqueCount;
+    const finalDbCount = await countDriversInDb();
+
+    const validationErrors = [];
+    if (dl.totalReported !== null && dl.totalReported !== dl.uniqueCount) {
+      validationErrors.push(
+        `La API declaró total=${dl.totalReported} pero se descargaron ${dl.uniqueCount} conductores únicos (Δ ${dl.totalReported - dl.uniqueCount}).`,
+      );
+    }
+    if (dl.rawMappedRows > dl.uniqueCount) {
+      validationErrors.push(
+        `Ítems mapeados: ${dl.rawMappedRows}; únicos tras dedupe: ${dl.uniqueCount} (ids repetidos en la API).`,
+      );
+    }
+    if (finalDbCount !== dl.uniqueCount) {
+      validationErrors.push(
+        `Conteo en Supabase (${finalDbCount}) ≠ descargados únicos (${dl.uniqueCount}).`,
+      );
+    }
+    if (inserted !== dl.uniqueCount) {
+      validationErrors.push(`RPC insertó ${inserted} filas; se esperaban ${dl.uniqueCount}.`);
+    }
+    if (dl.reachedFetchCap) {
+      validationErrors.push(
+        `El GET único devolvió ${PAGE_SIZE} ítems pero la API declara total=${dl.totalReported}; sube MOOBIZ_DRIVERS_PAGE_SIZE.`,
+      );
+    }
+
+    const validationOk = validationErrors.length === 0;
+
+    await insertSyncMonitor({
+      status: validationOk ? "success" : "error",
+      records_procesados: dl.uniqueCount,
+      records_inserted: inserted,
+      registros_nuevos_estimados: null,
+      registros_actualizados_estimados: null,
+      reason_for_stop: validationOk ? "full_replace_ok_single_limit" : "full_replace_validation_failed_single_limit",
+      pages_queried: pagesQueried,
+      last_id: "moobiz_drivers",
+      error_message: validationOk ? null : validationErrors.join(" "),
+    });
+
+    console.log(
+      JSON.stringify({
+        ok: validationOk,
+        uniqueAfterDedupe: dl.uniqueCount,
+        finalDbCount,
+        apiTotalDeclared: dl.totalReported,
+        inserted,
+        reachedFetchCap: dl.reachedFetchCap,
+        validationErrors,
+      }),
+    );
+
+    if (!validationOk) {
+      process.exitCode = 2;
+      console.warn("[drivers-sync] Validación con advertencias o error; revisa el JSON anterior.");
+    } else {
+      console.log("[drivers-sync] OK");
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const auth401AfterRefresh =
+      msg === AUTH_401_AFTER_REFRESH_MSG || msg.includes(AUTH_401_AFTER_REFRESH_MSG);
+    try {
+      await insertSyncMonitor({
+        status: "error",
+        records_procesados: 0,
+        records_inserted: 0,
+        registros_nuevos_estimados: null,
+        registros_actualizados_estimados: null,
+        reason_for_stop: auth401AfterRefresh ? "moobiz_auth_401_after_refresh" : "sync_exception",
+        pages_queried: pagesQueried,
+        last_id: "moobiz_drivers",
+        error_message: auth401AfterRefresh ? AUTH_401_AFTER_REFRESH_MSG : msg,
+      });
+    } catch (e) {
+      console.error("[drivers-sync] sync_monitor insert falló:", e instanceof Error ? e.message : String(e));
+    }
+    throw err;
+  }
+}
+
+sync().catch((err) => {
+  console.error("[drivers-sync] Error:", err);
+  process.exit(1);
+});

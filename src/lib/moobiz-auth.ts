@@ -188,6 +188,74 @@ export async function getMoobizBearerForRequest(): Promise<string> {
   return token;
 }
 
+function moobizJsonBodyLooksLikeAuthFailure(body: unknown): boolean {
+  if (!body || typeof body !== "object") return false;
+  const o = body as Record<string, unknown>;
+  if (o.ok === true) return false;
+  const msg = [o.msg, o.error].map((x) => (typeof x === "string" ? x : "")).join(" ");
+  return /not_logged|not\s*authorized|unauthori|token\s*invalid|sesi[oó]n/i.test(msg);
+}
+
+/**
+ * Respuesta Moobiz que exige renovar Bearer: HTTP 401/403 o JSON con `ok!=true` y mensaje de sesión (p. ej. `not_logged`).
+ */
+async function moobizResponseIndicatesAuthFailure(res: Response): Promise<boolean> {
+  if (res.status === 401 || res.status === 403) return true;
+  if (!res.ok || res.status !== 200) return false;
+  const ct = res.headers.get("content-type") || "";
+  if (!ct.includes("json")) return false;
+  const text = await res.clone().text();
+  let parsed: unknown;
+  try {
+    parsed = text ? JSON.parse(text) : {};
+  } catch {
+    return false;
+  }
+  return moobizJsonBodyLooksLikeAuthFailure(parsed);
+}
+
+/**
+ * Primer intento con `bearerToken` explícito (p. ej. `MOOBIZ_DRIVERS_TOKEN`); si falla auth, login + `sync_state` y un reintento.
+ * Si el segundo intento sigue fallando auth, lanza mensaje fijo para `sync_monitor`.
+ */
+export async function moobizFetchWithToken(
+  url: string | URL,
+  init: RequestInit | undefined,
+  bearerToken: string,
+): Promise<Response> {
+  const buildHeaders = (token: string) => {
+    const h = new Headers(init?.headers);
+    h.set("Authorization", `Bearer ${token}`);
+    h.set("X-Auth-Token", token);
+    return h;
+  };
+
+  let token = bearerToken.trim();
+  let res = await fetch(url, {
+    ...init,
+    headers: buildHeaders(token),
+    cache: init?.cache ?? "no-store",
+  });
+
+  if (await moobizResponseIndicatesAuthFailure(res)) {
+    console.warn("[moobiz-auth] Auth inválida en Moobiz — moobizFetchWithToken: renovando vía login admin…");
+    const { token: fresh } = await loginAndGetMoobizToken();
+    await writeMoobizTokenToDb(fresh);
+    token = fresh;
+    res = await fetch(url, {
+      ...init,
+      headers: buildHeaders(token),
+      cache: init?.cache ?? "no-store",
+    });
+    if (await moobizResponseIndicatesAuthFailure(res)) {
+      throw new Error("Error 401 tras intento de renovación");
+    }
+    console.log("[moobiz-auth] Reintento OK (moobizFetchWithToken)", redactMoobizToken(token));
+  }
+
+  return res;
+}
+
 /**
  * Fetch a API Moobiz con Bearer + X-Auth-Token.
  * Si HTTP 401/403: login admin, guarda token, reintenta una vez.

@@ -1,0 +1,280 @@
+{
+  "meta": {
+    "generated_at": "2026-04-24T22:11:01.233Z",
+    "drivers_base_url": "https://app.moobiz.pe/api/admin/drivers",
+    "token_source": "sync_state.moobiz_token (GET)",
+    "limit": 1000
+  },
+  "analysis": {
+    "pages_1_2_3_repeat": {
+      "verdict": "windows_differ_or_incomplete",
+      "signatures": [
+        {
+          "label": "page_1",
+          "signature": "814:120020:83320:120020,120012,120001,119990,119989"
+        },
+        {
+          "label": "page_2",
+          "signature": "empty"
+        },
+        {
+          "label": "page_3",
+          "signature": "empty"
+        }
+      ],
+      "unique_signature_count": 2
+    },
+    "which_param_works": {
+      "page_1_2_advances": false,
+      "recommended_query_param": "p",
+      "notes": []
+    },
+    "recommendation": "Considerar cambiar el sync a **`p`** en lugar de **`page`** si `p=2` diverge de `page=2` y coincide con el total esperado."
+  },
+  "results": [
+    {
+      "label": "page_1",
+      "request_url": "https://app.moobiz.pe/api/admin/drivers?limit=1000&page=1",
+      "query": {
+        "limit": 1000,
+        "page": 1
+      },
+      "http_status": 200,
+      "headers": {
+        "set-cookie": [
+          "PHPSESSID=61icgnthjktua6uanlut7e42v0; path=/"
+        ]
+      },
+      "elapsed_ms": 6493,
+      "parse_error": null,
+      "api_ok": true,
+      "api_msg": "",
+      "api_total": 1814,
+      "items_count": 814,
+      "ids_extracted": 814,
+      "first_id": "120020",
+      "last_id": "83320",
+      "sample_10_ids": [
+        "120020",
+        "120012",
+        "120001",
+        "119990",
+        "119989",
+        "119988",
+        "119986",
+        "119985",
+        "119979",
+        "119972"
+      ],
+      "id_list_signature": "814:120020:83320:120020,120012,120001,119990,119989",
+      "body_preview_error": null,
+      "raw_body_snippet": null
+    },
+    {
+      "label": "page_2",
+      "request_url": "https://app.moobiz.pe/api/admin/drivers?limit=1000&page=2",
+      "query": {
+        "limit": 1000,
+        "page": 2
+      },
+      "http_status": 200,
+      "headers": {
+        "set-cookie": [
+          "PHPSESSID=h9rb9blep0nqpf9tktk47oiknd; path=/"
+        ]
+      },
+      "elapsed_ms": 3846,
+      "parse_error": null,
+      "api_ok": true,
+      "api_msg": "",
+      "api_total": 1814,
+      "items_count": 0,
+      "ids_extracted": 0,
+      "first_id": null,
+      "last_id": null,
+      "sample_10_ids": [],
+      "id_list_signature": "empty",
+      "body_preview_error": null,
+      "raw_body_snippet": null
+    },
+    {
+      "label": "page_3",
+      "request_url": "https://app.moobiz.pe/api/admin/drivers?limit=1000&page=3",
+      "query": {
+        "limit": 1000,
+        "page": 3
+      },
+      "http_status": 200,
+      "headers": {
+        "set-cookie": [
+          "PHPSESSID=usr8jn2odg6p03o93gvi0tqb6n; path=/"
+        ]
+      },
+      "elapsed_ms": 4149,
+      "parse_error": null,
+      "api_ok": true,
+      "api_msg": "",
+      "api_total": 1814,
+      "items_count": 0,
+      "ids_extracted": 0,
+      "first_id": null,
+      "last_id": null,
+      "sample_10_ids": [],
+      "id_list_signature": "empty",
+      "body_preview_error": null,
+      "raw_body_snippet": null
+    },
+    {
+      "label": "page_0",
+      "request_url": "https://app.moobiz.pe/api/admin/drivers?limit=1000&page=0",
+      "query": {
+        "limit": 1000,
+        "page": 0
+      },
+      "http_status": 200,
+      "headers": {
+        "set-cookie": [
+          "PHPSESSID=vgpgjmsiffbqe63i3k4qer696b; path=/"
+        ]
+      },
+      "elapsed_ms": 6288,
+      "parse_error": null,
+      "api_ok": true,
+      "api_msg": "",
+      "api_total": 1814,
+      "items_count": 1000,
+      "ids_extracted": 1000,
+      "first_id": "130619",
+      "last_id": "120035",
+      "sample_10_ids": [
+        "130619",
+        "130617",
+        "130616",
+        "130615",
+        "130609",
+        "130593",
+        "130592",
+        "130589",
+        "130588",
+        "130587"
+      ],
+      "id_list_signature": "1000:130619:120035:130619,130617,130616,130615,130609",
+      "body_preview_error": null,
+      "raw_body_snippet": null
+    },
+    {
+      "label": "p_2",
+      "request_url": "https://app.moobiz.pe/api/admin/drivers?limit=1000&p=2",
+      "query": {
+        "limit": 1000,
+        "p": 2
+      },
+      "http_status": 200,
+      "headers": {
+        "set-cookie": [
+          "PHPSESSID=6ti3r0ep4j2eil1canhpaq239t; path=/"
+        ]
+      },
+      "elapsed_ms": 6197,
+      "parse_error": null,
+      "api_ok": true,
+      "api_msg": "",
+      "api_total": 1814,
+      "items_count": 1000,
+      "ids_extracted": 1000,
+      "first_id": "130619",
+      "last_id": "120035",
+      "sample_10_ids": [
+        "130619",
+        "130617",
+        "130616",
+        "130615",
+        "130609",
+        "130593",
+        "130592",
+        "130589",
+        "130588",
+        "130587"
+      ],
+      "id_list_signature": "1000:130619:120035:130619,130617,130616,130615,130609",
+      "body_preview_error": null,
+      "raw_body_snippet": null
+    },
+    {
+      "label": "pagina_2",
+      "request_url": "https://app.moobiz.pe/api/admin/drivers?limit=1000&pagina=2",
+      "query": {
+        "limit": 1000,
+        "pagina": 2
+      },
+      "http_status": 200,
+      "headers": {
+        "set-cookie": [
+          "PHPSESSID=j9fi7nc5n21lkbph61j65hsqpa; path=/"
+        ]
+      },
+      "elapsed_ms": 7186,
+      "parse_error": null,
+      "api_ok": true,
+      "api_msg": "",
+      "api_total": 1814,
+      "items_count": 1000,
+      "ids_extracted": 1000,
+      "first_id": "130619",
+      "last_id": "120035",
+      "sample_10_ids": [
+        "130619",
+        "130617",
+        "130616",
+        "130615",
+        "130609",
+        "130593",
+        "130592",
+        "130589",
+        "130588",
+        "130587"
+      ],
+      "id_list_signature": "1000:130619:120035:130619,130617,130616,130615,130609",
+      "body_preview_error": null,
+      "raw_body_snippet": null
+    },
+    {
+      "label": "offset_1000_no_page",
+      "request_url": "https://app.moobiz.pe/api/admin/drivers?limit=1000&offset=1000",
+      "query": {
+        "limit": 1000,
+        "offset": 1000
+      },
+      "http_status": 200,
+      "headers": {
+        "set-cookie": [
+          "PHPSESSID=4j6gfq1p1g5e6vscv09re8sohg; path=/"
+        ]
+      },
+      "elapsed_ms": 5404,
+      "parse_error": null,
+      "api_ok": true,
+      "api_msg": "",
+      "api_total": 1814,
+      "items_count": 1000,
+      "ids_extracted": 1000,
+      "first_id": "130619",
+      "last_id": "120035",
+      "sample_10_ids": [
+        "130619",
+        "130617",
+        "130616",
+        "130615",
+        "130609",
+        "130593",
+        "130592",
+        "130589",
+        "130588",
+        "130587"
+      ],
+      "id_list_signature": "1000:130619:120035:130619,130617,130616,130615,130609",
+      "body_preview_error": null,
+      "raw_body_snippet": null
+    }
+  ]
+}

@@ -7,7 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "sync:history": "node scripts/sync_moobiz_history.js"
+    "sync:history": "node scripts/sync_moobiz_history.js",
+    "sync:history:pages": "node -r dotenv/config scripts/sync_moobiz_history.js --mode=pages_backfill --pages=20 --limit=1000",
+    "sync:drivers": "node scripts/sync_moobiz_drivers.js",
+    "probe:drivers-pagination": "node scripts/probe_moobiz_drivers_pagination.js"
   },
   "dependencies": {
     "@supabase/ssr": "^0.10.2",

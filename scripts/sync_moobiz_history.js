@@ -1,10 +1,15 @@
 /**
  * Sync incremental de historial de servicios Moobiz -> Supabase.
  *
- * Estrategia:
- * - Inicial: hasta 2000 registros recientes.
- * - Incremental: cursor por date_finalized con overlap de 48h.
- * - Integridad: upsert por PK id en moobiz_services_history.
+ * Modo normal (sin --mode=pages_backfill):
+ * - Cursor en sync_state: moobiz_services_history_last_finalized (ISO, date_finalized).
+ * - Sin cursor: carga inicial (date_to=ahora; date_from omitido en API hasta overlap en incremental).
+ * - Incremental: date_from en API = cursor − overlap_h; date_to = ahora (ISO).
+ * - Filtro local: date_finalized >= cursor guardado (mitad API vs checkpoint).
+ * - Tras upsert: se guarda el máximo date_finalizado de las filas procesadas.
+ * - MAX_PAGES por defecto 2; base URL app.moobiz.pe; log GET sin token; --id para debug.
+ *
+ * pages_backfill: sin cursor ni sync_state de historial.
  */
 const { randomUUID } = require("node:crypto");
 
@@ -13,20 +18,31 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MOOBIZ_EMAIL = process.env.MOOBIZ_EMAIL;
 const MOOBIZ_PASSWORD = process.env.MOOBIZ_PASSWORD;
 
+function trimTrailingSlashes(s) {
+  return String(s).replace(/\/+$/, "");
+}
+
+/** Host base como la UI (default https://app.moobiz.pe). */
+const MOOBIZ_API_BASE_URL = trimTrailingSlashes(
+  (process.env.MOOBIZ_API_BASE_URL && String(process.env.MOOBIZ_API_BASE_URL).trim()) ||
+    "https://app.moobiz.pe",
+);
+/** URL completa del listado admin/services (override legacy con MOOBIZ_SERVICES_URL si existe). */
 const MOOBIZ_SERVICES_URL =
   (process.env.MOOBIZ_SERVICES_URL && String(process.env.MOOBIZ_SERVICES_URL).trim()) ||
-  "https://app.moobiz.pe/api/admin/services";
-const ADMIN_LOGIN_URL = "https://app.moobiz.pe/api/admin/login/login";
+  `${MOOBIZ_API_BASE_URL}/api/admin/services`;
+const ADMIN_LOGIN_URL = `${MOOBIZ_API_BASE_URL}/api/admin/login/login`;
+const MOOBIZ_WEB_ORIGIN = MOOBIZ_API_BASE_URL;
 const MOOBIZ_TOKEN_KEY = "moobiz_token";
 const HISTORY_CURSOR_KEY = "moobiz_services_history_last_finalized";
 
-const PAGE_SIZE = Number.parseInt(process.env.MOOBIZ_HISTORY_PAGE_SIZE || "", 10) || 500;
-const MAX_RECORDS = Number.parseInt(process.env.MOOBIZ_HISTORY_MAX_RECORDS || "", 10) || 5000;
-const INITIAL_LIMIT = MAX_RECORDS;
-const MAX_PAGES = Number.parseInt(process.env.MOOBIZ_HISTORY_MAX_PAGES || "", 10) || 5;
+const PAGE_SIZE_DEFAULT = Number.parseInt(process.env.MOOBIZ_HISTORY_PAGE_SIZE || "", 10) || 1000;
+const MAX_RECORDS_DEFAULT =
+  Number.parseInt(process.env.MOOBIZ_HISTORY_MAX_RECORDS || "", 10) || 5000;
+const MAX_PAGES_DEFAULT = Number.parseInt(process.env.MOOBIZ_HISTORY_MAX_PAGES || "", 10) || 2;
 const OVERLAP_HOURS = 24;
 const SUPABASE_BATCH_SIZE = 200;
-const DELAY_MS = 300;
+const DELAY_MS_DEFAULT = Number.parseInt(process.env.MOOBIZ_HISTORY_DELAY_MS || "", 10) || 200;
 
 const CHROME_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -45,8 +61,18 @@ function parseCliArgs(argv) {
 }
 
 const CLI_ARGS = parseCliArgs(process.argv.slice(2));
+const RUN_MODE = String(CLI_ARGS.mode || "").trim().toLowerCase() || "normal";
+const PAGES_BACKFILL_MODE = RUN_MODE === "pages_backfill";
 const DATE_FROM_OVERRIDE = String(CLI_ARGS.date_from || "").trim();
 const DATE_TO_OVERRIDE = String(CLI_ARGS.date_to || "").trim();
+const SERVICE_ID_DEBUG = String(CLI_ARGS.id || "").trim();
+const MANUAL_RANGE_MODE = Boolean(DATE_FROM_OVERRIDE || DATE_TO_OVERRIDE);
+const PAGE_SIZE = Number.parseInt(CLI_ARGS.page_size || "", 10) || PAGE_SIZE_DEFAULT;
+const MAX_RECORDS = Number.parseInt(CLI_ARGS.max_records || "", 10) || MAX_RECORDS_DEFAULT;
+const MAX_PAGES = Number.parseInt(CLI_ARGS.max_pages || "", 10) || MAX_PAGES_DEFAULT;
+const DELAY_MS = Number.parseInt(CLI_ARGS.delay_ms || "", 10) || DELAY_MS_DEFAULT;
+const BACKFILL_PAGES = Number.parseInt(CLI_ARGS.pages || "", 10) || 20;
+const BACKFILL_LIMIT = Number.parseInt(CLI_ARGS.limit || "", 10) || 1000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -131,8 +157,8 @@ async function moobizAdminLogin() {
     headers: {
       "Content-Type": "application/json",
       Accept: "application/json",
-      Origin: "https://app.moobiz.pe",
-      Referer: "https://app.moobiz.pe/",
+      Origin: MOOBIZ_WEB_ORIGIN,
+      Referer: `${MOOBIZ_WEB_ORIGIN}/`,
       "User-Agent": CHROME_UA,
     },
     body: JSON.stringify(body),
@@ -179,10 +205,37 @@ async function ensureMoobizBearer() {
   return moobizBearer;
 }
 
+/** Modo one-time backfill: no lee ni escribe sync_state. */
+async function ensureMoobizBearerNoSyncState() {
+  if (moobizBearer && moobizBearer.trim()) return moobizBearer;
+  const fresh = await moobizAdminLogin();
+  moobizBearer = fresh;
+  return moobizBearer;
+}
+
 function toIsoDate(value) {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return null;
   return d.toISOString();
+}
+
+/** Fecha calendario local YYYY-MM-DD (como envía la UI en date_from / date_to). */
+function formatYyyyMmDdFromDate(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/** Normaliza CLI/ISO a YYYY-MM-DD para el API. */
+function toApiYyyyMmDd(value) {
+  const s = String(value ?? "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const iso = toIsoDate(s);
+  if (iso) return iso.slice(0, 10);
+  const d = new Date(s);
+  if (!Number.isNaN(d.getTime())) return formatYyyyMmDdFromDate(d);
+  return s.length >= 10 ? s.slice(0, 10) : s;
 }
 
 function finalizedMsFromRaw(raw) {
@@ -238,6 +291,20 @@ function normalizeServiceRow(raw) {
   };
 }
 
+/** Solo columnas persistibles en moobiz_services_history (sin metadatos internos). */
+function stripHistoryRowForUpsert(row) {
+  return {
+    id: row.id,
+    service_id: row.service_id,
+    date_finalized: row.date_finalized,
+    date_scheduled: row.date_scheduled,
+    status: row.status,
+    user_name: row.user_name,
+    amount: row.amount,
+    raw_data: row.raw_data,
+  };
+}
+
 function extractItems(payload) {
   if (Array.isArray(payload)) return payload;
   if (payload && Array.isArray(payload.items)) return payload.items;
@@ -246,22 +313,36 @@ function extractItems(payload) {
   return [];
 }
 
-async function fetchServicesPage({ page, dateFrom, dateTo }) {
-  await ensureMoobizBearer();
+async function fetchServicesPage({
+  page,
+  dateFrom,
+  dateTo,
+  limit,
+  skipSyncStateToken,
+  serviceId,
+}) {
+  if (skipSyncStateToken) {
+    await ensureMoobizBearerNoSyncState();
+  } else {
+    await ensureMoobizBearer();
+  }
 
   const p = new URLSearchParams();
-  p.set("limit", String(PAGE_SIZE));
+  p.set("limit", String(limit ?? PAGE_SIZE));
   p.set("page", String(page));
   if (dateFrom) p.set("date_from", dateFrom);
   if (dateTo) p.set("date_to", dateTo);
+  if (serviceId) p.set("id", String(serviceId));
 
   const url = `${MOOBIZ_SERVICES_URL}?${p.toString()}`;
+  console.log(`[history-sync] GET (sin token): ${url}`);
+
   const buildHeaders = () => ({
     Authorization: `Bearer ${moobizBearer}`,
     "X-Auth-Token": moobizBearer,
     Accept: "application/json",
-    Origin: "https://app.moobiz.pe",
-    Referer: "https://app.moobiz.pe/",
+    Origin: MOOBIZ_WEB_ORIGIN,
+    Referer: `${MOOBIZ_WEB_ORIGIN}/`,
     "User-Agent": CHROME_UA,
   });
   const doFetch = () => fetch(url, { method: "GET", headers: buildHeaders(), cache: "no-store" });
@@ -270,7 +351,9 @@ async function fetchServicesPage({ page, dateFrom, dateTo }) {
   if (res.status === 401 || res.status === 403) {
     console.warn(`[history-sync] Services HTTP ${res.status} (page ${page}) — renovando token…`);
     const fresh = await moobizAdminLogin();
-    await writeSyncStateValue(MOOBIZ_TOKEN_KEY, fresh);
+    if (!skipSyncStateToken) {
+      await writeSyncStateValue(MOOBIZ_TOKEN_KEY, fresh);
+    }
     moobizBearer = fresh;
     res = await doFetch();
     if (res.status === 401 || res.status === 403) {
@@ -297,7 +380,7 @@ async function upsertHistoryRows(rows) {
   for (let i = 0; i < rows.length; i += SUPABASE_BATCH_SIZE) {
     const batch = rows.slice(i, i + SUPABASE_BATCH_SIZE);
     const body = await fetchJsonOrThrow(
-      `${SUPABASE_URL}/rest/v1/moobiz_services_history`,
+      `${SUPABASE_URL}/rest/v1/moobiz_services_history?on_conflict=id`,
       {
         method: "POST",
         headers: supabaseHeaders({
@@ -358,6 +441,8 @@ async function sync() {
   let pagesQueried = 0;
   let errorMessage = null;
   let cursorAfter = "";
+  let cursorInForMonitor = "";
+  let cursorWrittenForMonitor = "";
 
   try {
     if (!SUPABASE_URL || !String(SUPABASE_URL).trim()) {
@@ -369,53 +454,303 @@ async function sync() {
 
     moobizBearer = null;
 
-    const cursorSaved = await readSyncStateValue(HISTORY_CURSOR_KEY);
-    const nowIso = DATE_TO_OVERRIDE || new Date().toISOString();
-    let dateFrom = "";
-    let mode = "initial";
-
-    if (DATE_FROM_OVERRIDE) {
-      dateFrom = DATE_FROM_OVERRIDE;
-      mode = "manual_range";
-    } else if (cursorSaved) {
-      const cursorDate = new Date(cursorSaved);
-      if (!Number.isNaN(cursorDate.getTime())) {
-        cursorDate.setHours(cursorDate.getHours() - OVERLAP_HOURS);
-        dateFrom = cursorDate.toISOString();
-        mode = "incremental";
-      }
+    if (RUN_MODE !== "normal" && RUN_MODE !== "pages_backfill") {
+      throw new Error(`Modo no soportado: ${RUN_MODE}. Usa --mode=pages_backfill o sin --mode.`);
     }
 
-    console.log(`[history-sync] modo=${mode} cursor=${cursorSaved || "none"} overlap_h=${OVERLAP_HOURS}`);
-    if (dateFrom) {
-      console.log(`[history-sync] Iniciando barrido de seguridad desde ${dateFrom} hasta ${nowIso}`);
-    } else {
+    if (PAGES_BACKFILL_MODE) {
+      const nowIso = new Date().toISOString();
+      const mode = "pages_backfill";
+      console.log(`[history-sync] modo=${mode} (one-time), sin cursor/sync_state`);
       console.log(
-        `[history-sync] carga inicial: máximo ${INITIAL_LIMIT} registros (page_size=${PAGE_SIZE}).`,
+        `[history-sync] backfill por páginas: PAGE_SIZE=${BACKFILL_LIMIT}, MAX_PAGES=${BACKFILL_PAGES}, delay_ms=${DELAY_MS}`,
+      );
+
+      let totalCollected = 0;
+      let totalUpserted = 0;
+      let seenAnyPage = false;
+
+      for (let page = 1; page <= BACKFILL_PAGES; page += 1) {
+        const items = await fetchServicesPage({
+          page,
+          limit: BACKFILL_LIMIT,
+          skipSyncStateToken: true,
+        });
+        pagesQueried = page;
+
+        if (items.length === 0) {
+          reasonForStop = "empty_page_response";
+          break;
+        }
+        seenAnyPage = true;
+
+        const pageRows = [];
+        const seenPage = new Set();
+        for (const raw of items) {
+          const normalized = normalizeServiceRow(raw);
+          if (!normalized) continue;
+          if (seenPage.has(normalized.id)) continue;
+          seenPage.add(normalized.id);
+          pageRows.push(normalized);
+        }
+
+        const upsertStats = await upsertHistoryRows(pageRows);
+        totalCollected += pageRows.length;
+        totalUpserted += upsertStats.processed;
+        recordsReturnedByUpsert =
+          recordsReturnedByUpsert === null || upsertStats.countedByApi === null
+            ? null
+            : recordsReturnedByUpsert + upsertStats.countedByApi;
+
+        console.log(
+          `[history-sync] Página ${page}/${BACKFILL_PAGES}: +${pageRows.length} registros (Total: ${totalCollected})`,
+        );
+
+        if (items.length < BACKFILL_LIMIT) {
+          reasonForStop = "partial_batch_last_page";
+          break;
+        }
+        await sleep(DELAY_MS);
+      }
+
+      recordsProcessed = totalUpserted;
+      registrosNuevosEstimados = null;
+      registrosActualizadosEstimados = null;
+      reasonForStop = reasonForStop || (seenAnyPage ? "max_pages_safety" : "empty_page_response");
+      cursorAfter = "";
+
+      console.log(
+        JSON.stringify({
+          status,
+          mode,
+          registros_procesados: recordsProcessed,
+          filas_devueltas_upsert: recordsReturnedByUpsert,
+          pages_queried: pagesQueried,
+          date_from: null,
+          date_to: nowIso,
+          cursor_after: null,
+        }),
+      );
+      console.log("[history-sync] ✅ Backfill por páginas completado");
+      return;
+    }
+
+    if (SERVICE_ID_DEBUG) {
+      if (!DATE_FROM_OVERRIDE || !DATE_TO_OVERRIDE) {
+        throw new Error(
+          "Con --id debes indicar --date_from=YYYY-MM-DD y --date_to=YYYY-MM-DD (igual que en la UI).",
+        );
+      }
+      const mode = "single_id_debug";
+      const dateFromYmd = toApiYyyyMmDd(DATE_FROM_OVERRIDE);
+      const dateToYmd = toApiYyyyMmDd(DATE_TO_OVERRIDE);
+      console.log(
+        `[history-sync] modo=${mode} id=${SERVICE_ID_DEBUG} date_from=${dateFromYmd} date_to=${dateToYmd} base=${MOOBIZ_API_BASE_URL}`,
+      );
+
+      const items = await fetchServicesPage({
+        page: 1,
+        dateFrom: dateFromYmd,
+        dateTo: dateToYmd,
+        limit: PAGE_SIZE,
+        skipSyncStateToken: false,
+        serviceId: SERVICE_ID_DEBUG,
+      });
+      pagesQueried = 1;
+      console.log(`[history-sync] ${mode}: API devolvió ${items.length} ítem(s).`);
+
+      const pageRows = [];
+      const seenPage = new Set();
+      for (const raw of items) {
+        const normalized = normalizeServiceRow(raw);
+        if (!normalized) continue;
+        if (seenPage.has(normalized.id)) continue;
+        seenPage.add(normalized.id);
+        pageRows.push(stripHistoryRowForUpsert(normalized));
+      }
+
+      const upsertStats = await upsertHistoryRows(pageRows);
+      recordsProcessed = upsertStats.processed;
+      recordsReturnedByUpsert = upsertStats.countedByApi;
+      registrosNuevosEstimados = null;
+      registrosActualizadosEstimados = null;
+      reasonForStop = `single_id_debug;api_items=${items.length}`;
+      cursorAfter = "";
+
+      console.log(
+        JSON.stringify({
+          status,
+          mode,
+          id: SERVICE_ID_DEBUG,
+          api_items: items.length,
+          registros_procesados: recordsProcessed,
+          filas_devueltas_upsert: recordsReturnedByUpsert,
+          date_from: dateFromYmd,
+          date_to: dateToYmd,
+        }),
+      );
+      console.log("[history-sync] ✅ Modo --id completado");
+      return;
+    }
+
+    if (MANUAL_RANGE_MODE && (!DATE_FROM_OVERRIDE || !DATE_TO_OVERRIDE)) {
+      throw new Error(
+        "Modo manual inválido: cuando uses argumentos debes enviar ambos --date_from y --date_to.",
       );
     }
+
+    if (!MANUAL_RANGE_MODE) {
+      const cursorSaved = (await readSyncStateValue(HISTORY_CURSOR_KEY)).trim();
+      const nowIso = new Date().toISOString();
+      let dateFrom = "";
+      let mode = "initial";
+
+      if (cursorSaved) {
+        const cursorDate = new Date(cursorSaved);
+        if (!Number.isNaN(cursorDate.getTime())) {
+          cursorDate.setHours(cursorDate.getHours() - OVERLAP_HOURS);
+          dateFrom = cursorDate.toISOString();
+          mode = "incremental";
+        }
+      }
+
+      const cursorMsForFilter = cursorSaved ? Date.parse(cursorSaved) : NaN;
+
+      cursorInForMonitor = cursorSaved || "(none)";
+      cursorWrittenForMonitor = "";
+
+      console.log(
+        `[history-sync] modo=${mode} cursor=${cursorSaved || "none"} overlap_h=${OVERLAP_HOURS} PAGE_SIZE=${PAGE_SIZE} MAX_PAGES=${MAX_PAGES} delay_ms=${DELAY_MS} base=${MOOBIZ_API_BASE_URL}`,
+      );
+      if (dateFrom) {
+        console.log(`[history-sync] API date_from=${dateFrom} date_to=${nowIso} (ISO)`);
+      } else {
+        console.log(`[history-sync] API date_to=${nowIso} (ISO), sin date_from (carga inicial)`);
+      }
+
+      const collected = [];
+      const seen = new Set();
+
+      for (let page = 1; page <= MAX_PAGES; page += 1) {
+        const items = await fetchServicesPage({
+          page,
+          dateFrom: dateFrom || undefined,
+          dateTo: nowIso,
+          limit: PAGE_SIZE,
+          skipSyncStateToken: false,
+        });
+        pagesQueried = page;
+
+        let addedThisPage = 0;
+        for (const raw of items) {
+          if (!Number.isNaN(cursorMsForFilter)) {
+            const fms = finalizedMsFromRaw(raw);
+            if (Number.isNaN(fms) || fms < cursorMsForFilter) continue;
+          }
+
+          const normalized = normalizeServiceRow(raw);
+          if (!normalized) continue;
+          if (seen.has(normalized.id)) continue;
+          seen.add(normalized.id);
+          collected.push(normalized);
+          addedThisPage += 1;
+        }
+
+        console.log(
+          `[history-sync] Página ${page}/${MAX_PAGES}: API_items=${items.length} +${addedThisPage} tras filtro date_finalized>=cursor (acum=${collected.length})`,
+        );
+
+        if (page < MAX_PAGES) await sleep(DELAY_MS);
+      }
+
+      console.log(`[history-sync] registros normalizados tras filtro: ${collected.length}`);
+
+      if (collected.length === 0) {
+        registrosActualizadosEstimados = 0;
+        registrosNuevosEstimados = 0;
+      } else {
+        const existedBefore = await countExistingHistoryIds(collected.map((r) => r.id));
+        registrosActualizadosEstimados = existedBefore;
+        registrosNuevosEstimados = Math.max(0, collected.length - existedBefore);
+      }
+
+      const rowsForUpsert = collected.map(stripHistoryRowForUpsert);
+      const upsertStats = await upsertHistoryRows(rowsForUpsert);
+      recordsProcessed = upsertStats.processed;
+      recordsReturnedByUpsert = upsertStats.countedByApi;
+
+      if (recordsReturnedByUpsert === null) {
+        console.log(
+          "[history-sync] Supabase no devolvió conteo confiable de filas devueltas por upsert; métricas sync_monitor usan estimación previa al upsert.",
+        );
+      } else {
+        console.log(
+          `[history-sync] filas devueltas por upsert (nuevas o actualizadas, no separables): ${recordsReturnedByUpsert}`,
+        );
+      }
+
+      cursorAfter = computeCursorDate(collected, cursorSaved || nowIso) || nowIso;
+      await writeSyncStateValue(HISTORY_CURSOR_KEY, cursorAfter);
+      cursorWrittenForMonitor = cursorAfter;
+      reasonForStop = collected.length === 0 ? "empty_after_local_filter" : "processed_ok";
+
+      console.log(
+        JSON.stringify({
+          status,
+          mode,
+          registros_procesados: recordsProcessed,
+          filas_devueltas_upsert: recordsReturnedByUpsert,
+          registros_nuevos_estimados: registrosNuevosEstimados,
+          registros_actualizados_estimados: registrosActualizadosEstimados,
+          pages_queried: pagesQueried,
+          date_from: dateFrom || null,
+          date_to: nowIso,
+          cursor_read: cursorSaved || null,
+          cursor_after: cursorAfter,
+        }),
+      );
+      console.log("[history-sync] ✅ Sync completado");
+      return;
+    }
+
+    const cursorSaved = await readSyncStateValue(HISTORY_CURSOR_KEY);
+    const dateFromYmdManual = toApiYyyyMmDd(DATE_FROM_OVERRIDE);
+    const dateToYmdManual = toApiYyyyMmDd(DATE_TO_OVERRIDE);
+    const nowIso = new Date().toISOString();
+    const mode = "manual_range";
+
+    console.log(`[history-sync] modo=${mode} cursor_db=${cursorSaved || "none"} overlap_h=${OVERLAP_HOURS}`);
     console.log(
-      `[history-sync] límites de seguridad: MAX_RECORDS=${MAX_RECORDS}, MAX_PAGES=${MAX_PAGES}, overlap_h=${OVERLAP_HOURS}`,
+      `[history-sync] Iniciando barrido manual date_from=${dateFromYmdManual} date_to=${dateToYmdManual} base=${MOOBIZ_API_BASE_URL}`,
+    );
+
+    const effectivePageSize = PAGE_SIZE;
+    const effectiveMaxPages = MAX_PAGES;
+    const effectiveMaxRecords = MAX_RECORDS;
+    console.log(
+      `[history-sync] límites de seguridad: PAGE_SIZE=${effectivePageSize}, MAX_RECORDS=${effectiveMaxRecords}, MAX_PAGES=${effectiveMaxPages}, overlap_h=${OVERLAP_HOURS}, delay_ms=${DELAY_MS}`,
     );
 
     const collected = [];
     const seen = new Set();
     let page = 1;
     let continueLoop = true;
-    const dateFromMs = dateFrom ? Date.parse(dateFrom) : NaN;
+    const dateFromMs = dateFromYmdManual ? Date.parse(dateFromYmdManual) : NaN;
 
     while (continueLoop) {
-      if (page > MAX_PAGES) {
+      if (page > effectiveMaxPages) {
         console.warn(
-          `[history-sync] corte de seguridad: se alcanzaron ${MAX_PAGES} páginas (${MAX_PAGES * PAGE_SIZE} registros teóricos) sin cerrar rango.`,
+          `[history-sync] corte de seguridad: se alcanzaron ${effectiveMaxPages} páginas (${effectiveMaxPages * effectivePageSize} registros teóricos) sin cerrar rango.`,
         );
         reasonForStop = "max_pages_safety";
         break;
       }
       const items = await fetchServicesPage({
         page,
-        dateFrom: dateFrom || undefined,
-        dateTo: nowIso,
+        dateFrom: dateFromYmdManual || undefined,
+        dateTo: dateToYmdManual,
+        limit: effectivePageSize,
+        skipSyncStateToken: false,
       });
       pagesQueried = page;
       if (items.length === 0) {
@@ -437,34 +772,25 @@ async function sync() {
         seen.add(normalized.id);
         collected.push(normalized);
         addedThisPage += 1;
-        if (mode === "initial" && collected.length >= INITIAL_LIMIT) {
-          continueLoop = false;
-          break;
-        }
-        if (collected.length >= MAX_RECORDS) {
+        if (collected.length >= effectiveMaxRecords) {
           continueLoop = false;
           break;
         }
       }
-      console.log(`[history-sync] Página ${page}: +${addedThisPage} registros (Total: ${collected.length})`);
+      console.log(
+        `[history-sync] Página ${page}/${effectiveMaxPages}: +${addedThisPage} registros (Total acumulado: ${collected.length})`,
+      );
 
       if (!continueLoop) {
-        reasonForStop =
-          mode === "initial" && collected.length >= INITIAL_LIMIT
-            ? "initial_load_limit"
-            : "max_records_safety";
+        reasonForStop = "max_records_safety";
         break;
       }
-      if (items.length < PAGE_SIZE) {
+      if (items.length < effectivePageSize) {
         reasonForStop = "partial_batch_last_page";
         break;
       }
-      if (mode === "initial" && collected.length >= INITIAL_LIMIT) {
-        reasonForStop = "initial_load_limit";
-        break;
-      }
-      if (collected.length >= MAX_RECORDS) {
-        console.warn(`[history-sync] corte de seguridad: MAX_RECORDS=${MAX_RECORDS} alcanzado.`);
+      if (collected.length >= effectiveMaxRecords) {
+        console.warn(`[history-sync] corte de seguridad: MAX_RECORDS=${effectiveMaxRecords} alcanzado.`);
         reasonForStop = "max_records_safety";
         break;
       }
@@ -487,7 +813,7 @@ async function sync() {
       registrosActualizadosEstimados = existedBefore;
       registrosNuevosEstimados = Math.max(0, collected.length - existedBefore);
     }
-    const upsertStats = await upsertHistoryRows(collected);
+    const upsertStats = await upsertHistoryRows(collected.map(stripHistoryRowForUpsert));
     recordsProcessed = upsertStats.processed;
     recordsReturnedByUpsert = upsertStats.countedByApi;
     if (recordsReturnedByUpsert === null) {
@@ -501,7 +827,9 @@ async function sync() {
     }
 
     cursorAfter = computeCursorDate(collected, cursorSaved || nowIso) || nowIso;
-    await writeSyncStateValue(HISTORY_CURSOR_KEY, cursorAfter);
+    console.log(
+      `[history-sync] modo ${mode}: no se actualiza cursor ${HISTORY_CURSOR_KEY} (cursor calculado=${cursorAfter}).`,
+    );
 
     console.log(
       JSON.stringify({
@@ -512,8 +840,9 @@ async function sync() {
         registros_nuevos_estimados: registrosNuevosEstimados,
         registros_actualizados_estimados: registrosActualizadosEstimados,
         pages_queried: pagesQueried,
-        date_from: dateFrom || null,
-        date_to: nowIso,
+        date_from: dateFromYmdManual,
+        date_to: dateToYmdManual,
+        date_to_iso: nowIso,
         cursor_after: cursorAfter,
       }),
     );
@@ -526,13 +855,20 @@ async function sync() {
     try {
       const reasonResolved =
         reasonForStop ?? (status === "error" ? "sync_exception" : "unknown_stop");
+      let reasonWithMode =
+        PAGES_BACKFILL_MODE
+          ? `${reasonResolved};mode=pages_backfill;pages=${BACKFILL_PAGES};limit=${BACKFILL_LIMIT}`
+          : reasonResolved;
+      if (cursorInForMonitor) {
+        reasonWithMode = `${reasonWithMode};cursor_in=${cursorInForMonitor};cursor_saved=${cursorWrittenForMonitor || "n/a"}`;
+      }
       const monitorPayload = {
         status,
         records_procesados: recordsProcessed,
         records_inserted: recordsProcessed,
         registros_nuevos_estimados: registrosNuevosEstimados,
         registros_actualizados_estimados: registrosActualizadosEstimados,
-        reason_for_stop: reasonResolved,
+        reason_for_stop: reasonWithMode,
         pages_queried: pagesQueried,
         last_id: "moobiz_services_history",
         error_message: errorMessage,

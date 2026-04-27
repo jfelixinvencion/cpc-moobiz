@@ -98,6 +98,22 @@ type MoobizHistoryRow = {
   raw_data?: unknown;
 };
 
+type MoobizDriverRow = {
+  estado?: string | null;
+  sucursal?: string | null;
+  distrito_vive?: string | null;
+  turno?: string | null;
+  id_conductor?: string | null;
+  nombre_conductor?: string | null;
+  telefono?: string | null;
+  calificacion?: string | null;
+  gps?: string | null;
+  motivo_deshabilitado?: string | null;
+  tp_vehiculo?: string | null;
+  permiso_placa?: string | null;
+  categoria_brevete?: string | null;
+};
+
 type ProductividadSeriesRow = { us_name: string; count: number };
 type ProductividadApiResponse = {
   series?: ProductividadSeriesRow[];
@@ -186,9 +202,12 @@ const PAGE_SIZE = 50;
 
 /** Query `datosSub` y valores de sub-pestañas dentro de Datos. */
 const DATOS_SUB_VIAJES_ACTIVOS = "viajes-activos" as const;
+const DATOS_SUB_CONDUCTORES = "conductores" as const;
 const DATOS_SUB_REGISTRO_ACTIVIDADES = "registro-actividades" as const;
 const LOGS_CLEAN_PAGE_SIZE = 50;
 const HISTORY_PAGE_SIZE = 50;
+const DRIVERS_PAGE_SIZE = 50;
+const DRIVERS_FETCH_BATCH_SIZE = 1000;
 const PIE_COLORS = [
   "#00e676",
   "#1e88e5",
@@ -613,6 +632,25 @@ function DashboardContent() {
   const [logsCleanLoading, setLogsCleanLoading] = useState(false);
   const [logsCleanError, setLogsCleanError] = useState<string | null>(null);
   const [logsCleanColumnKeys, setLogsCleanColumnKeys] = useState<string[]>([]);
+  const [driversPage, setDriversPage] = useState(1);
+  const [driversRows, setDriversRows] = useState<MoobizDriverRow[]>([]);
+  const [driversTotal, setDriversTotal] = useState(0);
+  const [driversLoading, setDriversLoading] = useState(false);
+  const [driversError, setDriversError] = useState<string | null>(null);
+  const [driversEstadoFilter, setDriversEstadoFilter] = useState("__all__");
+  const [driversSucursalFilter, setDriversSucursalFilter] = useState("__all__");
+  const [driversGpsFilter, setDriversGpsFilter] = useState("__all__");
+  const [driversIdFilter, setDriversIdFilter] = useState("");
+  const [conductoresSyncPhase, setConductoresSyncPhase] = useState<
+    | "idle"
+    | "descargando"
+    | "reemplazando_tabla"
+    | "finalizado"
+    | "finalizado_con_advertencias"
+    | "error"
+  >("idle");
+  const [conductoresSyncDetail, setConductoresSyncDetail] = useState<string | null>(null);
+  const [conductoresSyncing, setConductoresSyncing] = useState(false);
   const [historyUserSearch, setHistoryUserSearch] = useState("");
   const [historyDateFrom, setHistoryDateFrom] = useState("");
   const [historyDateTo, setHistoryDateTo] = useState("");
@@ -722,7 +760,8 @@ function DashboardContent() {
   );
 
   const datosSubAllowed = useMemo(
-    () => new Set<string>([DATOS_SUB_VIAJES_ACTIVOS, DATOS_SUB_REGISTRO_ACTIVIDADES]),
+    () =>
+      new Set<string>([DATOS_SUB_VIAJES_ACTIVOS, DATOS_SUB_CONDUCTORES, DATOS_SUB_REGISTRO_ACTIVIDADES]),
     [],
   );
 
@@ -731,6 +770,7 @@ function DashboardContent() {
       if (!datosSubAllowed.has(value)) return;
       setDatosSubTab(value);
       setDatosSubInUrl(value);
+      if (value === DATOS_SUB_CONDUCTORES) setDriversPage(1);
     },
     [datosSubAllowed, setDatosSubInUrl],
   );
@@ -738,8 +778,13 @@ function DashboardContent() {
   useEffect(() => {
     if (mainTab !== "datos") return;
     const raw = searchParams.get("datosSub");
-    if (raw === DATOS_SUB_VIAJES_ACTIVOS || raw === DATOS_SUB_REGISTRO_ACTIVIDADES) {
+    if (
+      raw === DATOS_SUB_VIAJES_ACTIVOS ||
+      raw === DATOS_SUB_CONDUCTORES ||
+      raw === DATOS_SUB_REGISTRO_ACTIVIDADES
+    ) {
       setDatosSubTab(raw);
+      if (raw === DATOS_SUB_CONDUCTORES) setDriversPage(1);
       return;
     }
     setDatosSubTab(DATOS_SUB_VIAJES_ACTIVOS);
@@ -826,6 +871,52 @@ function DashboardContent() {
       setLogsCleanLoading(false);
     }
   }, [logsCleanPage, logsCleanSearchDebounced, logsCleanDateFrom, logsCleanDateTo]);
+
+  const loadConductores = useCallback(async () => {
+    setDriversLoading(true);
+    setDriversError(null);
+    try {
+      let page = 1;
+      let totalFromApi = 0;
+      const allRows: MoobizDriverRow[] = [];
+
+      while (true) {
+        const p = new URLSearchParams();
+        p.set("page", String(page));
+        p.set("pageSize", String(DRIVERS_FETCH_BATCH_SIZE));
+        const res = await fetch(`/api/moobiz-drivers?${p.toString()}`, { cache: "no-store" });
+        const body = (await res.json()) as {
+          data?: MoobizDriverRow[];
+          total?: number;
+          error?: string;
+        };
+        if (!res.ok) throw new Error(body?.error || "No se pudieron cargar los conductores.");
+
+        const batch = Array.isArray(body.data) ? body.data : [];
+        const declaredTotal = typeof body.total === "number" ? body.total : 0;
+        allRows.push(...batch);
+        totalFromApi = Math.max(totalFromApi, declaredTotal);
+
+        if (batch.length < DRIVERS_FETCH_BATCH_SIZE) break;
+        if (totalFromApi > 0 && allRows.length >= totalFromApi) break;
+        page += 1;
+      }
+
+      setDriversRows(allRows);
+      setDriversTotal(totalFromApi > 0 ? totalFromApi : allRows.length);
+    } catch (e) {
+      setDriversError(e instanceof Error ? e.message : String(e));
+      setDriversRows([]);
+      setDriversTotal(0);
+    } finally {
+      setDriversLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (mainTab !== "datos" || datosSubTab !== DATOS_SUB_CONDUCTORES) return;
+    void loadConductores();
+  }, [mainTab, datosSubTab, loadConductores]);
 
   useEffect(() => {
     if (mainTab !== "datos" || datosSubTab !== DATOS_SUB_REGISTRO_ACTIVIDADES) return;
@@ -946,9 +1037,62 @@ function DashboardContent() {
     return filteredViajes.slice(start, start + PAGE_SIZE);
   }, [currentPage, filteredViajes]);
 
+  const driversEstadoOptions = useMemo(
+    () =>
+      Array.from(new Set(driversRows.map((row) => asText(row.estado).trim()).filter(Boolean))).sort(
+        (a, b) => a.localeCompare(b, "es"),
+      ),
+    [driversRows],
+  );
+  const driversSucursalOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(driversRows.map((row) => asText(row.sucursal).trim()).filter(Boolean)),
+      ).sort((a, b) => a.localeCompare(b, "es")),
+    [driversRows],
+  );
+  const driversGpsOptions = useMemo(
+    () =>
+      Array.from(new Set(driversRows.map((row) => asText(row.gps).trim()).filter(Boolean))).sort(
+        (a, b) => a.localeCompare(b, "es"),
+      ),
+    [driversRows],
+  );
+  const filteredDriversRows = useMemo(() => {
+    const idQuery = driversIdFilter.trim().toLowerCase();
+    return driversRows.filter((row) => {
+      const estado = asText(row.estado).trim();
+      const sucursal = asText(row.sucursal).trim();
+      const gps = asText(row.gps).trim();
+      const idConductor = asText(row.id_conductor).trim();
+
+      const estadoOk = driversEstadoFilter === "__all__" || estado === driversEstadoFilter;
+      const sucursalOk = driversSucursalFilter === "__all__" || sucursal === driversSucursalFilter;
+      const gpsOk = driversGpsFilter === "__all__" || gps === driversGpsFilter;
+      const idOk = !idQuery || idConductor.toLowerCase().includes(idQuery);
+      return estadoOk && sucursalOk && gpsOk && idOk;
+    });
+  }, [
+    driversRows,
+    driversEstadoFilter,
+    driversSucursalFilter,
+    driversGpsFilter,
+    driversIdFilter,
+  ]);
+  const driversFilteredTotal = filteredDriversRows.length;
+  const driversTotalPages = Math.max(1, Math.ceil(driversFilteredTotal / DRIVERS_PAGE_SIZE));
+  const driversCurrentPage = Math.min(driversPage, driversTotalPages);
+  const driversPageRows = useMemo(() => {
+    const start = (driversCurrentPage - 1) * DRIVERS_PAGE_SIZE;
+    return filteredDriversRows.slice(start, start + DRIVERS_PAGE_SIZE);
+  }, [driversCurrentPage, filteredDriversRows]);
+
   useEffect(() => {
     setPage(1);
   }, [empresaFilter, estadoFilter, conductorFilter, search]);
+  useEffect(() => {
+    setDriversPage(1);
+  }, [driversEstadoFilter, driversSucursalFilter, driversGpsFilter, driversIdFilter]);
 
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const pageIds = pageItems.map((v) => asText(v.id)).filter(Boolean);
@@ -1017,6 +1161,71 @@ function DashboardContent() {
       setError(err instanceof Error ? err.message : "Error inesperado al actualizar.");
     } finally {
       setSyncing(false);
+    }
+  };
+
+  const handleSyncConductores = async () => {
+    setConductoresSyncing(true);
+    setConductoresSyncPhase("descargando");
+    setConductoresSyncDetail("Descargando todos los conductores desde Moobiz…");
+    try {
+      const res = await fetch("/api/moobiz-drivers/sync", {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        fetched?: number;
+        upserted?: number;
+        finalDbCount?: number;
+        uniqueAfterDedupe?: number;
+        apiTotalDeclared?: number | null;
+        countMismatchWithApiTotal?: boolean;
+        validationErrors?: string[];
+      };
+
+      if (!res.ok && res.status !== 422) {
+        throw new Error(data?.error || "Fallo al sincronizar conductores.");
+      }
+
+      setConductoresSyncPhase("reemplazando_tabla");
+      setConductoresSyncDetail("Reemplazando tabla moobiz_drivers (transacción en base de datos)…");
+      await new Promise((r) => window.setTimeout(r, 400));
+
+      if (res.status === 422 || data?.ok === false) {
+        setConductoresSyncPhase("finalizado_con_advertencias");
+        const parts =
+          Array.isArray(data.validationErrors) && data.validationErrors.length > 0
+            ? data.validationErrors
+            : [data?.error || "La validación del sync no pasó; revisa el mensaje del servidor."];
+        const u = typeof data.uniqueAfterDedupe === "number" ? data.uniqueAfterDedupe : data.fetched;
+        const f = typeof data.finalDbCount === "number" ? data.finalDbCount : data.upserted;
+        setConductoresSyncDetail(
+          `${parts.join(" ")} Descargados (únicos): ${u ?? "?"}. Filas en tabla: ${f ?? "?"}.`,
+        );
+        await loadConductores();
+        return;
+      }
+
+      setConductoresSyncPhase("finalizado");
+      const u = typeof data.uniqueAfterDedupe === "number" ? data.uniqueAfterDedupe : data.fetched;
+      const f = typeof data.finalDbCount === "number" ? data.finalDbCount : data.upserted;
+      const apiT = data.apiTotalDeclared;
+      const tail =
+        apiT != null && typeof u === "number" && apiT !== u
+          ? ` (API declaró total=${apiT}; coincide la tabla con los ítems descargados: ${u}).`
+          : "";
+      setConductoresSyncDetail(
+        `Listo: ${u ?? "?"} conductores únicos descargados; ${f ?? "?"} filas en Supabase.${tail}`,
+      );
+      await loadConductores();
+    } catch (err) {
+      setConductoresSyncPhase("error");
+      setConductoresSyncDetail(err instanceof Error ? err.message : "Error inesperado.");
+    } finally {
+      setConductoresSyncing(false);
     }
   };
 
@@ -1520,6 +1729,12 @@ function DashboardContent() {
                   Viajes Activos
                 </TabsTrigger>
                 <TabsTrigger
+                  value={DATOS_SUB_CONDUCTORES}
+                  className="flex-1 text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm"
+                >
+                  Conductores
+                </TabsTrigger>
+                <TabsTrigger
                   value={DATOS_SUB_REGISTRO_ACTIVIDADES}
                   className="flex-1 text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm"
                 >
@@ -1730,6 +1945,220 @@ function DashboardContent() {
                 </div>
               </CardContent>
             </Card>
+              </TabsContent>
+
+              <TabsContent value={DATOS_SUB_CONDUCTORES} className="mt-0 space-y-4 outline-none">
+                <Card className="border-slate-200 bg-white text-slate-900 shadow-sm">
+                  <CardHeader className="flex flex-col gap-3 border-b border-slate-100 py-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+                    <div className="space-y-1">
+                      <CardTitle className="text-base font-semibold">Conductores (Moobiz)</CardTitle>
+                      <p className="text-xs text-slate-600">
+                        Datos desde Supabase; la sincronización con Moobiz se ejecuta en el servidor.
+                      </p>
+                    </div>
+                    <div className="flex flex-col items-stretch gap-2 sm:items-end">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="default"
+                        className="bg-[#00e676] font-semibold text-[#0b1131] hover:bg-[#00c765]"
+                        disabled={conductoresSyncing || driversLoading}
+                        onClick={() => void handleSyncConductores()}
+                      >
+                        {conductoresSyncing
+                          ? conductoresSyncPhase === "descargando"
+                            ? "Descargando…"
+                            : conductoresSyncPhase === "reemplazando_tabla"
+                              ? "Reemplazando tabla…"
+                              : "Sincronizando…"
+                          : "Actualizar conductores"}
+                      </Button>
+                      {conductoresSyncPhase !== "idle" ? (
+                        <p
+                          className={`max-w-md text-right text-xs ${
+                            conductoresSyncPhase === "finalizado_con_advertencias"
+                              ? "text-amber-900"
+                              : conductoresSyncPhase === "error"
+                                ? "text-red-800"
+                                : "text-slate-600"
+                          }`}
+                        >
+                          <span className="font-medium capitalize text-slate-800">
+                            {conductoresSyncPhase === "descargando"
+                              ? "Descargando"
+                              : conductoresSyncPhase === "reemplazando_tabla"
+                                ? "Reemplazando tabla"
+                                : conductoresSyncPhase === "finalizado"
+                                  ? "Finalizado"
+                                  : conductoresSyncPhase === "finalizado_con_advertencias"
+                                    ? "Finalizado con advertencias"
+                                    : conductoresSyncPhase === "error"
+                                      ? "Error"
+                                      : conductoresSyncPhase}
+                            </span>
+                          {conductoresSyncDetail ? (
+                            <>
+                              {": "}
+                              {conductoresSyncDetail}
+                            </>
+                          ) : null}
+                        </p>
+                      ) : null}
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-4 pt-4">
+                    {driversError ? (
+                      <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                        {driversError}
+                      </p>
+                    ) : null}
+                    <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
+                      <div className="space-y-1">
+                        <Label className="text-[11px] font-medium text-slate-700">Estado</Label>
+                        <Select value={driversEstadoFilter} onValueChange={setDriversEstadoFilter}>
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue placeholder="Todos" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__all__">Todos</SelectItem>
+                            {driversEstadoOptions.map((value) => (
+                              <SelectItem key={value} value={value}>
+                                {value}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-[11px] font-medium text-slate-700">Sucursal</Label>
+                        <Select value={driversSucursalFilter} onValueChange={setDriversSucursalFilter}>
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue placeholder="Todas" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__all__">Todas</SelectItem>
+                            {driversSucursalOptions.map((value) => (
+                              <SelectItem key={value} value={value}>
+                                {value}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-[11px] font-medium text-slate-700">GPS</Label>
+                        <Select value={driversGpsFilter} onValueChange={setDriversGpsFilter}>
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue placeholder="Todos" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__all__">Todos</SelectItem>
+                            {driversGpsOptions.map((value) => (
+                              <SelectItem key={value} value={value}>
+                                {value}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1">
+                        <Label htmlFor="drivers-id-filter" className="text-[11px] font-medium text-slate-700">
+                          ID Conductor
+                        </Label>
+                        <Input
+                          id="drivers-id-filter"
+                          value={driversIdFilter}
+                          onChange={(e) => setDriversIdFilter(e.target.value)}
+                          placeholder="Buscar por ID..."
+                          className="h-8 text-xs"
+                          autoComplete="off"
+                        />
+                      </div>
+                    </div>
+                    <div className="overflow-x-auto rounded-lg border border-slate-200">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="border-slate-200 bg-slate-50 hover:bg-slate-50">
+                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">Estado</TableHead>
+                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">Sucursal</TableHead>
+                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">En que distrito vive</TableHead>
+                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">Turno</TableHead>
+                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">ID Conductor</TableHead>
+                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">Nombre Conductor</TableHead>
+                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">Telefono</TableHead>
+                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">Calificacion</TableHead>
+                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">GPS</TableHead>
+                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">TP. Vehiculo</TableHead>
+                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">PERMISO PLACA</TableHead>
+                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">Categoría Brevete</TableHead>
+                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">Motivo Deshabilitado</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {driversLoading ? (
+                            <TableRow>
+                              <TableCell colSpan={13} className="py-10 text-center text-sm text-slate-500">
+                                Cargando conductores…
+                              </TableCell>
+                            </TableRow>
+                          ) : driversPageRows.length === 0 ? (
+                            <TableRow>
+                              <TableCell colSpan={13} className="py-10 text-center text-sm text-slate-500">
+                                No hay registros para los filtros aplicados.
+                              </TableCell>
+                            </TableRow>
+                          ) : (
+                            driversPageRows.map((row, idx) => (
+                              <TableRow
+                                key={`${asText(row.id_conductor)}-${idx}`}
+                                className="border-slate-100 text-sm hover:bg-slate-50/80"
+                              >
+                                <TableCell className="px-2 py-2 text-[11px]">{asText(row.estado)}</TableCell>
+                                <TableCell className="px-2 py-2 text-[11px]">{asText(row.sucursal)}</TableCell>
+                                <TableCell className="px-2 py-2 text-[11px]">{asText(row.distrito_vive)}</TableCell>
+                                <TableCell className="px-2 py-2 text-[11px]">{asText(row.turno)}</TableCell>
+                                <TableCell className="px-2 py-2 font-mono text-[11px]">{asText(row.id_conductor)}</TableCell>
+                                <TableCell className="px-2 py-2 text-[11px]">{asText(row.nombre_conductor)}</TableCell>
+                                <TableCell className="px-2 py-2 text-[11px]">{asText(row.telefono)}</TableCell>
+                                <TableCell className="px-2 py-2 text-[11px]">{asText(row.calificacion)}</TableCell>
+                                <TableCell className="px-2 py-2 text-[11px]">{asText(row.gps)}</TableCell>
+                                <TableCell className="px-2 py-2 text-[11px]">{asText(row.tp_vehiculo)}</TableCell>
+                                <TableCell className="px-2 py-2 text-[11px]">{asText(row.permiso_placa)}</TableCell>
+                                <TableCell className="px-2 py-2 text-[11px]">{asText(row.categoria_brevete)}</TableCell>
+                                <TableCell className="px-2 py-2 text-[11px]">{asText(row.motivo_deshabilitado)}</TableCell>
+                              </TableRow>
+                            ))
+                          )}
+                        </TableBody>
+                      </Table>
+                    </div>
+                    <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
+                      <p className="text-xs text-slate-600">
+                        Página {driversCurrentPage} de {driversTotalPages} · {driversTotal} conductor
+                        {driversTotal === 1 ? "" : "es"} cargado{driversTotal === 1 ? "" : "s"} ·{" "}
+                        {driversFilteredTotal} visible{driversFilteredTotal === 1 ? "" : "s"} con filtros
+                      </p>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setDriversPage((prev) => Math.max(1, prev - 1))}
+                          disabled={driversCurrentPage <= 1 || driversLoading}
+                        >
+                          Anterior
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setDriversPage((prev) => Math.min(driversTotalPages, prev + 1))}
+                          disabled={driversCurrentPage >= driversTotalPages || driversLoading}
+                        >
+                          Siguiente
+                        </Button>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
               </TabsContent>
 
               <TabsContent value={DATOS_SUB_REGISTRO_ACTIVIDADES} className="mt-0 space-y-4 outline-none">

@@ -1,15 +1,9 @@
 /**
- * Sync incremental de historial de servicios Moobiz -> Supabase.
+ * Sync de historial Moobiz -> Supabase (public.moobiz_services_history).
  *
- * Modo normal (sin --mode=pages_backfill):
- * - Cursor en sync_state: moobiz_services_history_last_finalized (ISO, date_finalized).
- * - Sin cursor: carga inicial (date_to=ahora; date_from omitido en API hasta overlap en incremental).
- * - Incremental: date_from en API = cursor − overlap_h; date_to = ahora (ISO).
- * - Filtro local: date_finalized >= cursor guardado (mitad API vs checkpoint).
- * - Tras upsert: se guarda el máximo date_finalizado de las filas procesadas.
- * - MAX_PAGES por defecto 2; base URL app.moobiz.pe; log GET sin token; --id para debug.
- *
- * pages_backfill: sin cursor ni sync_state de historial.
+ * Modo normal: siempre 2 páginas (1000 c/u), date_from=hoy−3 y date_to=hoy (YYYY-MM-DD),
+ * sin filtro local; dedupe por id; sync_state solo guarda moobiz_services_history_last_run
+ * (informativo). pages_backfill, manual --date_from/--date_to y --id sin cambios de rol.
  */
 const { randomUUID } = require("node:crypto");
 
@@ -34,7 +28,11 @@ const MOOBIZ_SERVICES_URL =
 const ADMIN_LOGIN_URL = `${MOOBIZ_API_BASE_URL}/api/admin/login/login`;
 const MOOBIZ_WEB_ORIGIN = MOOBIZ_API_BASE_URL;
 const MOOBIZ_TOKEN_KEY = "moobiz_token";
-const HISTORY_CURSOR_KEY = "moobiz_services_history_last_finalized";
+/** Solo modo normal: marca de última corrida (no se usa como filtro). */
+const LAST_RUN_KEY = "moobiz_services_history_last_run";
+const NORMAL_PAGES_FIXED = 2;
+const NORMAL_LIMIT_FIXED = 1000;
+const NORMAL_DELAY_MS_FIXED = 200;
 
 const PAGE_SIZE_DEFAULT = Number.parseInt(process.env.MOOBIZ_HISTORY_PAGE_SIZE || "", 10) || 1000;
 const MAX_RECORDS_DEFAULT =
@@ -225,6 +223,13 @@ function formatYyyyMmDdFromDate(d) {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+/** Hoy − N días en calendario local, YYYY-MM-DD (API). */
+function ymdDaysAgoLocal(days) {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return formatYyyyMmDdFromDate(d);
 }
 
 /** Normaliza CLI/ISO a YYYY-MM-DD para el API. */
@@ -441,8 +446,6 @@ async function sync() {
   let pagesQueried = 0;
   let errorMessage = null;
   let cursorAfter = "";
-  let cursorInForMonitor = "";
-  let cursorWrittenForMonitor = "";
 
   try {
     if (!SUPABASE_URL || !String(SUPABASE_URL).trim()) {
@@ -600,79 +603,45 @@ async function sync() {
     }
 
     if (!MANUAL_RANGE_MODE) {
-      const cursorSaved = (await readSyncStateValue(HISTORY_CURSOR_KEY)).trim();
-      const nowIso = new Date().toISOString();
-      let dateFrom = "";
-      let mode = "initial";
+      const runStartedAt = new Date().toISOString();
+      const mode = "normal_2pages";
+      const dateToYmd = formatYyyyMmDdFromDate(new Date());
+      const dateFromYmd = ymdDaysAgoLocal(3);
 
-      if (cursorSaved) {
-        const cursorDate = new Date(cursorSaved);
-        if (!Number.isNaN(cursorDate.getTime())) {
-          cursorDate.setHours(cursorDate.getHours() - OVERLAP_HOURS);
-          dateFrom = cursorDate.toISOString();
-          mode = "incremental";
-        }
-      }
-
-      const cursorMsForFilter = cursorSaved ? Date.parse(cursorSaved) : NaN;
-
-      cursorInForMonitor = cursorSaved || "(none)";
-      cursorWrittenForMonitor = "";
+      registrosNuevosEstimados = null;
+      registrosActualizadosEstimados = null;
 
       console.log(
-        `[history-sync] modo=${mode} cursor=${cursorSaved || "none"} overlap_h=${OVERLAP_HOURS} PAGE_SIZE=${PAGE_SIZE} MAX_PAGES=${MAX_PAGES} delay_ms=${DELAY_MS} base=${MOOBIZ_API_BASE_URL}`,
+        `[history-sync] modo=${mode} run_started_at=${runStartedAt} date_from=${dateFromYmd} date_to=${dateToYmd} pages=${NORMAL_PAGES_FIXED} limit=${NORMAL_LIMIT_FIXED} delay_ms=${NORMAL_DELAY_MS_FIXED} base=${MOOBIZ_API_BASE_URL}`,
       );
-      if (dateFrom) {
-        console.log(`[history-sync] API date_from=${dateFrom} date_to=${nowIso} (ISO)`);
-      } else {
-        console.log(`[history-sync] API date_to=${nowIso} (ISO), sin date_from (carga inicial)`);
-      }
 
-      const collected = [];
-      const seen = new Set();
+      const byId = new Map();
 
-      for (let page = 1; page <= MAX_PAGES; page += 1) {
+      for (let page = 1; page <= NORMAL_PAGES_FIXED; page += 1) {
         const items = await fetchServicesPage({
           page,
-          dateFrom: dateFrom || undefined,
-          dateTo: nowIso,
-          limit: PAGE_SIZE,
+          dateFrom: dateFromYmd,
+          dateTo: dateToYmd,
+          limit: NORMAL_LIMIT_FIXED,
           skipSyncStateToken: false,
         });
         pagesQueried = page;
 
-        let addedThisPage = 0;
         for (const raw of items) {
-          if (!Number.isNaN(cursorMsForFilter)) {
-            const fms = finalizedMsFromRaw(raw);
-            if (Number.isNaN(fms) || fms < cursorMsForFilter) continue;
-          }
-
           const normalized = normalizeServiceRow(raw);
           if (!normalized) continue;
-          if (seen.has(normalized.id)) continue;
-          seen.add(normalized.id);
-          collected.push(normalized);
-          addedThisPage += 1;
+          byId.set(normalized.id, normalized);
         }
 
         console.log(
-          `[history-sync] Página ${page}/${MAX_PAGES}: API_items=${items.length} +${addedThisPage} tras filtro date_finalized>=cursor (acum=${collected.length})`,
+          `[history-sync] Página ${page}/${NORMAL_PAGES_FIXED}: API_items=${items.length} ids_unicos_acum=${byId.size}`,
         );
 
-        if (page < MAX_PAGES) await sleep(DELAY_MS);
+        if (page < NORMAL_PAGES_FIXED) await sleep(NORMAL_DELAY_MS_FIXED);
       }
 
-      console.log(`[history-sync] registros normalizados tras filtro: ${collected.length}`);
-
-      if (collected.length === 0) {
-        registrosActualizadosEstimados = 0;
-        registrosNuevosEstimados = 0;
-      } else {
-        const existedBefore = await countExistingHistoryIds(collected.map((r) => r.id));
-        registrosActualizadosEstimados = existedBefore;
-        registrosNuevosEstimados = Math.max(0, collected.length - existedBefore);
-      }
+      const collected = [...byId.values()];
+      console.log(`[history-sync] filas unicas tras dedupe: ${collected.length}`);
 
       const rowsForUpsert = collected.map(stripHistoryRowForUpsert);
       const upsertStats = await upsertHistoryRows(rowsForUpsert);
@@ -689,37 +658,35 @@ async function sync() {
         );
       }
 
-      cursorAfter = computeCursorDate(collected, cursorSaved || nowIso) || nowIso;
-      await writeSyncStateValue(HISTORY_CURSOR_KEY, cursorAfter);
-      cursorWrittenForMonitor = cursorAfter;
-      reasonForStop = collected.length === 0 ? "empty_after_local_filter" : "processed_ok";
+      await writeSyncStateValue(LAST_RUN_KEY, runStartedAt);
+
+      pagesQueried = NORMAL_PAGES_FIXED;
+      reasonForStop = `ok_2pages_upsert;run_started_at=${runStartedAt}`;
+      cursorAfter = runStartedAt;
 
       console.log(
         JSON.stringify({
           status,
           mode,
+          run_started_at: runStartedAt,
           registros_procesados: recordsProcessed,
           filas_devueltas_upsert: recordsReturnedByUpsert,
-          registros_nuevos_estimados: registrosNuevosEstimados,
-          registros_actualizados_estimados: registrosActualizadosEstimados,
-          pages_queried: pagesQueried,
-          date_from: dateFrom || null,
-          date_to: nowIso,
-          cursor_read: cursorSaved || null,
-          cursor_after: cursorAfter,
+          pages_queried: NORMAL_PAGES_FIXED,
+          date_from: dateFromYmd,
+          date_to: dateToYmd,
+          last_run_saved_key: LAST_RUN_KEY,
         }),
       );
       console.log("[history-sync] ✅ Sync completado");
       return;
     }
 
-    const cursorSaved = await readSyncStateValue(HISTORY_CURSOR_KEY);
     const dateFromYmdManual = toApiYyyyMmDd(DATE_FROM_OVERRIDE);
     const dateToYmdManual = toApiYyyyMmDd(DATE_TO_OVERRIDE);
     const nowIso = new Date().toISOString();
     const mode = "manual_range";
 
-    console.log(`[history-sync] modo=${mode} cursor_db=${cursorSaved || "none"} overlap_h=${OVERLAP_HOURS}`);
+    console.log(`[history-sync] modo=${mode} overlap_h=${OVERLAP_HOURS}`);
     console.log(
       `[history-sync] Iniciando barrido manual date_from=${dateFromYmdManual} date_to=${dateToYmdManual} base=${MOOBIZ_API_BASE_URL}`,
     );
@@ -826,10 +793,8 @@ async function sync() {
       );
     }
 
-    cursorAfter = computeCursorDate(collected, cursorSaved || nowIso) || nowIso;
-    console.log(
-      `[history-sync] modo ${mode}: no se actualiza cursor ${HISTORY_CURSOR_KEY} (cursor calculado=${cursorAfter}).`,
-    );
+    cursorAfter = computeCursorDate(collected, nowIso) || nowIso;
+    console.log(`[history-sync] modo ${mode}: max date_finalizado calculado=${cursorAfter} (no se escribe sync_state).`);
 
     console.log(
       JSON.stringify({
@@ -855,13 +820,10 @@ async function sync() {
     try {
       const reasonResolved =
         reasonForStop ?? (status === "error" ? "sync_exception" : "unknown_stop");
-      let reasonWithMode =
+      const reasonWithMode =
         PAGES_BACKFILL_MODE
           ? `${reasonResolved};mode=pages_backfill;pages=${BACKFILL_PAGES};limit=${BACKFILL_LIMIT}`
           : reasonResolved;
-      if (cursorInForMonitor) {
-        reasonWithMode = `${reasonWithMode};cursor_in=${cursorInForMonitor};cursor_saved=${cursorWrittenForMonitor || "n/a"}`;
-      }
       const monitorPayload = {
         status,
         records_procesados: recordsProcessed,

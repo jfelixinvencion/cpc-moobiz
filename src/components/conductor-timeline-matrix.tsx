@@ -21,6 +21,7 @@ import {
   sortEstadoEntriesForMatrix,
   sortEstadosForLegend,
 } from "@/lib/conductor-estado";
+import { isGpsOff, normalizeConductorName } from "@/lib/gps-filter";
 
 type ViajeRow = {
   id?: string | number | null;
@@ -29,6 +30,13 @@ type ViajeRow = {
   fecha?: string | null;
   fecha_registro?: string | null;
 };
+
+type DriverGpsRow = {
+  nombre_conductor?: string | null;
+  gps?: string | null;
+};
+
+let gpsDriversCache: DriverGpsRow[] | null = null;
 
 const HOUR_MS = 60 * 60 * 1000;
 const MIN_AXIS_HOURS = 24;
@@ -194,6 +202,7 @@ export type ConductorMatrixProps = {
   startDate?: string;
   endDate?: string;
   empresa?: string;
+  driversRows?: DriverGpsRow[];
   /** Cuando cambia (p. ej. tras sincronizar Moobiz), se vuelve a cargar la matriz. */
   dataRevision?: number;
 };
@@ -202,6 +211,7 @@ export function ConductorTimelineMatrix({
   startDate = "",
   endDate = "",
   empresa = "Todas",
+  driversRows = [],
   dataRevision = 0,
 }: ConductorMatrixProps) {
   const parentRef = useRef<HTMLDivElement>(null);
@@ -210,8 +220,14 @@ export function ConductorTimelineMatrix({
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [conductorSearch, setConductorSearch] = useState("");
-  /** Filtro local: conductores con 2+ servicios en la misma franja horaria. */
-  const [serviceOverlapFilter, setServiceOverlapFilter] = useState<"all" | "suspicious">("all");
+  /** Filtro local de seguimiento (cliente): 2+ misma hora / nivel 1 / nivel 2. */
+  const [serviceOverlapFilter, setServiceOverlapFilter] = useState<
+    "all" | "suspicious" | "level1" | "level2" | "gps_off"
+  >("all");
+  /** Primera columna horaria visible (izquierda) para filtros nivel 1/2. */
+  const [leftVisibleColumnIndex, setLeftVisibleColumnIndex] = useState(0);
+  const [gpsIndexRows, setGpsIndexRows] = useState<DriverGpsRow[]>(() => gpsDriversCache ?? []);
+  const [gpsIndexLoading, setGpsIndexLoading] = useState(false);
   const [selectedRowCounts, setSelectedRowCounts] = useState<Set<number>>(new Set());
   const [hover, setHover] = useState<{
     conductor: string;
@@ -335,11 +351,68 @@ export function ConductorTimelineMatrix({
     return out;
   }, [cellMap]);
 
+  /** Nivel 1: en la primera columna visible debe existir al menos un "Aceptado". */
+  const conductorsWithLevel1 = useMemo(() => {
+    const out = new Set<string>();
+    const firstTs = slots[leftVisibleColumnIndex]?.ts;
+    if (firstTs == null) return out;
+    for (const [name, bySlot] of cellMap) {
+      const trips = bySlot.get(firstTs) ?? EMPTY_TRIPS;
+      if (trips.some((t) => t.estado === "Aceptado")) out.add(name);
+    }
+    return out;
+  }, [cellMap, slots, leftVisibleColumnIndex]);
+
+  /** Nivel 2:
+   * a) primera visible: "Iniciado" o "Esperando"
+   * b) o segunda visible: "Aceptado"
+   */
+  const conductorsWithLevel2 = useMemo(() => {
+    const out = new Set<string>();
+    const firstTs = slots[leftVisibleColumnIndex]?.ts;
+    const secondTs = slots[leftVisibleColumnIndex + 1]?.ts;
+    if (firstTs == null) return out;
+    for (const [name, bySlot] of cellMap) {
+      const firstTrips = bySlot.get(firstTs) ?? EMPTY_TRIPS;
+      const secondTrips = secondTs != null ? bySlot.get(secondTs) ?? EMPTY_TRIPS : EMPTY_TRIPS;
+      const condA = firstTrips.some((t) => t.estado === "Iniciado" || t.estado === "Esperando");
+      const condB = secondTrips.some((t) => t.estado === "Aceptado");
+      if (condA || condB) out.add(name);
+    }
+    return out;
+  }, [cellMap, slots, leftVisibleColumnIndex]);
+
+  const gpsOffConductorNameSet = useMemo(() => {
+    const map = new Map<string, boolean>();
+    for (const row of gpsIndexRows) {
+      const key = normalizeConductorName(row.nombre_conductor);
+      if (!key) continue;
+      const off = isGpsOff(row.gps);
+      if (!map.has(key)) {
+        map.set(key, off);
+      } else if (off) {
+        map.set(key, true);
+      }
+    }
+    const out = new Set<string>();
+    for (const [key, off] of map.entries()) {
+      if (off) out.add(key);
+    }
+    return out;
+  }, [gpsIndexRows]);
+
   const filteredConductors = useMemo(() => {
     const q = conductorSearch.trim().toLowerCase();
     return conductorOrder.filter((name) => {
-      if (serviceOverlapFilter === "suspicious" && !conductorsWithSlotOverlap.has(name)) {
-        return false;
+      if (serviceOverlapFilter === "suspicious") {
+        if (!conductorsWithSlotOverlap.has(name)) return false;
+      } else if (serviceOverlapFilter === "level1") {
+        if (!conductorsWithLevel1.has(name)) return false;
+      } else if (serviceOverlapFilter === "level2") {
+        if (!conductorsWithLevel2.has(name)) return false;
+      } else if (serviceOverlapFilter === "gps_off") {
+        const key = normalizeConductorName(name);
+        if (!key || !gpsOffConductorNameSet.has(key)) return false;
       }
       if (q && !name.toLowerCase().includes(q)) return false;
       const total = conductorTotals.get(name) ?? 0;
@@ -353,6 +426,9 @@ export function ConductorTimelineMatrix({
     selectedRowCounts,
     serviceOverlapFilter,
     conductorsWithSlotOverlap,
+    conductorsWithLevel1,
+    conductorsWithLevel2,
+    gpsOffConductorNameSet,
   ]);
 
   const rowCount = filteredConductors.length;
@@ -412,6 +488,58 @@ export function ConductorTimelineMatrix({
       return next;
     });
   };
+
+  useEffect(() => {
+    const el = parentRef.current;
+    if (!el) return;
+    const updateLeftVisibleColumn = () => {
+      const gridScrollLeft = Math.max(0, el.scrollLeft - NAME_COL_WIDTH);
+      const idx = Math.max(0, Math.floor(gridScrollLeft / COL_ESTIMATE_PX));
+      setLeftVisibleColumnIndex((prev) => (prev === idx ? prev : idx));
+    };
+    updateLeftVisibleColumn();
+    el.addEventListener("scroll", updateLeftVisibleColumn, { passive: true });
+    window.addEventListener("resize", updateLeftVisibleColumn);
+    return () => {
+      el.removeEventListener("scroll", updateLeftVisibleColumn);
+      window.removeEventListener("resize", updateLeftVisibleColumn);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (driversRows.length > 0) {
+      gpsDriversCache = driversRows;
+      setGpsIndexRows(driversRows);
+    }
+  }, [driversRows]);
+
+  useEffect(() => {
+    if (serviceOverlapFilter !== "gps_off") return;
+    if (gpsIndexRows.length > 0) return;
+    let cancelled = false;
+    const loadGpsRows = async () => {
+      if (gpsDriversCache && gpsDriversCache.length > 0) {
+        if (!cancelled) setGpsIndexRows(gpsDriversCache);
+        return;
+      }
+      setGpsIndexLoading(true);
+      try {
+        const res = await fetch("/api/moobiz-drivers?page=1&pageSize=10000", { cache: "no-store" });
+        const json = (await res.json()) as { data?: DriverGpsRow[] };
+        const data = Array.isArray(json?.data) ? json.data : [];
+        gpsDriversCache = data;
+        if (!cancelled) setGpsIndexRows(data);
+      } catch {
+        if (!cancelled) setGpsIndexRows([]);
+      } finally {
+        if (!cancelled) setGpsIndexLoading(false);
+      }
+    };
+    void loadGpsRows();
+    return () => {
+      cancelled = true;
+    };
+  }, [serviceOverlapFilter, gpsIndexRows.length]);
 
   return (
     <Card className="border-slate-200 bg-white shadow-sm">
@@ -481,17 +609,24 @@ export function ConductorTimelineMatrix({
               />
             </div>
             <div className="w-full shrink-0 space-y-1 sm:w-[min(100%,280px)]">
-              <Label className="text-xs text-slate-600">Servicios en misma hora</Label>
+              <Label className="text-xs text-slate-600">Seguimiento</Label>
               <Select
                 value={serviceOverlapFilter}
-                onValueChange={(v) => setServiceOverlapFilter(v as "all" | "suspicious")}
+                onValueChange={(v) =>
+                  setServiceOverlapFilter(
+                    v as "all" | "suspicious" | "level1" | "level2" | "gps_off",
+                  )
+                }
               >
                 <SelectTrigger className="h-9 w-full border-slate-200 bg-white text-sm">
                   <SelectValue placeholder="Filtro" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Todos</SelectItem>
-                  <SelectItem value="suspicious">Sospechosos (2+ en misma hora)</SelectItem>
+                  <SelectItem value="suspicious">2+ en misma hora</SelectItem>
+                  <SelectItem value="level1">Nivel 1</SelectItem>
+                  <SelectItem value="level2">Nivel 2</SelectItem>
+                  <SelectItem value="gps_off">GPS Apagado</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -503,8 +638,12 @@ export function ConductorTimelineMatrix({
         )}
         {loading && <p className="text-sm text-slate-500">Cargando matriz...</p>}
 
-        {!loading && filteredConductors.length === 0 && (
-          <p className="text-sm text-slate-500">No hay conductores que cumplan los filtros.</p>
+        {!loading && !gpsIndexLoading && filteredConductors.length === 0 && (
+          <p className="text-sm text-slate-500">
+            {serviceOverlapFilter === "gps_off"
+              ? "No se encontraron conductores con GPS apagado"
+              : "No hay conductores que cumplan los filtros."}
+          </p>
         )}
 
         {hover && (

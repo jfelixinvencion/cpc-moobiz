@@ -1,4 +1,9 @@
 import { createClient } from "@supabase/supabase-js";
+import {
+  matchesProductFilter,
+  SCHEDULE_CRITICAL_PRODUCTS,
+  SCHEDULE_OTHER_KEY,
+} from "@/lib/product-categories";
 
 export const runtime = "nodejs";
 
@@ -156,6 +161,7 @@ export async function GET(request: Request): Promise<Response> {
     const startDateParam = requestUrl.searchParams.get("startDate");
     const endDateParam = requestUrl.searchParams.get("endDate");
     const empresaParam = toText(requestUrl.searchParams.get("empresa"));
+    const productFilter = toText(requestUrl.searchParams.get("product"));
 
     const startDate = startDateParam ? new Date(`${startDateParam}T00:00:00`) : null;
     const endDate = endDateParam ? new Date(`${endDateParam}T23:59:59`) : null;
@@ -175,7 +181,8 @@ export async function GET(request: Request): Promise<Response> {
     const rows = (data ?? []) as ViajeRow[];
 
     if (scope === "all") {
-      return Response.json({ data: rows });
+      const allRows = rows.filter((row) => matchesProductFilter(row.producto, productFilter));
+      return Response.json({ data: allRows });
     }
 
     /** Viajes con conductor asignado (pendiente sin conductor no entra por falta de conductor). */
@@ -187,7 +194,8 @@ export async function GET(request: Request): Promise<Response> {
         const date = parseDateFromRow(row);
         const empresaOk = !empresaParam || empresaParam === "Todas" || empresa === empresaParam;
         const dateOk = inDateRange(date, startDate, endDate);
-        return empresaOk && dateOk;
+        const productOk = matchesProductFilter(row.producto, productFilter);
+        return empresaOk && dateOk && productOk;
       });
       return Response.json({ data: matrixRows });
     }
@@ -204,7 +212,8 @@ export async function GET(request: Request): Promise<Response> {
       const date = parseDateFromRow(row);
       const empresaOk = !empresaParam || empresaParam === "Todas" || empresa === empresaParam;
       const dateOk = inDateRange(date, startDate, endDate);
-      return empresaOk && dateOk;
+      const productOk = matchesProductFilter(row.producto, productFilter);
+      return empresaOk && dateOk && productOk;
     });
 
     const pendingByEmpresaMap = new Map<string, number>();
@@ -258,6 +267,7 @@ export async function GET(request: Request): Promise<Response> {
     const empresas = Array.from(
       new Set(rows.map((row) => toText(row.empresa)).filter(Boolean)),
     ).sort();
+    const productos = [...SCHEDULE_CRITICAL_PRODUCTS, SCHEDULE_OTHER_KEY];
 
     return Response.json({
       data: filteredPending,
@@ -270,7 +280,7 @@ export async function GET(request: Request): Promise<Response> {
         topOrigens,
         topDestinos,
       },
-      filters: { empresas },
+      filters: { empresas, productos },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Error inesperado en /api/viajes";

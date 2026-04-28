@@ -8,6 +8,7 @@ import {
   redactMoobizToken,
   writeMoobizTokenToDb,
 } from "@/lib/moobiz-auth";
+import { canonicalViajeProducto } from "@/lib/product-categories";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -148,6 +149,10 @@ function mapExcelRow(row: JsonRecord): JsonRecord {
 
     if (dbField === "monto") {
       mapped[dbField] = toMoneyNumberOrZero(value);
+      continue;
+    }
+    if (dbField === "producto") {
+      mapped[dbField] = canonicalViajeProducto(value);
       continue;
     }
 

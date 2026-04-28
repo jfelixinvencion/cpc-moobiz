@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "node --test --experimental-strip-types tests/**/*.test.ts",
     "sync:history": "node scripts/sync_moobiz_history.js",
     "sync:history:pages": "node -r dotenv/config scripts/sync_moobiz_history.js --mode=pages_backfill --pages=20 --limit=1000",
     "sync:drivers": "node scripts/sync_moobiz_drivers.js",

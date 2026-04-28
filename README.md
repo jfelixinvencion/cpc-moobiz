@@ -40,3 +40,60 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
 La implementacion de Auditoria del Servicio (tabla, API, UI y storage privado con signed URLs) esta documentada en:
 
 - `docs/quality-audit.md`
+
+## Producto "VIP LIMA" (dashboard + datos)
+
+Se agregó `VIP LIMA` como categoría diferenciada para la gráfica **Pendientes por franja de programacion**:
+
+- aparece en leyenda/filtros/toggle igual que BUS, FURGON, VAN, SPRINTER, LOGISTICA y PROVINCIA VIP,
+- usa color propio (`#8E44AD`),
+- deja de agruparse en `Otros`,
+- disponible en API con filtro `?product=VIP%20LIMA`.
+
+### Migración SQL (staging/prod)
+
+Archivo:
+
+- `sql/20260428_add_vip_lima_product.sql`
+
+Pasos sugeridos:
+
+1) **Dry-run (conteo de filas candidatas):**
+
+```sql
+SELECT count(*) AS candidatos
+FROM public.viajes_activos
+WHERE upper(coalesce(producto, '')) LIKE '%VIP%LIMA%';
+```
+
+2) **Backup de filas afectadas antes del update:**
+
+```sql
+CREATE TABLE IF NOT EXISTS public.backup_vip_lima_viajes_activos_20260428 AS
+SELECT *
+FROM public.viajes_activos
+WHERE upper(coalesce(producto, '')) LIKE '%VIP%LIMA%';
+```
+
+3) **Aplicar migración** en Supabase SQL editor o `psql`:
+
+```bash
+psql "<SUPABASE_CONNECTION_STRING_REDACTED>" -f sql/20260428_add_vip_lima_product.sql
+```
+
+4) **Rollback** (si aplica) restaurando desde backup:
+
+```sql
+UPDATE public.viajes_activos v
+SET producto = b.producto
+FROM public.backup_vip_lima_viajes_activos_20260428 b
+WHERE v.id = b.id;
+```
+
+### QA manual rápido
+
+1. Ir a `Dashboard -> Reservas`.
+2. En "Pendientes por franja de programacion", verificar que aparece `VIP LIMA` en la leyenda.
+3. Click en `VIP LIMA`: debe ocultar/mostrar la serie.
+4. Doble click en `VIP LIMA`: debe aislar solo esa categoría.
+5. Confirmar tooltip con nombre `VIP LIMA` y conteo correcto.

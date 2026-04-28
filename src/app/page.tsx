@@ -66,6 +66,13 @@ import {
   LogsSyncHealthBanner,
   type SyncMonitorRow,
 } from "@/components/logs-sync-health-banner";
+import {
+  type ScheduleProductKey,
+  SCHEDULE_PRODUCT_COLORS,
+  SCHEDULE_STACK_ORDER,
+  SCHEDULE_TOOLTIP_ORDER,
+  scheduleBucketForProducto,
+} from "@/lib/product-categories";
 import { MouseRevealHeaderLayout } from "@/components/mouse-reveal-header-layout";
 import { useRefreshData } from "@/context/refresh-data-context";
 
@@ -253,20 +260,8 @@ type ScheduleTimelineDatum = {
   SPRINTER: number;
   LOGISTICA: number;
   "PROVINCIA VIP": number;
+  "VIP LIMA": number;
 };
-
-const SCHEDULE_CRITICAL_PRODUCTS = [
-  "BUS",
-  "FURGON",
-  "VAN",
-  "SPRINTER",
-  "LOGISTICA",
-  "PROVINCIA VIP",
-] as const;
-const SCHEDULE_OTHER_KEY = "OTROS" as const;
-const SCHEDULE_STACK_ORDER = [SCHEDULE_OTHER_KEY, ...SCHEDULE_CRITICAL_PRODUCTS] as const;
-const SCHEDULE_TOOLTIP_ORDER = [...SCHEDULE_CRITICAL_PRODUCTS, SCHEDULE_OTHER_KEY] as const;
-type ScheduleProductKey = (typeof SCHEDULE_STACK_ORDER)[number];
 
 function scheduleVisibilityOnlyOne(key: ScheduleProductKey): Record<ScheduleProductKey, boolean> {
   const o = {} as Record<ScheduleProductKey, boolean>;
@@ -282,16 +277,6 @@ function scheduleOnlyProductVisible(
 ): boolean {
   return SCHEDULE_STACK_ORDER.every((k) => (k === key ? vis[k] === true : vis[k] === false));
 }
-
-const SCHEDULE_PRODUCT_COLORS: Record<(typeof SCHEDULE_STACK_ORDER)[number], string> = {
-  OTROS: "#9ca3af",
-  BUS: "#1d4ed8",
-  FURGON: "#16a34a",
-  VAN: "#f97316",
-  SPRINTER: "#06b6d4",
-  LOGISTICA: "#7c3aed",
-  "PROVINCIA VIP": "#e11d48",
-};
 
 /** Ancho lógico por columna de franja (px): scroll, ventana visible y grosor de barras. */
 const SCHEDULE_SLOT_PX = 28;
@@ -414,27 +399,6 @@ const ScheduleStackBarTooltip = memo(function ScheduleStackBarTooltip(props: Sch
     </div>
   );
 });
-
-function normalizeProductoKey(value: unknown): string {
-  return asText(value)
-    .toUpperCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function scheduleBucketForProducto(value: unknown): (typeof SCHEDULE_STACK_ORDER)[number] {
-  const key = normalizeProductoKey(value);
-  const compact = key.replace(/\s+/g, "");
-  if (key === "VIP" || compact === "PROVINCIAVIP") {
-    return "PROVINCIA VIP";
-  }
-  if ((SCHEDULE_CRITICAL_PRODUCTS as readonly string[]).includes(key)) {
-    return key as (typeof SCHEDULE_STACK_ORDER)[number];
-  }
-  return SCHEDULE_OTHER_KEY;
-}
 
 function parseScheduleLabelParts(value: unknown): { time: string; date: string; dateKey: string } {
   const raw = asText(value);
@@ -673,15 +637,12 @@ function DashboardContent() {
   const [prodError, setProdError] = useState<string | null>(null);
   const [scheduleProductVisibility, setScheduleProductVisibility] = useState<
     Record<(typeof SCHEDULE_STACK_ORDER)[number], boolean>
-  >({
-    OTROS: true,
-    BUS: true,
-    FURGON: true,
-    VAN: true,
-    SPRINTER: true,
-    LOGISTICA: true,
-    "PROVINCIA VIP": true,
-  });
+  >(() =>
+    Object.fromEntries(SCHEDULE_STACK_ORDER.map((key) => [key, true])) as Record<
+      ScheduleProductKey,
+      boolean
+    >,
+  );
   const scheduleTimelineScrollRef = useRef<HTMLDivElement | null>(null);
   const scheduleTimelineDataRef = useRef<ScheduleTimelineDatum[]>([]);
   const scheduleScrollRafRef = useRef<number | null>(null);
@@ -1344,6 +1305,7 @@ function DashboardContent() {
         SPRINTER: 0,
         LOGISTICA: 0,
         "PROVINCIA VIP": 0,
+        "VIP LIMA": 0,
       };
     });
 
@@ -1365,14 +1327,7 @@ function DashboardContent() {
     }
 
     for (const item of baseData) {
-      const sum =
-        item.OTROS +
-        item.BUS +
-        item.FURGON +
-        item.VAN +
-        item.SPRINTER +
-        item.LOGISTICA +
-        item["PROVINCIA VIP"];
+      const sum = SCHEDULE_STACK_ORDER.reduce((acc, key) => acc + item[key], 0);
       item.total = sum > 0 ? sum : item.total;
     }
 

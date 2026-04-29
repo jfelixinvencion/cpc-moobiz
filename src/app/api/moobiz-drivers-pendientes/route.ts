@@ -14,6 +14,19 @@ import { getSupabaseServerClient } from "@/lib/supabase-server";
 
 export const runtime = "nodejs";
 
+/** Identificador PostgREST para `.order()` cuando la columna en la vista tiene `<` o espacios (nombre legible). */
+const VISTA_ORDER_QUOTED_N_SERVICIOS = '"N Servicios <30"';
+
+/**
+ * Traduce `sortColumn` resuelto desde `sortBy` (p. ej. `n_servicios_30`) al nombre que debe recibir `.order()` sobre la vista.
+ */
+function vistaOrderColumnForSupabase(sortColumn: string): string {
+  if (sortColumn === "n_servicios_30" || sortColumn === "n_servicios_lt_30") {
+    return VISTA_ORDER_QUOTED_N_SERVICIOS;
+  }
+  return sortColumn;
+}
+
 function toErrorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (err && typeof err === "object" && "message" in err) {
@@ -111,15 +124,13 @@ async function queryFromSource(args: {
   const supabase = args.sb;
   const from = (args.page - 1) * args.pageSize;
   const to = from + args.pageSize - 1;
-  const sortColumnForSource =
-    args.sourceName === "vw_moobiz_drivers_pendientes" && args.sortColumn === "n_servicios_30"
-      ? "n_servicios_lt_30"
-      : args.sortColumn;
+  const sortColumnForSource = vistaOrderColumnForSupabase(args.sortColumn);
   const orderClauseForSource = buildPostgrestOrderClause(
     sortColumnForSource,
     args.ascending ? "asc" : "desc",
   );
 
+  console.log("[moobiz-drivers-pendientes] ORDER_COLUMN_SENT_TO_SUPABASE:", sortColumnForSource);
   console.log("[moobiz-drivers-pendientes] Supabase ORDER / range:", {
     source: args.sourceName,
     schema: "vista",
@@ -250,6 +261,11 @@ export async function GET(request: NextRequest) {
       usedFallback: sortSpec.usedFallback,
     });
     console.log("[moobiz-drivers-pendientes] ORDER_FINAL:", orderClause);
+    console.log("[moobiz-drivers-pendientes] SORT_HEADER_TO_ORDER_ARG:", {
+      sortKey: sortSpec.sortKey,
+      orderColumnFromResolver: sortColumn,
+      supabaseOrderFirstArg: vistaOrderColumnForSupabase(sortColumn),
+    });
 
     try {
       const mv = await queryFromSource({

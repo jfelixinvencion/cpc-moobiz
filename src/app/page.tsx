@@ -66,6 +66,7 @@ import {
   LogsSyncHealthBanner,
   type SyncMonitorRow,
 } from "@/components/logs-sync-health-banner";
+import { DatosPendientesTable } from "@/components/DatosPendientesTable";
 import {
   type ScheduleProductKey,
   SCHEDULE_PRODUCT_COLORS,
@@ -211,6 +212,7 @@ const PAGE_SIZE = 50;
 const DATOS_SUB_VIAJES_ACTIVOS = "viajes-activos" as const;
 const DATOS_SUB_CONDUCTORES = "conductores" as const;
 const DATOS_SUB_REGISTRO_ACTIVIDADES = "registro-actividades" as const;
+const DATOS_SUB_DATOS_PENDIENTES = "datos-pendientes" as const;
 const LOGS_CLEAN_PAGE_SIZE = 50;
 const HISTORY_PAGE_SIZE = 50;
 const DRIVERS_PAGE_SIZE = 50;
@@ -722,7 +724,12 @@ function DashboardContent() {
 
   const datosSubAllowed = useMemo(
     () =>
-      new Set<string>([DATOS_SUB_VIAJES_ACTIVOS, DATOS_SUB_CONDUCTORES, DATOS_SUB_REGISTRO_ACTIVIDADES]),
+      new Set<string>([
+        DATOS_SUB_VIAJES_ACTIVOS,
+        DATOS_SUB_CONDUCTORES,
+        DATOS_SUB_REGISTRO_ACTIVIDADES,
+        DATOS_SUB_DATOS_PENDIENTES,
+      ]),
     [],
   );
 
@@ -742,7 +749,8 @@ function DashboardContent() {
     if (
       raw === DATOS_SUB_VIAJES_ACTIVOS ||
       raw === DATOS_SUB_CONDUCTORES ||
-      raw === DATOS_SUB_REGISTRO_ACTIVIDADES
+      raw === DATOS_SUB_REGISTRO_ACTIVIDADES ||
+      raw === DATOS_SUB_DATOS_PENDIENTES
     ) {
       setDatosSubTab(raw);
       if (raw === DATOS_SUB_CONDUCTORES) setDriversPage(1);
@@ -1676,7 +1684,7 @@ function DashboardContent() {
         <div className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-6 md:px-6">
           <TabsContent value="datos" className="mt-0 outline-none">
             <Tabs value={datosSubTab} onValueChange={handleDatosSubTabChange} className="w-full">
-              <TabsList className="mb-3 h-10 w-full max-w-xl bg-slate-200/90 p-1">
+              <TabsList className="mb-3 h-10 w-full max-w-4xl bg-slate-200/90 p-1">
                 <TabsTrigger
                   value={DATOS_SUB_VIAJES_ACTIVOS}
                   className="flex-1 text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm"
@@ -1694,6 +1702,12 @@ function DashboardContent() {
                   className="flex-1 text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm"
                 >
                   Registro logs
+                </TabsTrigger>
+                <TabsTrigger
+                  value={DATOS_SUB_DATOS_PENDIENTES}
+                  className="flex-1 text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm"
+                >
+                  Datos Pendientes
                 </TabsTrigger>
               </TabsList>
 
@@ -2272,6 +2286,9 @@ function DashboardContent() {
                     </div>
                   </CardContent>
                 </Card>
+              </TabsContent>
+              <TabsContent value={DATOS_SUB_DATOS_PENDIENTES} className="mt-0 space-y-4 outline-none">
+                <DatosPendientesTable />
               </TabsContent>
             </Tabs>
           </TabsContent>

@@ -5,6 +5,7 @@ import {
   normalizeCount,
   normalizeDriverPendienteRow,
   normalizeDriverPendienteRows,
+  normalizeDriverPendienteRowsFromVistaLabels,
 } from "../src/lib/moobiz-drivers-pendientes-normalize.ts";
 
 test("normaliza una fila válida de drivers pendientes", () => {
@@ -39,4 +40,34 @@ test("si data no es array retorna [] y count se normaliza a number seguro", () =
   assert.equal(normalizeCount(10), 10);
   assert.equal(normalizeCount("20"), 20);
   assert.equal(normalizeCount("invalid"), 0);
+});
+
+test("mapea filas de vista con etiquetas legibles a campos del frontend", () => {
+  const rows = normalizeDriverPendienteRowsFromVistaLabels([
+    {
+      "ID Conductor": 99,
+      "Nombre Conductor": "María López",
+      "N Servicios <30": "3",
+      Sucursal: "Centro",
+      "En que distrito vive": "Lima",
+      Turno: "Mañana",
+      "Vencimiento de Brevete": "2026-01-01",
+      "Vencimiento de Revisión Técnica": "2026-02-01",
+      "Vencimiento de SOAT": "2026-03-01",
+      "Tipo de Contribuyente": "RUC",
+      "Marcar si Moobiz realiza su contabilidad": "Sí",
+      "Número Ruc Factura": "20123456789",
+      "Usuario Sunat": "user",
+      "Clave Sol Sunat": "***",
+      Estado: "Pendiente",
+    },
+  ]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].id_conductor, "99");
+  assert.equal(rows[0].nombre_conductor, "María López");
+  assert.equal(rows[0].n_servicios_lt_30, 3);
+  assert.equal(rows[0].sucursal, "Centro");
+  assert.equal(rows[0].distrito_vive, "Lima");
+  assert.equal(rows[0].marca_contabilidad_moobiz, "Sí");
+  assert.equal(rows[0].estado, "Pendiente");
 });

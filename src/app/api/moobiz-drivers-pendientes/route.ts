@@ -7,7 +7,7 @@ import {
 } from "@/lib/datos-pendientes";
 import {
   normalizeCount,
-  normalizeDriverPendienteRows,
+  normalizeDriverPendienteRowsFromVistaLabels,
 } from "@/lib/moobiz-drivers-pendientes-normalize";
 import { assertQualityReadAccess } from "@/lib/panel-session";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
@@ -159,6 +159,10 @@ async function queryFromSource(args: {
   const { data, count, error } = result;
   if (error) throw error;
 
+  if (Array.isArray(data) && data.length > 0 && data[0] && typeof data[0] === "object") {
+    console.log("[DEBUG] Keys detectadas en el primer registro:", Object.keys(data[0] as object));
+  }
+
   let sucursalesDistinct: string[] = [];
   const sucRes = await supabase
     .schema("vista")
@@ -177,7 +181,7 @@ async function queryFromSource(args: {
   }
 
   return {
-    data: normalizeDriverPendienteRows(data as unknown),
+    data: normalizeDriverPendienteRowsFromVistaLabels(data as unknown),
     total: normalizeCount(count),
     sucursalesDistinct,
   };

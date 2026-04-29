@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { formatApiError } from "@/lib/format-api-error";
 import {
+  buildPostgrestOrderClause,
   resolveDatosPendientesSort,
 } from "@/lib/datos-pendientes";
 import {
@@ -33,9 +34,31 @@ const SELECT = [
 
 type DriverPendienteRow = Record<string, unknown>;
 
+function toErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (err && typeof err === "object" && "message" in err) {
+    const msg = (err as { message?: unknown }).message;
+    if (typeof msg === "string" && msg.trim()) return msg;
+  }
+  return formatApiError(err);
+}
+
 function isMissingRelationError(message: string): boolean {
   const lower = message.toLowerCase();
-  return lower.includes("does not exist") || lower.includes("no existe la relación");
+  return (
+    lower.includes("does not exist") ||
+    lower.includes("no existe la relación") ||
+    lower.includes("could not find the table")
+  );
+}
+
+function isMissingColumnError(err: unknown): boolean {
+  if (err && typeof err === "object") {
+    const code = (err as { code?: unknown }).code;
+    if (code === "42703") return true;
+  }
+  const message = toErrorMessage(err).toLowerCase();
+  return message.includes("does not exist") && message.includes("column");
 }
 
 async function queryFromSource(args: {
@@ -47,32 +70,51 @@ async function queryFromSource(args: {
   searchText: string;
   sortColumn: string;
   ascending: boolean;
-  nulls: "nullsfirst" | "nullslast";
+  orderClause: string;
 }) {
   const supabase = getSupabaseAdmin();
   const from = (args.page - 1) * args.pageSize;
   const to = from + args.pageSize - 1;
+  const sortColumnForSource =
+    args.sourceName === "vw_moobiz_drivers_pendientes" && args.sortColumn === "n_servicios_30"
+      ? "n_servicios_lt_30"
+      : args.sortColumn;
+  const orderClauseForSource = buildPostgrestOrderClause(
+    sortColumnForSource,
+    args.ascending ? "asc" : "desc",
+  );
 
   console.log("[moobiz-drivers-pendientes] Supabase ORDER / range:", {
     source: args.sourceName,
-    sortColumn: args.sortColumn,
+    sortColumn: sortColumnForSource,
     ascending: args.ascending,
-    nullsFirst: args.nulls === "nullsfirst",
+    orderClause: orderClauseForSource,
     range: { from, to },
   });
 
-  let q = supabase.schema("vista").from(args.sourceName).select(SELECT, { count: "exact" });
-  if (args.sucursalFilter) q = q.eq("Sucursal", args.sucursalFilter);
-  if (args.estadoFilter) q = q.eq("Estado", args.estadoFilter);
-  if (args.searchText) q = q.ilike("Nombre Conductor", `%${args.searchText.replaceAll("%", "\\%")}%`);
-  q = q
-    .order(args.sortColumn, {
+  const baseQuery = () => {
+    let q = supabase.schema("vista").from(args.sourceName).select(SELECT, { count: "exact" });
+    if (args.sucursalFilter) q = q.eq("Sucursal", args.sucursalFilter);
+    if (args.estadoFilter) q = q.eq("Estado", args.estadoFilter);
+    if (args.searchText) q = q.ilike("Nombre Conductor", `%${args.searchText.replaceAll("%", "\\%")}%`);
+    return q;
+  };
+
+  let result = await baseQuery()
+    .order(sortColumnForSource, {
       ascending: args.ascending,
-      nullsFirst: args.nulls === "nullsfirst",
     })
     .range(from, to);
 
-  const { data, count, error } = await q;
+  if (result.error && isMissingColumnError(result.error)) {
+    console.warn("[moobiz-drivers-pendientes] ORDER_FINAL fallback sin ORDER por columna faltante:", {
+      source: args.sourceName,
+      attemptedOrder: orderClauseForSource,
+    });
+    result = await baseQuery().range(from, to);
+  }
+
+  const { data, count, error } = result;
   if (error) throw error;
 
   let sucursalesDistinct: string[] = [];
@@ -142,6 +184,7 @@ export async function GET(request: NextRequest) {
     }
     const sortColumn = sortSpec.orderColumn;
     const ascending = sortSpec.sortDir === "asc";
+    const orderClause = buildPostgrestOrderClause(sortColumn, sortSpec.sortDir);
 
     console.log("[moobiz-drivers-pendientes] GET params / sort resolved:", {
       page,
@@ -154,9 +197,10 @@ export async function GET(request: NextRequest) {
       rawNulls,
       sortColumn,
       ascending,
-      nulls: sortSpec.nulls,
+      sortDir: sortSpec.sortDir,
       usedFallback: sortSpec.usedFallback,
     });
+    console.log("[moobiz-drivers-pendientes] ORDER_FINAL:", orderClause);
 
     try {
       const mv = await queryFromSource({
@@ -168,7 +212,7 @@ export async function GET(request: NextRequest) {
         searchText,
         sortColumn,
         ascending,
-        nulls: sortSpec.nulls,
+        orderClause,
       });
       return NextResponse.json(
         successPayload(mv, {
@@ -178,7 +222,7 @@ export async function GET(request: NextRequest) {
         }),
       );
     } catch (mvError) {
-      const mvMsg = formatApiError(mvError);
+      const mvMsg = toErrorMessage(mvError);
       if (!isMissingRelationError(mvMsg)) throw mvError;
     }
 
@@ -191,7 +235,7 @@ export async function GET(request: NextRequest) {
       searchText,
       sortColumn,
       ascending,
-      nulls: sortSpec.nulls,
+      orderClause,
     });
     return NextResponse.json(
       successPayload(vw, {
@@ -205,7 +249,7 @@ export async function GET(request: NextRequest) {
       "[moobiz-drivers-pendientes] ERROR:",
       err instanceof Error ? err.stack : err,
     );
-    const message = err instanceof Error ? err.message : String(err);
+    const message = toErrorMessage(err);
     return NextResponse.json(
       { error: true, message, data: [], total: 0 },
       { status: 500 },

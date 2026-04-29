@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildPostgrestOrderClause,
   buildDatosPendientesQueryParams,
   DATOS_PENDIENTES_COLUMNS,
   normalizeSortDir, normalizeSortKey,
@@ -72,7 +73,7 @@ test("sort spec seguro: input peligroso cae a fallback permitido", () => {
     rawSortDir: "asc",
   });
   assert.equal(spec.sortKey, "n_servicios_30");
-  assert.equal(spec.orderColumn, "N Servicios <30");
+  assert.equal(spec.orderColumn, "n_servicios_30");
   assert.equal(spec.sortDir, "desc");
   assert.equal(spec.usedFallback, true);
 });
@@ -83,7 +84,7 @@ test("sort spec acepta claves compactas y amigables con nulls explícito", () =>
     rawSortDir: "desc",
     rawNulls: "nullsfirst",
   });
-  assert.equal(compact.orderColumn, "Vencimiento de SOAT");
+  assert.equal(compact.orderColumn, "vencimiento_soat");
   assert.equal(compact.nulls, "nullsfirst");
 
   const friendly = resolveDatosPendientesSort({
@@ -93,4 +94,44 @@ test("sort spec acepta claves compactas y amigables con nulls explícito", () =>
   assert.equal(friendly.sortKey, "nombre_conductor");
   assert.equal(friendly.sortDir, "asc");
   assert.equal(friendly.nulls, "nullslast");
+});
+
+test("rawSortBy con db column permitido usa n_servicios_30 en ORDER", () => {
+  const spec = resolveDatosPendientesSort({
+    rawSortBy: "n_servicios_30",
+    rawSortDir: "asc",
+  });
+  assert.equal(spec.orderColumn, "n_servicios_30");
+  assert.equal(buildPostgrestOrderClause(spec.orderColumn, spec.sortDir), "n_servicios_30.asc");
+  assert.equal(spec.usedFallback, false);
+});
+
+test("rawSortBy n_servicios_30 con sortDir desc construye ORDER correcto", () => {
+  const spec = resolveDatosPendientesSort({
+    rawSortBy: "n_servicios_30",
+    rawSortDir: "desc",
+  });
+  assert.equal(buildPostgrestOrderClause(spec.orderColumn, spec.sortDir), "n_servicios_30.desc");
+});
+
+test("human label y db key mapean al mismo db column para ORDER", () => {
+  const byDbKey = resolveDatosPendientesSort({
+    rawSortBy: "n_servicios_30",
+    rawSortDir: "desc",
+  });
+  const byLabel = resolveDatosPendientesSort({
+    rawSortBy: "N Servicios <30",
+    rawSortDir: "desc",
+  });
+  assert.equal(byDbKey.orderColumn, "n_servicios_30");
+  assert.equal(byLabel.orderColumn, "n_servicios_30");
+});
+
+test("rawSortBy inválido cae a fallback seguro y usedFallback=true", () => {
+  const spec = resolveDatosPendientesSort({
+    rawSortBy: "malcampo",
+    rawSortDir: "asc",
+  });
+  assert.equal(spec.orderColumn, "n_servicios_30");
+  assert.equal(spec.usedFallback, true);
 });

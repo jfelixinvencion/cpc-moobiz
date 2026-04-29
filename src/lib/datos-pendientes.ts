@@ -37,21 +37,21 @@ export const DATOS_PENDIENTES_COLUMNS: Array<{ key: DatosPendientesColumnKey; la
 ];
 
 export const DATOS_PENDIENTES_SORT_COLUMN_MAP: Record<DatosPendientesColumnKey, string> = {
-  id_conductor: "ID Conductor",
-  nombre_conductor: "Nombre Conductor",
-  n_servicios_30: "N Servicios <30",
-  sucursal: "Sucursal",
-  distrito: "En que distrito vive",
-  turno: "Turno",
-  vencimiento_brevete: "Vencimiento de Brevete",
-  vencimiento_revision_tecnica: "Vencimiento de Revisión Técnica",
-  vencimiento_soat: "Vencimiento de SOAT",
-  tipo_contribuyente: "Tipo de Contribuyente",
-  marcar_contabilidad: "Marcar si Moobiz realiza su contabilidad",
-  numero_ruc_factura: "Número Ruc Factura",
-  usuario_sunat: "Usuario Sunat",
-  clave_sol_sunat: "Clave Sol Sunat",
-  estado: "Estado",
+  id_conductor: "id_conductor",
+  nombre_conductor: "nombre_conductor",
+  n_servicios_30: "n_servicios_30",
+  sucursal: "sucursal",
+  distrito: "distrito_vive",
+  turno: "turno",
+  vencimiento_brevete: "vencimiento_brevete",
+  vencimiento_revision_tecnica: "vencimiento_revision_tecnica",
+  vencimiento_soat: "vencimiento_soat",
+  tipo_contribuyente: "tipo_contribuyente",
+  marcar_contabilidad: "marca_contabilidad_moobiz",
+  numero_ruc_factura: "numero_ruc_factura",
+  usuario_sunat: "usuario_sunat",
+  clave_sol_sunat: "clave_sol_sunat",
+  estado: "estado",
 };
 
 const DATOS_PENDIENTES_SORT_ALIASES: Record<string, DatosPendientesColumnKey> = {
@@ -147,6 +147,10 @@ export function resolveDatosPendientesSort(args: {
     nulls,
     usedFallback,
   };
+}
+
+export function buildPostgrestOrderClause(orderColumn: string, sortDir: DatosPendientesSortDir): string {
+  return `${orderColumn}.${sortDir}`;
 }
 
 export function buildDatosPendientesQueryParams(input: {

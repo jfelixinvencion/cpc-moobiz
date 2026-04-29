@@ -79,7 +79,7 @@ export function DatosPendientesTable() {
   const [searchDebounced, setSearchDebounced] = useState("");
   const [sucursalOptions, setSucursalOptions] = useState<string[]>([]);
 
-  const [sortBy, setSortBy] = useState<DatosPendientesColumnKey>("n_servicios_lt_30");
+  const [sortBy, setSortBy] = useState<DatosPendientesColumnKey>("n_servicios_30");
   const [sortDir, setSortDir] = useState<DatosPendientesSortDir>("desc");
 
   const [detailRow, setDetailRow] = useState<DatosPendientesRow | null>(null);
@@ -139,7 +139,7 @@ export function DatosPendientesTable() {
       return;
     }
     setSortBy(key);
-    setSortDir(key === "n_servicios_lt_30" ? "desc" : "asc");
+    setSortDir(key === "n_servicios_30" ? "desc" : "asc");
   };
 
   return (

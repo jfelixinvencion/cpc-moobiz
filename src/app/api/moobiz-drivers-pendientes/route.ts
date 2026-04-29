@@ -2,9 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { formatApiError } from "@/lib/format-api-error";
 import {
-  DATOS_PENDIENTES_SORT_COLUMN_MAP,
-  normalizeSortDir,
-  normalizeSortKey,
+  resolveDatosPendientesSort,
 } from "@/lib/datos-pendientes";
 import { assertQualityReadAccess } from "@/lib/panel-session";
 import { getSupabaseAdmin } from "@/lib/quality-audit";
@@ -45,6 +43,7 @@ async function queryFromSource(args: {
   searchText: string;
   sortColumn: string;
   ascending: boolean;
+  nulls: "nullsfirst" | "nullslast";
 }) {
   const supabase = getSupabaseAdmin();
   const from = (args.page - 1) * args.pageSize;
@@ -54,7 +53,12 @@ async function queryFromSource(args: {
   if (args.sucursalFilter) q = q.eq("Sucursal", args.sucursalFilter);
   if (args.estadoFilter) q = q.eq("Estado", args.estadoFilter);
   if (args.searchText) q = q.ilike("Nombre Conductor", `%${args.searchText.replaceAll("%", "\\%")}%`);
-  q = q.order(args.sortColumn, { ascending: args.ascending, nullsFirst: false }).range(from, to);
+  q = q
+    .order(args.sortColumn, {
+      ascending: args.ascending,
+      nullsFirst: args.nulls === "nullsfirst",
+    })
+    .range(from, to);
 
   const { data, count, error } = await q;
   if (error) throw error;
@@ -90,14 +94,24 @@ export async function GET(request: NextRequest) {
     const url = new URL(request.url);
     const page = Math.max(1, Number.parseInt(url.searchParams.get("page") ?? "1", 10) || 1);
     const pageSizeRaw = Number.parseInt(url.searchParams.get("pageSize") ?? "50", 10) || 50;
-    const pageSize = Math.min(200, Math.max(1, pageSizeRaw));
+    const pageSize = Math.min(100, Math.max(1, pageSizeRaw));
     const sucursalFilter = String(url.searchParams.get("sucursal") ?? "").trim();
     const estadoFilter = String(url.searchParams.get("estado") ?? "").trim();
     const searchText = String(url.searchParams.get("search") ?? "").trim();
-    const sortBy = normalizeSortKey(url.searchParams.get("sortBy"));
-    const sortDir = normalizeSortDir(url.searchParams.get("sortDir"));
-    const sortColumn = DATOS_PENDIENTES_SORT_COLUMN_MAP[sortBy];
-    const ascending = sortDir === "asc";
+    const sortSpec = resolveDatosPendientesSort({
+      rawSortBy: url.searchParams.get("sortBy"),
+      rawSortDir: url.searchParams.get("sortDir"),
+      rawNulls: url.searchParams.get("nulls"),
+    });
+    if (sortSpec.usedFallback) {
+      console.warn(
+        `[datos-pendientes] sortBy no permitido, usando fallback seguro n_servicios_30 desc: "${String(
+          url.searchParams.get("sortBy") ?? "",
+        )}"`,
+      );
+    }
+    const sortColumn = sortSpec.orderColumn;
+    const ascending = sortSpec.sortDir === "asc";
 
     try {
       const mv = await queryFromSource({
@@ -109,6 +123,7 @@ export async function GET(request: NextRequest) {
         searchText,
         sortColumn,
         ascending,
+        nulls: sortSpec.nulls,
       });
       return NextResponse.json({
         data: mv.data,
@@ -132,6 +147,7 @@ export async function GET(request: NextRequest) {
       searchText,
       sortColumn,
       ascending,
+        nulls: sortSpec.nulls,
     });
     return NextResponse.json({
       data: vw.data,

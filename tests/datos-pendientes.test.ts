@@ -4,8 +4,9 @@ import assert from "node:assert/strict";
 import {
   buildDatosPendientesQueryParams,
   DATOS_PENDIENTES_COLUMNS,
-  normalizeSortDir,
-  normalizeSortKey,
+  normalizeSortDir, normalizeSortKey,
+  parseSortByToken,
+  resolveDatosPendientesSort,
 } from "../src/lib/datos-pendientes.ts";
 
 test("render contract: columnas de Datos Pendientes en orden exacto", () => {
@@ -36,7 +37,7 @@ test("integration contract: query params aplican filtro + paginación + sort ser
     sucursalFilter: "Sede Centro",
     estadoFilter: "Pendiente",
     searchText: "juan",
-    sortBy: "n_servicios_lt_30",
+    sortBy: "n_servicios_30",
     sortDir: "desc",
   });
 
@@ -46,7 +47,7 @@ test("integration contract: query params aplican filtro + paginación + sort ser
   assert.equal(p.get("sucursal"), "Sede Centro");
   assert.equal(p.get("estado"), "Pendiente");
   assert.equal(p.get("search"), "juan");
-  assert.equal(p.get("sortBy"), "n_servicios_lt_30");
+  assert.equal(p.get("sortBy"), "n_servicios_30");
   assert.equal(p.get("sortDir"), "desc");
 });
 
@@ -54,5 +55,42 @@ test("normalizadores de sort usan defaults seguros", () => {
   assert.equal(normalizeSortDir("ASC"), "asc");
   assert.equal(normalizeSortDir("random"), "desc");
   assert.equal(normalizeSortKey("nombre_conductor"), "nombre_conductor");
-  assert.equal(normalizeSortKey("foo"), "n_servicios_lt_30");
+  assert.equal(normalizeSortKey("N Servicios <30"), "n_servicios_30");
+  assert.equal(normalizeSortKey("foo"), "n_servicios_30");
+});
+
+test("parsea sortBy compuesto sin ejecutar tokens peligrosos", () => {
+  const parsed = parseSortByToken("N Servicios <30.desc.nullslast");
+  assert.equal(parsed.sortByRaw, "N Servicios <30");
+  assert.equal(parsed.sortDirFromToken, "desc");
+  assert.equal(parsed.nullsFromToken, "nullslast");
+});
+
+test("sort spec seguro: input peligroso cae a fallback permitido", () => {
+  const spec = resolveDatosPendientesSort({
+    rawSortBy: `foo.desc;drop table x;--`,
+    rawSortDir: "asc",
+  });
+  assert.equal(spec.sortKey, "n_servicios_30");
+  assert.equal(spec.orderColumn, "N Servicios <30");
+  assert.equal(spec.sortDir, "desc");
+  assert.equal(spec.usedFallback, true);
+});
+
+test("sort spec acepta claves compactas y amigables con nulls explícito", () => {
+  const compact = resolveDatosPendientesSort({
+    rawSortBy: "vencimiento_soat",
+    rawSortDir: "desc",
+    rawNulls: "nullsfirst",
+  });
+  assert.equal(compact.orderColumn, "Vencimiento de SOAT");
+  assert.equal(compact.nulls, "nullsfirst");
+
+  const friendly = resolveDatosPendientesSort({
+    rawSortBy: "Nombre Conductor.asc.nullslast",
+    rawSortDir: "desc",
+  });
+  assert.equal(friendly.sortKey, "nombre_conductor");
+  assert.equal(friendly.sortDir, "asc");
+  assert.equal(friendly.nulls, "nullslast");
 });

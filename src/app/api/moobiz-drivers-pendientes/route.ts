@@ -10,7 +10,7 @@ import {
   normalizeDriverPendienteRows,
 } from "@/lib/moobiz-drivers-pendientes-normalize";
 import { assertQualityReadAccess } from "@/lib/panel-session";
-import { getSupabaseAdmin } from "@/lib/quality-audit";
+import { getSupabaseServerClient } from "@/lib/supabase-server";
 
 export const runtime = "nodejs";
 
@@ -62,6 +62,7 @@ function isMissingColumnError(err: unknown): boolean {
 }
 
 async function queryFromSource(args: {
+  sb: ReturnType<typeof getSupabaseServerClient>["client"];
   sourceName: "mv_moobiz_drivers_pendientes" | "vw_moobiz_drivers_pendientes";
   page: number;
   pageSize: number;
@@ -72,7 +73,7 @@ async function queryFromSource(args: {
   ascending: boolean;
   orderClause: string;
 }) {
-  const supabase = getSupabaseAdmin();
+  const supabase = args.sb;
   const from = (args.page - 1) * args.pageSize;
   const to = from + args.pageSize - 1;
   const sortColumnForSource =
@@ -159,6 +160,8 @@ function successPayload(
 export async function GET(request: NextRequest) {
   try {
     assertQualityReadAccess(request);
+    const { client: sb, usingServiceRole } = getSupabaseServerClient();
+    console.log("[moobiz-drivers-pendientes] USING_SERVICE_ROLE:", usingServiceRole);
 
     const url = new URL(request.url);
     const page = Math.max(1, Number.parseInt(url.searchParams.get("page") ?? "1", 10) || 1);
@@ -204,6 +207,7 @@ export async function GET(request: NextRequest) {
 
     try {
       const mv = await queryFromSource({
+        sb,
         sourceName: "mv_moobiz_drivers_pendientes",
         page,
         pageSize,
@@ -227,6 +231,7 @@ export async function GET(request: NextRequest) {
     }
 
     const vw = await queryFromSource({
+      sb,
       sourceName: "vw_moobiz_drivers_pendientes",
       page,
       pageSize,

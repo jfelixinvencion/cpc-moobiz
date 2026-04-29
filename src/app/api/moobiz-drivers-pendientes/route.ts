@@ -32,8 +32,6 @@ const SELECT = [
   `estado:"Estado"`,
 ].join(",");
 
-type DriverPendienteRow = Record<string, unknown>;
-
 function toErrorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (err && typeof err === "object" && "message" in err) {
@@ -61,8 +59,64 @@ function isMissingColumnError(err: unknown): boolean {
   return message.includes("does not exist") && message.includes("column");
 }
 
+function redactSupabaseKey(key: string): string {
+  const k = key.trim();
+  if (k.length < 16) return `[len=${k.length}]`;
+  return `${k.slice(0, 8)}…${k.slice(-4)} (len=${k.length})`;
+}
+
+/** Solo para diagnóstico: lee el claim `role` del JWT sin loguear el token completo. */
+function logJwtRoleFromServiceKey(url: string, key: string): void {
+  const parts = key.trim().split(".");
+  if (parts.length !== 3) {
+    console.log("[moobiz-drivers-pendientes] SUPABASE_KEY_SHAPE:", {
+      url,
+      segments: parts.length,
+      redacted: redactSupabaseKey(key),
+    });
+    return;
+  }
+  try {
+    const json = Buffer.from(parts[1], "base64url").toString("utf8");
+    const payload = JSON.parse(json) as { role?: string };
+    console.log("[moobiz-drivers-pendientes] SUPABASE_JWT_ROLE:", payload.role ?? "(missing)");
+  } catch {
+    console.log("[moobiz-drivers-pendientes] SUPABASE_JWT_ROLE: (no se pudo decodificar payload)");
+  }
+}
+
+function logSupabaseEnvForRoute(usingServiceRole: boolean): void {
+  const url =
+    process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() ||
+    process.env.SUPABASE_URL?.trim() ||
+    "";
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || "";
+  console.log("[moobiz-drivers-pendientes] SUPABASE_URL_IN_USE:", url || "(vacío)");
+  console.log("[moobiz-drivers-pendientes] SUPABASE_SERVICE_ROLE_KEY_REDACTED:", key ? redactSupabaseKey(key) : "(vacío)");
+  console.log(
+    "[moobiz-drivers-pendientes] RLS: PostgREST con service role no aplica políticas RLS al rol service_role (bypass). usingServiceRole=",
+    usingServiceRole,
+  );
+  if (url && key) logJwtRoleFromServiceKey(url, key);
+}
+
+async function probeMoobizDriversTable(sb: ReturnType<typeof getSupabaseServerClient>["client"]): Promise<void> {
+  const { data, error } = await sb.from("moobiz_drivers").select("id").limit(1);
+  if (error) {
+    console.warn("[moobiz-drivers-pendientes] PROBE moobiz_drivers FAILED:", {
+      code: (error as { code?: string }).code,
+      message: error.message,
+    });
+    return;
+  }
+  console.log("[moobiz-drivers-pendientes] PROBE moobiz_drivers OK:", {
+    rows: Array.isArray(data) ? data.length : 0,
+  });
+}
+
 async function queryFromSource(args: {
   sb: ReturnType<typeof getSupabaseServerClient>["client"];
+  usingServiceRole: boolean;
   sourceName: "mv_moobiz_drivers_pendientes" | "vw_moobiz_drivers_pendientes";
   page: number;
   pageSize: number;
@@ -74,6 +128,7 @@ async function queryFromSource(args: {
   orderClause: string;
 }) {
   const supabase = args.sb;
+  const usePublic = args.usingServiceRole;
   const from = (args.page - 1) * args.pageSize;
   const to = from + args.pageSize - 1;
   const sortColumnForSource =
@@ -87,6 +142,7 @@ async function queryFromSource(args: {
 
   console.log("[moobiz-drivers-pendientes] Supabase ORDER / range:", {
     source: args.sourceName,
+    schema: usePublic ? "public (sin .schema)" : "vista",
     sortColumn: sortColumnForSource,
     ascending: args.ascending,
     orderClause: orderClauseForSource,
@@ -94,10 +150,20 @@ async function queryFromSource(args: {
   });
 
   const baseQuery = () => {
-    let q = supabase.schema("vista").from(args.sourceName).select(SELECT, { count: "exact" });
-    if (args.sucursalFilter) q = q.eq("Sucursal", args.sucursalFilter);
-    if (args.estadoFilter) q = q.eq("Estado", args.estadoFilter);
-    if (args.searchText) q = q.ilike("Nombre Conductor", `%${args.searchText.replaceAll("%", "\\%")}%`);
+    let q = usePublic
+      ? supabase.from(args.sourceName).select("*", { count: "exact" })
+      : supabase.schema("vista").from(args.sourceName).select(SELECT, { count: "exact" });
+    if (args.sucursalFilter) {
+      q = usePublic ? q.eq("sucursal", args.sucursalFilter) : q.eq("Sucursal", args.sucursalFilter);
+    }
+    if (args.estadoFilter) {
+      q = usePublic ? q.eq("estado", args.estadoFilter) : q.eq("Estado", args.estadoFilter);
+    }
+    if (args.searchText) {
+      q = usePublic
+        ? q.ilike("nombre_conductor", `%${args.searchText.replaceAll("%", "\\%")}%`)
+        : q.ilike("Nombre Conductor", `%${args.searchText.replaceAll("%", "\\%")}%`);
+    }
     return q;
   };
 
@@ -119,12 +185,14 @@ async function queryFromSource(args: {
   if (error) throw error;
 
   let sucursalesDistinct: string[] = [];
-  const sucRes = await supabase
-    .schema("vista")
-    .from(args.sourceName)
-    .select(`sucursal:"Sucursal"`)
-    .not("Sucursal", "is", null)
-    .limit(5000);
+  const sucRes = usePublic
+    ? await supabase.from(args.sourceName).select("sucursal").not("sucursal", "is", null).limit(5000)
+    : await supabase
+        .schema("vista")
+        .from(args.sourceName)
+        .select(`sucursal:"Sucursal"`)
+        .not("Sucursal", "is", null)
+        .limit(5000);
   if (!sucRes.error) {
     sucursalesDistinct = Array.from(
       new Set(
@@ -162,6 +230,7 @@ export async function GET(request: NextRequest) {
     assertQualityReadAccess(request);
     const { client: sb, usingServiceRole } = getSupabaseServerClient();
     console.log("[moobiz-drivers-pendientes] USING_SERVICE_ROLE:", usingServiceRole);
+    logSupabaseEnvForRoute(usingServiceRole);
 
     const url = new URL(request.url);
     const page = Math.max(1, Number.parseInt(url.searchParams.get("page") ?? "1", 10) || 1);
@@ -208,6 +277,7 @@ export async function GET(request: NextRequest) {
     try {
       const mv = await queryFromSource({
         sb,
+        usingServiceRole,
         sourceName: "mv_moobiz_drivers_pendientes",
         page,
         pageSize,
@@ -222,7 +292,7 @@ export async function GET(request: NextRequest) {
         successPayload(mv, {
           page,
           pageSize,
-          source: "vista.mv_moobiz_drivers_pendientes",
+          source: usingServiceRole ? "public.mv_moobiz_drivers_pendientes" : "vista.mv_moobiz_drivers_pendientes",
         }),
       );
     } catch (mvError) {
@@ -232,6 +302,7 @@ export async function GET(request: NextRequest) {
 
     const vw = await queryFromSource({
       sb,
+      usingServiceRole,
       sourceName: "vw_moobiz_drivers_pendientes",
       page,
       pageSize,
@@ -246,7 +317,7 @@ export async function GET(request: NextRequest) {
       successPayload(vw, {
         page,
         pageSize,
-        source: "vista.vw_moobiz_drivers_pendientes",
+        source: usingServiceRole ? "public.vw_moobiz_drivers_pendientes" : "vista.vw_moobiz_drivers_pendientes",
       }),
     );
   } catch (err: unknown) {
@@ -255,6 +326,14 @@ export async function GET(request: NextRequest) {
       err instanceof Error ? err.stack : err,
     );
     const message = toErrorMessage(err);
+    if (/permission denied/i.test(message)) {
+      try {
+        const { client: sbProbe } = getSupabaseServerClient();
+        await probeMoobizDriversTable(sbProbe);
+      } catch (probeErr) {
+        console.warn("[moobiz-drivers-pendientes] PROBE moobiz_drivers skipped:", toErrorMessage(probeErr));
+      }
+    }
     return NextResponse.json(
       { error: true, message, data: [], total: 0 },
       { status: 500 },

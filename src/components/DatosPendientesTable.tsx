@@ -39,9 +39,11 @@ type ApiResponse = {
   page?: number;
   pageSize?: number;
   source?: string | null;
-  error?: string;
+  error?: boolean | string;
+  message?: string;
   hint?: string;
   sucursalOptions?: string[];
+  sucursalesDistinct?: string[];
 };
 
 function asText(v: unknown): string {
@@ -111,13 +113,22 @@ export function DatosPendientesTable() {
       });
       const res = await fetch(`/api/moobiz-drivers-pendientes?${query}`, { cache: "no-store" });
       const body = (await res.json()) as ApiResponse;
-      if (!res.ok) throw new Error(body.error || "No se pudo cargar Datos Pendientes.");
+      if (!res.ok) {
+        const msg =
+          typeof body.message === "string" && body.message.trim()
+            ? body.message
+            : "No se pudo cargar Datos Pendientes.";
+        throw new Error(msg);
+      }
       setRows(Array.isArray(body.data) ? body.data : []);
       setTotal(typeof body.total === "number" ? body.total : 0);
       setSource(typeof body.source === "string" ? body.source : null);
       setHint(typeof body.hint === "string" ? body.hint : null);
+      const branchOpts = Array.isArray(body.sucursalesDistinct)
+        ? body.sucursalesDistinct
+        : body.sucursalOptions;
       setSucursalOptions(
-        Array.isArray(body.sucursalOptions) ? body.sucursalOptions.filter((x) => String(x).trim()) : [],
+        Array.isArray(branchOpts) ? branchOpts.filter((x) => String(x).trim()) : [],
       );
     } catch (e) {
       setRows([]);

@@ -53,6 +53,14 @@ async function queryFromSource(args: {
   const from = (args.page - 1) * args.pageSize;
   const to = from + args.pageSize - 1;
 
+  console.log("[moobiz-drivers-pendientes] Supabase ORDER / range:", {
+    source: args.sourceName,
+    sortColumn: args.sortColumn,
+    ascending: args.ascending,
+    nullsFirst: args.nulls === "nullsfirst",
+    range: { from, to },
+  });
+
   let q = supabase.schema("vista").from(args.sourceName).select(SELECT, { count: "exact" });
   if (args.sucursalFilter) q = q.eq("Sucursal", args.sucursalFilter);
   if (args.estadoFilter) q = q.eq("Estado", args.estadoFilter);
@@ -91,6 +99,21 @@ async function queryFromSource(args: {
   };
 }
 
+function successPayload(
+  mv: { data: unknown[]; total: number; sucursalesDistinct: string[] },
+  meta: { page: number; pageSize: number; source: string },
+) {
+  return {
+    data: mv.data,
+    total: mv.total,
+    sucursalesDistinct: mv.sucursalesDistinct,
+    sucursalOptions: mv.sucursalesDistinct,
+    page: meta.page,
+    pageSize: meta.pageSize,
+    source: meta.source,
+  };
+}
+
 export async function GET(request: NextRequest) {
   try {
     assertQualityReadAccess(request);
@@ -102,20 +125,38 @@ export async function GET(request: NextRequest) {
     const sucursalFilter = String(url.searchParams.get("sucursal") ?? "").trim();
     const estadoFilter = String(url.searchParams.get("estado") ?? "").trim();
     const searchText = String(url.searchParams.get("search") ?? "").trim();
+    const rawSortBy = url.searchParams.get("sortBy");
+    const rawSortDir = url.searchParams.get("sortDir");
+    const rawNulls = url.searchParams.get("nulls");
     const sortSpec = resolveDatosPendientesSort({
-      rawSortBy: url.searchParams.get("sortBy"),
-      rawSortDir: url.searchParams.get("sortDir"),
-      rawNulls: url.searchParams.get("nulls"),
+      rawSortBy,
+      rawSortDir,
+      rawNulls,
     });
     if (sortSpec.usedFallback) {
       console.warn(
         `[datos-pendientes] sortBy no permitido, usando fallback seguro n_servicios_30 desc: "${String(
-          url.searchParams.get("sortBy") ?? "",
+          rawSortBy ?? "",
         )}"`,
       );
     }
     const sortColumn = sortSpec.orderColumn;
     const ascending = sortSpec.sortDir === "asc";
+
+    console.log("[moobiz-drivers-pendientes] GET params / sort resolved:", {
+      page,
+      pageSize,
+      sucursalFilter,
+      estadoFilter,
+      searchText,
+      rawSortBy,
+      rawSortDir,
+      rawNulls,
+      sortColumn,
+      ascending,
+      nulls: sortSpec.nulls,
+      usedFallback: sortSpec.usedFallback,
+    });
 
     try {
       const mv = await queryFromSource({
@@ -129,14 +170,13 @@ export async function GET(request: NextRequest) {
         ascending,
         nulls: sortSpec.nulls,
       });
-      return NextResponse.json({
-        data: mv.data,
-        total: mv.total,
-        page,
-        pageSize,
-        source: "vista.mv_moobiz_drivers_pendientes",
-        sucursalOptions: mv.sucursalesDistinct,
-      });
+      return NextResponse.json(
+        successPayload(mv, {
+          page,
+          pageSize,
+          source: "vista.mv_moobiz_drivers_pendientes",
+        }),
+      );
     } catch (mvError) {
       const mvMsg = formatApiError(mvError);
       if (!isMissingRelationError(mvMsg)) throw mvError;
@@ -151,33 +191,24 @@ export async function GET(request: NextRequest) {
       searchText,
       sortColumn,
       ascending,
-        nulls: sortSpec.nulls,
+      nulls: sortSpec.nulls,
     });
-    return NextResponse.json({
-      data: vw.data,
-      total: vw.total,
-      page,
-      pageSize,
-      source: "vista.vw_moobiz_drivers_pendientes",
-      sucursalOptions: vw.sucursalesDistinct,
-    });
-  } catch (error) {
-    const message = formatApiError(error);
-    const status = message.startsWith("AUTH_REQUIRED") ? 401 : 500;
     return NextResponse.json(
-      {
-        error: true,
-        message,
-        errorText: message,
-        hint: "Si la vista no existe en preview, valida esquema `vista` expuesto y objetos `vw_/mv_moobiz_drivers_pendientes`.",
-        data: [],
-        total: 0,
-        page: 1,
-        pageSize: 50,
-        source: null,
-        sucursalOptions: [],
-      },
-      { status },
+      successPayload(vw, {
+        page,
+        pageSize,
+        source: "vista.vw_moobiz_drivers_pendientes",
+      }),
+    );
+  } catch (err: unknown) {
+    console.error(
+      "[moobiz-drivers-pendientes] ERROR:",
+      err instanceof Error ? err.stack : err,
+    );
+    const message = err instanceof Error ? err.message : String(err);
+    return NextResponse.json(
+      { error: true, message, data: [], total: 0 },
+      { status: 500 },
     );
   }
 }

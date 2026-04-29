@@ -4,6 +4,10 @@ import { formatApiError } from "@/lib/format-api-error";
 import {
   resolveDatosPendientesSort,
 } from "@/lib/datos-pendientes";
+import {
+  normalizeCount,
+  normalizeDriverPendienteRows,
+} from "@/lib/moobiz-drivers-pendientes-normalize";
 import { assertQualityReadAccess } from "@/lib/panel-session";
 import { getSupabaseAdmin } from "@/lib/quality-audit";
 
@@ -81,8 +85,8 @@ async function queryFromSource(args: {
   }
 
   return {
-    data: (Array.isArray(data) ? data : []) as DriverPendienteRow[],
-    total: count ?? 0,
+    data: normalizeDriverPendienteRows(data as unknown),
+    total: normalizeCount(count),
     sucursalesDistinct,
   };
 }
@@ -162,7 +166,9 @@ export async function GET(request: NextRequest) {
     const status = message.startsWith("AUTH_REQUIRED") ? 401 : 500;
     return NextResponse.json(
       {
-        error: message,
+        error: true,
+        message,
+        errorText: message,
         hint: "Si la vista no existe en preview, valida esquema `vista` expuesto y objetos `vw_/mv_moobiz_drivers_pendientes`.",
         data: [],
         total: 0,

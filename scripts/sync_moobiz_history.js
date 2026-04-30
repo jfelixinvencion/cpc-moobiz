@@ -11,6 +11,8 @@
  *   DOTENV_CONFIG_PATH=.env.local node -r dotenv/config scripts/sync_moobiz_history.js --limit=20 --page=1 --print-sample
  */
 const { randomUUID } = require("node:crypto");
+const { ensureMoobizToken, redactToken } = require("../helpers/refresh_moobiz_token");
+const { fetchWithRetry } = require("../helpers/moobiz_fetch_retry");
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -32,7 +34,6 @@ const MOOBIZ_SERVICES_URL =
   `${MOOBIZ_API_BASE_URL}/api/admin/services`;
 const ADMIN_LOGIN_URL = `${MOOBIZ_API_BASE_URL}/api/admin/login/login`;
 const MOOBIZ_WEB_ORIGIN = MOOBIZ_API_BASE_URL;
-const MOOBIZ_TOKEN_KEY = "moobiz_token";
 /** Solo modo normal: marca de última corrida (no se usa como filtro). */
 const LAST_RUN_KEY = "moobiz_services_history_last_run";
 const LAST_DATE_UPDATED_KEY = "moobiz_services_history_last_date_updated";
@@ -90,12 +91,6 @@ const BACKFILL_LIMIT = PAGES_BACKFILL_MODE
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function redactToken(token) {
-  const t = String(token ?? "").trim();
-  if (t.length < 10) return `[len=${t.length}]`;
-  return `${t.slice(0, 6)}...${t.slice(-4)}`;
 }
 
 function supabaseHeaders(extra = {}) {
@@ -206,16 +201,9 @@ let moobizBearer = null;
 
 async function ensureMoobizBearer() {
   if (moobizBearer && moobizBearer.trim()) return moobizBearer;
-  const fromDb = await readSyncStateValue(MOOBIZ_TOKEN_KEY);
-  if (fromDb) {
-    moobizBearer = fromDb;
-    console.log("[history-sync] Bearer desde sync_state:", redactToken(moobizBearer));
-    return moobizBearer;
-  }
-
-  const fresh = await moobizAdminLogin();
-  await writeSyncStateValue(MOOBIZ_TOKEN_KEY, fresh);
+  const fresh = await ensureMoobizToken();
   moobizBearer = fresh;
+  console.log("[history-sync] Bearer resuelto por ensureMoobizToken:", redactToken(moobizBearer));
   return moobizBearer;
 }
 
@@ -445,16 +433,17 @@ async function fetchServicesPage({
       Authorization: authHeader.slice(0, 12) + "...",
       Accept: "application/json",
     });
-    return fetch(url, { method: "GET", headers: buildHeaders(), cache: "no-store" });
+    return fetchWithRetry(
+      url,
+      { method: "GET", headers: buildHeaders(), cache: "no-store" },
+      { label: "history-sync:moobiz", retries: 3, backoffMs: [1000, 2000, 4000] },
+    );
   };
 
   let res = await doFetch();
   if (res.status === 401 || res.status === 403) {
     console.warn(`[history-sync] Services HTTP ${res.status} (page ${page}) — renovando token…`);
-    const fresh = await moobizAdminLogin();
-    if (!skipSyncStateToken) {
-      await writeSyncStateValue(MOOBIZ_TOKEN_KEY, fresh);
-    }
+    const fresh = skipSyncStateToken ? await ensureMoobizBearerNoSyncState() : await ensureMoobizToken();
     moobizBearer = fresh;
     res = await doFetch();
     if (res.status === 401 || res.status === 403) {

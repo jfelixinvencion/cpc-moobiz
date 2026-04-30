@@ -2,19 +2,16 @@
  * Sync incremental de logs Moobiz → Supabase.
  * Token: public.sync_state (key moobiz_token); renovación automática en 401/403 vía login admin.
  */
-const { randomUUID } = require("node:crypto");
+const { ensureMoobizToken, redactToken } = require("../helpers/refresh_moobiz_token");
+const { fetchWithRetry } = require("../helpers/moobiz_fetch_retry");
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const MOOBIZ_EMAIL = process.env.MOOBIZ_EMAIL;
-const MOOBIZ_PASSWORD = process.env.MOOBIZ_PASSWORD;
 
 const MOOBIZ_LOGS_URL =
   (process.env.MOOBIZ_LOGS_URL && String(process.env.MOOBIZ_LOGS_URL).trim()) ||
   "https://app.moobiz.pe/api/admin/logs";
 
-const ADMIN_LOGIN_URL = "https://app.moobiz.pe/api/admin/login/login";
-const MOOBIZ_TOKEN_KEY = "moobiz_token";
 
 const CHROME_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -26,13 +23,6 @@ const SUPABASE_BATCH_SIZE = 200;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/** Nunca loguear el token completo en Actions. */
-function redactToken(token) {
-  const t = String(token ?? "").trim();
-  if (t.length < 10) return `[len=${t.length}]`;
-  return `${t.slice(0, 6)}...${t.slice(-4)}`;
 }
 
 function supabaseHeaders(extra = {}) {
@@ -52,96 +42,6 @@ async function fetchJsonOrThrow(url, options, label) {
   return raw ? JSON.parse(raw) : null;
 }
 
-async function readMoobizTokenFromSyncState() {
-  const rows = await fetchJsonOrThrow(
-    `${SUPABASE_URL}/rest/v1/sync_state?key=eq.${encodeURIComponent(MOOBIZ_TOKEN_KEY)}&select=value`,
-    { headers: supabaseHeaders() },
-    "Read sync_state moobiz_token",
-  );
-  if (!Array.isArray(rows) || rows.length === 0) return "";
-  const v = rows[0].value;
-  return typeof v === "string" ? v.trim() : "";
-}
-
-async function writeMoobizTokenToSyncState(token) {
-  const trimmed = String(token).trim();
-  if (!trimmed) throw new Error("writeMoobizTokenToSyncState: token vacío");
-  await fetchJsonOrThrow(
-    `${SUPABASE_URL}/rest/v1/sync_state`,
-    {
-      method: "POST",
-      headers: supabaseHeaders({
-        "Content-Type": "application/json",
-        Prefer: "resolution=merge-duplicates",
-      }),
-      body: JSON.stringify({ key: MOOBIZ_TOKEN_KEY, value: trimmed }),
-    },
-    "Upsert sync_state moobiz_token",
-  );
-}
-
-async function moobizAdminLogin() {
-  const username = typeof MOOBIZ_EMAIL === "string" ? MOOBIZ_EMAIL.trim() : "";
-  const password = typeof MOOBIZ_PASSWORD === "string" ? MOOBIZ_PASSWORD.trim() : "";
-  if (!username || !password) {
-    throw new Error(
-      "Faltan MOOBIZ_EMAIL o MOOBIZ_PASSWORD (necesarios para renovar token cuando expire o no exista en sync_state).",
-    );
-  }
-
-  const body = {
-    username,
-    password,
-    uuid: randomUUID(),
-    language: "es",
-    os: "Windows",
-    os_version: "10",
-    device_brand: "Chrome",
-    device_model: "147.0.0.0",
-    app_version_code: 193,
-    time_zone_offset: -5,
-    user_agent: CHROME_UA,
-    country_code: "US",
-  };
-
-  console.log("[sync] POST admin/login/login (usuario redactado)…");
-
-  const res = await fetch(ADMIN_LOGIN_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      Origin: "https://app.moobiz.pe",
-      Referer: "https://app.moobiz.pe/",
-      "User-Agent": CHROME_UA,
-    },
-    body: JSON.stringify(body),
-  });
-
-  const text = await res.text();
-  if (!res.ok) {
-    throw new Error(`MOOBIZ_LOGIN_FAILED: HTTP ${res.status} — ${text.slice(0, 400)}`);
-  }
-
-  let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new Error(`MOOBIZ_LOGIN_FAILED: respuesta no JSON — ${text.slice(0, 300)}`);
-  }
-
-  if (parsed.ok !== true || typeof parsed.token !== "string" || !parsed.token.trim()) {
-    const msg = typeof parsed.msg === "string" ? parsed.msg : "";
-    throw new Error(
-      `MOOBIZ_LOGIN_FAILED: sin token válido${msg ? ` — ${msg}` : ""} — ${text.slice(0, 280)}`,
-    );
-  }
-
-  const token = parsed.token.trim();
-  console.log("[sync] Login admin OK, token", redactToken(token));
-  return token;
-}
-
 /**
  * Bearer actual en memoria (puede renovarse tras 401/403 en cualquier página).
  * @type {string | null}
@@ -150,19 +50,9 @@ let moobizBearer = null;
 
 async function ensureMoobizBearerInitial() {
   if (moobizBearer && moobizBearer.trim()) return moobizBearer;
-
-  const fromDb = await readMoobizTokenFromSyncState();
-  if (fromDb) {
-    moobizBearer = fromDb;
-    console.log("[sync] Bearer desde sync_state:", redactToken(moobizBearer));
-    return moobizBearer;
-  }
-
-  console.log("[sync] No hay moobiz_token en DB; login inicial…");
-  const t = await moobizAdminLogin();
-  await writeMoobizTokenToSyncState(t);
+  const t = await ensureMoobizToken();
   moobizBearer = t;
-  console.log("[sync] Token persistido:", redactToken(t));
+  console.log("[sync] Bearer resuelto por ensureMoobizToken:", redactToken(t));
   return moobizBearer;
 }
 
@@ -179,13 +69,17 @@ async function fetchMoobizLogsPageJson(page) {
     Accept: "application/json",
   });
 
-  const doFetch = () => fetch(url, { headers: buildHeaders(), cache: "no-store" });
+  const doFetch = () =>
+    fetchWithRetry(
+      url,
+      { headers: buildHeaders(), cache: "no-store" },
+      { label: "logs-sync:moobiz", retries: 3, backoffMs: [1000, 2000, 4000] },
+    );
 
   let res = await doFetch();
   if (res.status === 401 || res.status === 403) {
-    console.warn(`[sync] Logs HTTP ${res.status} (página ${page}) — renovando token…`);
-    const t = await moobizAdminLogin();
-    await writeMoobizTokenToSyncState(t);
+    console.warn(`[sync] Logs HTTP ${res.status} (página ${page}) — renovando token con ensureMoobizToken()…`);
+    const t = await ensureMoobizToken();
     moobizBearer = t;
     console.log("[sync] Token renovado:", redactToken(t));
     res = await doFetch();

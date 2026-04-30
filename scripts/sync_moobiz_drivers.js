@@ -7,6 +7,7 @@
  */
 const path = require("node:path");
 const { ensureMoobizToken, redactToken } = require("../helpers/refresh_moobiz_token");
+const { fetchWithRetry } = require("../helpers/moobiz_fetch_retry");
 
 try {
   require("dotenv").config({ path: path.join(__dirname, "..", ".env.local") });
@@ -154,11 +155,15 @@ async function fetchDriversSingleLimit(token, limit) {
 
   let bearer = token;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const res = await fetch(url.toString(), {
-      method: "GET",
-      headers: driverHeaders(bearer),
-      cache: "no-store",
-    });
+    const res = await fetchWithRetry(
+      url.toString(),
+      {
+        method: "GET",
+        headers: driverHeaders(bearer),
+        cache: "no-store",
+      },
+      { label: "drivers-sync:moobiz", retries: 3, backoffMs: [1000, 2000, 4000] },
+    );
     const text = await res.text();
 
     if (responseLooksLikeAuthFailure(res, text)) {

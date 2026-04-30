@@ -5,8 +5,8 @@
  *
  * Token: `MOOBIZ_DRIVERS_TOKEN` o `sync_state.moobiz_token` + login admin.
  */
-const { randomUUID } = require("node:crypto");
 const path = require("node:path");
+const { ensureMoobizToken, redactToken } = require("../helpers/refresh_moobiz_token");
 
 try {
   require("dotenv").config({ path: path.join(__dirname, "..", ".env.local") });
@@ -17,16 +17,11 @@ try {
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const MOOBIZ_EMAIL = process.env.MOOBIZ_EMAIL;
-const MOOBIZ_PASSWORD = process.env.MOOBIZ_PASSWORD;
 const MOOBIZ_DRIVERS_TOKEN = process.env.MOOBIZ_DRIVERS_TOKEN;
 
 const DRIVERS_BASE_URL =
   (process.env.MOOBIZ_DRIVERS_URL && String(process.env.MOOBIZ_DRIVERS_URL).trim()) ||
   "https://app.moobiz.pe/api/admin/drivers";
-
-const ADMIN_LOGIN_URL = "https://app.moobiz.pe/api/admin/login/login";
-const MOOBIZ_TOKEN_KEY = "moobiz_token";
 
 const PAGE_SIZE_RAW = Number.parseInt(String(process.env.MOOBIZ_DRIVERS_PAGE_SIZE ?? "3000"), 10);
 const PAGE_SIZE =
@@ -34,12 +29,6 @@ const PAGE_SIZE =
 
 const CHROME_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-
-function redactToken(token) {
-  const t = String(token ?? "").trim();
-  if (t.length < 10) return `[len=${t.length}]`;
-  return `${t.slice(0, 6)}...${t.slice(-4)}`;
-}
 
 function supabaseHeaders(extra = {}) {
   return {
@@ -58,91 +47,6 @@ async function fetchJsonOrThrow(url, options, label) {
   return raw ? JSON.parse(raw) : null;
 }
 
-async function readSyncStateValue(key) {
-  const rows = await fetchJsonOrThrow(
-    `${SUPABASE_URL}/rest/v1/sync_state?key=eq.${encodeURIComponent(key)}&select=value`,
-    { headers: supabaseHeaders() },
-    `Read sync_state ${key}`,
-  );
-  if (!Array.isArray(rows) || rows.length === 0) return "";
-  const v = rows[0].value;
-  return typeof v === "string" ? v.trim() : "";
-}
-
-async function writeSyncStateValue(key, value) {
-  const trimmed = String(value ?? "").trim();
-  await fetchJsonOrThrow(
-    `${SUPABASE_URL}/rest/v1/sync_state`,
-    {
-      method: "POST",
-      headers: supabaseHeaders({
-        "Content-Type": "application/json",
-        Prefer: "resolution=merge-duplicates",
-      }),
-      body: JSON.stringify({ key, value: trimmed }),
-    },
-    `Upsert sync_state ${key}`,
-  );
-}
-
-async function moobizAdminLogin() {
-  const username = typeof MOOBIZ_EMAIL === "string" ? MOOBIZ_EMAIL.trim() : "";
-  const password = typeof MOOBIZ_PASSWORD === "string" ? MOOBIZ_PASSWORD.trim() : "";
-  if (!username || !password) {
-    throw new Error("Faltan MOOBIZ_EMAIL o MOOBIZ_PASSWORD para obtener token de Moobiz.");
-  }
-
-  const body = {
-    username,
-    password,
-    uuid: randomUUID(),
-    language: "es",
-    os: "Windows",
-    os_version: "10",
-    device_brand: "Chrome",
-    device_model: "147.0.0.0",
-    app_version_code: 193,
-    time_zone_offset: -5,
-    user_agent: CHROME_UA,
-    country_code: "US",
-  };
-
-  const res = await fetch(ADMIN_LOGIN_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      Origin: "https://app.moobiz.pe",
-      Referer: "https://app.moobiz.pe/",
-      "User-Agent": CHROME_UA,
-    },
-    body: JSON.stringify(body),
-  });
-
-  const text = await res.text();
-  if (!res.ok) {
-    throw new Error(`MOOBIZ_LOGIN_FAILED: HTTP ${res.status} — ${text.slice(0, 400)}`);
-  }
-
-  let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new Error(`MOOBIZ_LOGIN_FAILED: respuesta no JSON — ${text.slice(0, 300)}`);
-  }
-
-  if (parsed.ok !== true || typeof parsed.token !== "string" || !parsed.token.trim()) {
-    const msg = typeof parsed.msg === "string" ? parsed.msg : "";
-    throw new Error(
-      `MOOBIZ_LOGIN_FAILED: sin token válido${msg ? ` — ${msg}` : ""} — ${text.slice(0, 280)}`,
-    );
-  }
-
-  const token = parsed.token.trim();
-  console.log("[drivers-sync] Login admin OK, token", redactToken(token));
-  return token;
-}
-
 let moobizBearer = null;
 
 async function ensureMoobizBearer() {
@@ -153,16 +57,9 @@ async function ensureMoobizBearer() {
   }
 
   if (moobizBearer && moobizBearer.trim()) return moobizBearer;
-  const fromDb = await readSyncStateValue(MOOBIZ_TOKEN_KEY);
-  if (fromDb) {
-    moobizBearer = fromDb;
-    console.log("[drivers-sync] Bearer desde sync_state:", redactToken(moobizBearer));
-    return moobizBearer;
-  }
-
-  const fresh = await moobizAdminLogin();
-  await writeSyncStateValue(MOOBIZ_TOKEN_KEY, fresh);
+  const fresh = await ensureMoobizToken();
   moobizBearer = fresh;
+  console.log("[drivers-sync] Bearer resuelto por ensureMoobizToken:", redactToken(moobizBearer));
   return moobizBearer;
 }
 
@@ -269,10 +166,9 @@ async function fetchDriversSingleLimit(token, limit) {
         throw new Error(AUTH_401_AFTER_REFRESH_MSG);
       }
       console.warn(
-        `[drivers-sync] Sesión/token inválido (HTTP ${res.status} o ok!=true auth) — login + sync_state y reintento…`,
+        `[drivers-sync] Sesión/token inválido (HTTP ${res.status} o ok!=true auth) — ensureMoobizToken() y reintento…`,
       );
-      const fresh = await moobizAdminLogin();
-      await writeSyncStateValue(MOOBIZ_TOKEN_KEY, fresh);
+      const fresh = await ensureMoobizToken();
       moobizBearer = fresh;
       bearer = fresh;
       continue;
@@ -393,6 +289,18 @@ async function sync() {
   console.log(
     `[drivers-sync] GET único limit=${PAGE_SIZE} (MOOBIZ_DRIVERS_PAGE_SIZE), modo=reemplazo_total`,
   );
+  await insertSyncMonitor({
+    action: "drivers_fetch",
+    status: "running",
+    records_procesados: 0,
+    records_inserted: 0,
+    registros_nuevos_estimados: null,
+    registros_actualizados_estimados: null,
+    reason_for_stop: "fetch_start",
+    pages_queried: 0,
+    last_id: "moobiz_drivers",
+    error_message: null,
+  });
 
   try {
     const dl = await downloadAllDriversDeduped(token);
@@ -438,6 +346,7 @@ async function sync() {
     const validationOk = validationErrors.length === 0;
 
     await insertSyncMonitor({
+      action: "drivers_fetch",
       status: validationOk ? "success" : "error",
       records_procesados: dl.uniqueCount,
       records_inserted: inserted,
@@ -447,6 +356,18 @@ async function sync() {
       pages_queried: pagesQueried,
       last_id: "moobiz_drivers",
       error_message: validationOk ? null : validationErrors.join(" "),
+    });
+    await insertSyncMonitor({
+      action: "drivers_fetch",
+      status: "success",
+      records_procesados: dl.uniqueCount,
+      records_inserted: inserted,
+      registros_nuevos_estimados: null,
+      registros_actualizados_estimados: null,
+      reason_for_stop: "fetch_end",
+      pages_queried: pagesQueried,
+      last_id: "moobiz_drivers",
+      error_message: null,
     });
 
     console.log(
@@ -473,6 +394,7 @@ async function sync() {
       msg === AUTH_401_AFTER_REFRESH_MSG || msg.includes(AUTH_401_AFTER_REFRESH_MSG);
     try {
       await insertSyncMonitor({
+        action: "drivers_fetch",
         status: "error",
         records_procesados: 0,
         records_inserted: 0,

@@ -2,7 +2,7 @@ name: sync-logs
 
 on:
   schedule:
-    - cron: "10 3 * * *"
+    - cron: "0 * * * *"
   workflow_dispatch:
 
 jobs:
@@ -11,6 +11,7 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
       MOOBIZ_TOKEN: ${{ secrets.MOOBIZ_TOKEN }}
       MOOBIZ_EMAIL: ${{ secrets.MOOBIZ_EMAIL }}
       MOOBIZ_PASSWORD: ${{ secrets.MOOBIZ_PASSWORD }}
@@ -25,4 +26,4 @@ jobs:
       - name: Preflight env check
         run: npm run check:env
       - name: Run sync logs
-        run: node scripts/sync_moobiz_logs_incremental.js
+        run: node -r dotenv/config scripts/sync_moobiz_logs_incremental.js

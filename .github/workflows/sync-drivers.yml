@@ -1,8 +1,6 @@
 name: sync-drivers
 
 on:
-  schedule:
-    - cron: "0 3 * * *"
   workflow_dispatch:
 
 jobs:
@@ -11,6 +9,7 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
       MOOBIZ_TOKEN: ${{ secrets.MOOBIZ_TOKEN }}
       MOOBIZ_EMAIL: ${{ secrets.MOOBIZ_EMAIL }}
       MOOBIZ_PASSWORD: ${{ secrets.MOOBIZ_PASSWORD }}

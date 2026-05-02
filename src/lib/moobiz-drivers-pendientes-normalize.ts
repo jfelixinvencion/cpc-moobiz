@@ -4,6 +4,7 @@ export type DriverPendienteRow = Record<string, unknown>;
 export const VISTA_MOOBIZ_DRIVERS_PENDIENTES_LABELS = {
   id_conductor: "ID Conductor",
   nombre_conductor: "Nombre Conductor",
+  global: "GLOBAL",
   n_servicios_lt_30: "N Servicios <30",
   sucursal: "Sucursal",
   distrito_vive: "En que distrito vive",
@@ -26,6 +27,7 @@ export function mapVistaMoobizDriversPendientesRow(row: Record<string, unknown>)
   return {
     id_conductor: g(L.id_conductor),
     nombre_conductor: g(L.nombre_conductor),
+    global: g(L.global),
     n_servicios_lt_30: g(L.n_servicios_lt_30),
     sucursal: g(L.sucursal),
     distrito_vive: g(L.distrito_vive),
@@ -72,6 +74,7 @@ export function normalizeDriverPendienteRow(raw: unknown): DriverPendienteRow {
   return {
     id_conductor: toNullableText(obj.id_conductor),
     nombre_conductor: toNullableText(obj.nombre_conductor),
+    global: toNullableText(obj.global),
     n_servicios_lt_30: toNullableNumber(obj.n_servicios_lt_30) ?? 0,
     sucursal: toNullableText(obj.sucursal),
     distrito_vive: toNullableText(obj.distrito_vive),

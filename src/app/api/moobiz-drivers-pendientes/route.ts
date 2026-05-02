@@ -1,3 +1,7 @@
+/**
+ * Route Handler exclusivo de servidor. No exportar ningún cliente Supabase ni
+ * importar este módulo desde componentes cliente; el navegador solo usa `fetch` a esta ruta.
+ */
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
@@ -15,23 +19,18 @@ import { assertQualityReadAccess } from "@/lib/panel-session";
 
 export const runtime = "nodejs";
 
-const EXCEL_VIEW = "vw_moobiz_drivers_excel" as const;
-
-/** Cliente Supabase admin (service role); solo Route Handler Node — no importar desde cliente. */
+/** Cliente admin (service role), no exportado — solo uso interno de este archivo. */
 let supabaseAdminSingleton: SupabaseClient | null = null;
 function getSupabaseAdmin(): SupabaseClient {
   if (supabaseAdminSingleton) return supabaseAdminSingleton;
-  const supabaseUrl =
-    process.env.SUPABASE_URL?.trim() || process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() || "";
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || "";
-  if (!supabaseUrl || !serviceRoleKey) {
-    throw new Error(
-      "Faltan SUPABASE_URL (o NEXT_PUBLIC_SUPABASE_URL) y SUPABASE_SERVICE_ROLE_KEY.",
-    );
+  if (!process.env.SUPABASE_URL?.trim() || !process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()) {
+    throw new Error("Faltan SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY.");
   }
-  supabaseAdminSingleton = createClient(supabaseUrl, serviceRoleKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
+  supabaseAdminSingleton = createClient(
+    process.env.SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { persistSession: false, autoRefreshToken: false } },
+  );
   return supabaseAdminSingleton;
 }
 
@@ -96,10 +95,7 @@ function logJwtRoleFromServiceKey(url: string, key: string): void {
 }
 
 function logSupabaseEnvForRoute(usingServiceRole: boolean): void {
-  const url =
-    process.env.SUPABASE_URL?.trim() ||
-    process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() ||
-    "";
+  const url = process.env.SUPABASE_URL?.trim() || "";
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || "";
   console.log("[moobiz-drivers-pendientes] SUPABASE_URL_IN_USE:", url || "(vacío)");
   console.log("[moobiz-drivers-pendientes] SUPABASE_SERVICE_ROLE_KEY_REDACTED:", key ? redactSupabaseKey(key) : "(vacío)");
@@ -147,7 +143,7 @@ async function queryExcelView(args: {
 
   console.log("[moobiz-drivers-pendientes] ORDER_COLUMN_SENT_TO_SUPABASE:", sortColumnForSource);
   console.log("[moobiz-drivers-pendientes] Supabase ORDER / range:", {
-    source: EXCEL_VIEW,
+    source: "vw_moobiz_drivers_excel",
     schema: "vista",
     sortColumn: sortColumnForSource,
     ascending: args.ascending,
@@ -156,7 +152,7 @@ async function queryExcelView(args: {
   });
 
   const baseQuery = () => {
-    let q = supabase.schema("vista").from(EXCEL_VIEW).select("*", { count: "exact" });
+    let q = supabase.schema('vista').from('vw_moobiz_drivers_excel').select("*", { count: "exact" });
     if (args.sucursalFilter) q = q.eq("Sucursal", args.sucursalFilter);
     if (args.statusFilter) q = q.eq("Status", args.statusFilter);
     if (args.globalFilter) q = q.eq("GLOBAL", args.globalFilter);
@@ -174,7 +170,7 @@ async function queryExcelView(args: {
 
   if (result.error && isMissingColumnError(result.error)) {
     console.warn("[moobiz-drivers-pendientes] ORDER_FINAL fallback sin ORDER por columna faltante:", {
-      source: EXCEL_VIEW,
+      source: "vw_moobiz_drivers_excel",
       attemptedOrder: orderClauseForSource,
     });
     result = await baseQuery().range(from, to);
@@ -189,8 +185,8 @@ async function queryExcelView(args: {
 
   let sucursalesDistinct: string[] = [];
   const sucRes = await supabase
-    .schema("vista")
-    .from(EXCEL_VIEW)
+    .schema('vista')
+    .from('vw_moobiz_drivers_excel')
     .select(`sucursal:"Sucursal"`)
     .not("Sucursal", "is", null)
     .limit(5000);
@@ -306,7 +302,7 @@ export async function GET(request: NextRequest) {
       successPayload(result, {
         page,
         pageSize,
-        source: `vista.${EXCEL_VIEW}`,
+        source: "vista.vw_moobiz_drivers_excel",
       }),
     );
   } catch (err: unknown) {

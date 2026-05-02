@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { formatApiError } from "@/lib/format-api-error";
 import {
   buildPostgrestOrderClause,
+  parseGlobalFilterParam,
   resolveDatosPendientesSort,
 } from "@/lib/datos-pendientes";
 import {
@@ -116,6 +117,7 @@ async function queryFromSource(args: {
   pageSize: number;
   sucursalFilter: string;
   estadoFilter: string;
+  globalFilter: string;
   searchText: string;
   sortColumn: string;
   ascending: boolean;
@@ -147,6 +149,7 @@ async function queryFromSource(args: {
       .select("*", { count: "exact" });
     if (args.sucursalFilter) q = q.eq("Sucursal", args.sucursalFilter);
     if (args.estadoFilter) q = q.eq("Estado", args.estadoFilter);
+    if (args.globalFilter) q = q.eq("GLOBAL", args.globalFilter);
     if (args.searchText) {
       q = q.ilike("Nombre Conductor", `%${args.searchText.replaceAll("%", "\\%")}%`);
     }
@@ -227,6 +230,7 @@ export async function GET(request: NextRequest) {
     const sucursalFilter = String(url.searchParams.get("sucursal") ?? "").trim();
     const estadoFilter = String(url.searchParams.get("estado") ?? "").trim();
     const searchText = String(url.searchParams.get("search") ?? "").trim();
+    const globalFilter = parseGlobalFilterParam(url.searchParams.get("global"));
     const rawSortBy = url.searchParams.get("sortBy");
     const rawSortDir = url.searchParams.get("sortDir");
     const rawNulls = url.searchParams.get("nulls");
@@ -251,6 +255,7 @@ export async function GET(request: NextRequest) {
       pageSize,
       sucursalFilter,
       estadoFilter,
+      globalFilter,
       searchText,
       rawSortBy,
       rawSortDir,
@@ -275,6 +280,7 @@ export async function GET(request: NextRequest) {
         pageSize,
         sucursalFilter,
         estadoFilter,
+        globalFilter,
         searchText,
         sortColumn,
         ascending,
@@ -299,6 +305,7 @@ export async function GET(request: NextRequest) {
       pageSize,
       sucursalFilter,
       estadoFilter,
+      globalFilter,
       searchText,
       sortColumn,
       ascending,

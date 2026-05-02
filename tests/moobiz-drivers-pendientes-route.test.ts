@@ -47,6 +47,7 @@ test("mapea filas de vista con etiquetas legibles a campos del frontend", () => 
     {
       "ID Conductor": 99,
       "Nombre Conductor": "María López",
+      GLOBAL: "LIMA",
       "N Servicios <30": "3",
       Sucursal: "Centro",
       "En que distrito vive": "Lima",
@@ -65,9 +66,53 @@ test("mapea filas de vista con etiquetas legibles a campos del frontend", () => 
   assert.equal(rows.length, 1);
   assert.equal(rows[0].id_conductor, "99");
   assert.equal(rows[0].nombre_conductor, "María López");
+  assert.equal(rows[0].global, "LIMA");
   assert.equal(rows[0].n_servicios_lt_30, 3);
   assert.equal(rows[0].sucursal, "Centro");
   assert.equal(rows[0].distrito_vive, "Lima");
   assert.equal(rows[0].marca_contabilidad_moobiz, "Sí");
   assert.equal(rows[0].estado, "Pendiente");
+});
+
+test("contrato filtro GLOBAL: todas las filas normalizadas comparten el mismo valor GLOBAL", () => {
+  const rows = normalizeDriverPendienteRowsFromVistaLabels([
+    {
+      "ID Conductor": 1,
+      "Nombre Conductor": "A",
+      GLOBAL: "LIMA",
+      "N Servicios <30": 0,
+      Sucursal: "X",
+      "En que distrito vive": "",
+      Turno: "",
+      "Vencimiento de Brevete": "",
+      "Vencimiento de Revisión Técnica": "",
+      "Vencimiento de SOAT": "",
+      "Tipo de Contribuyente": "",
+      "Marcar si Moobiz realiza su contabilidad": "",
+      "Número Ruc Factura": "",
+      "Usuario Sunat": "",
+      "Clave Sol Sunat": "",
+      Estado: "Pendiente",
+    },
+    {
+      "ID Conductor": 2,
+      "Nombre Conductor": "B",
+      GLOBAL: "LIMA",
+      "N Servicios <30": 1,
+      Sucursal: "Y",
+      "En que distrito vive": "",
+      Turno: "",
+      "Vencimiento de Brevete": "",
+      "Vencimiento de Revisión Técnica": "",
+      "Vencimiento de SOAT": "",
+      "Tipo de Contribuyente": "",
+      "Marcar si Moobiz realiza su contabilidad": "",
+      "Número Ruc Factura": "",
+      "Usuario Sunat": "",
+      "Clave Sol Sunat": "",
+      Estado: "Pendiente",
+    },
+  ]);
+  assert.equal(rows.length, 2);
+  assert.ok(rows.every((r) => r.global === "LIMA"));
 });

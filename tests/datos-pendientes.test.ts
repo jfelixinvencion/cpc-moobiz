@@ -5,7 +5,9 @@ import {
   buildPostgrestOrderClause,
   buildDatosPendientesQueryParams,
   DATOS_PENDIENTES_COLUMNS,
-  normalizeSortDir, normalizeSortKey,
+  normalizeSortDir,
+  normalizeSortKey,
+  parseGlobalFilterParam,
   parseSortByToken,
   resolveDatosPendientesSort,
 } from "../src/lib/datos-pendientes.ts";
@@ -37,6 +39,7 @@ test("integration contract: query params aplican filtro + paginación + sort ser
     pageSize: 50,
     sucursalFilter: "Sede Centro",
     estadoFilter: "Pendiente",
+    globalFilter: "LIMA",
     searchText: "juan",
     sortBy: "n_servicios_30",
     sortDir: "desc",
@@ -47,9 +50,32 @@ test("integration contract: query params aplican filtro + paginación + sort ser
   assert.equal(p.get("pageSize"), "50");
   assert.equal(p.get("sucursal"), "Sede Centro");
   assert.equal(p.get("estado"), "Pendiente");
+  assert.equal(p.get("global"), "LIMA");
   assert.equal(p.get("search"), "juan");
   assert.equal(p.get("sortBy"), "n_servicios_30");
   assert.equal(p.get("sortDir"), "desc");
+});
+
+test("parseGlobalFilterParam acepta LIMA/PROVINCIA e ignora valores inválidos", () => {
+  assert.equal(parseGlobalFilterParam("LIMA"), "LIMA");
+  assert.equal(parseGlobalFilterParam("lima"), "LIMA");
+  assert.equal(parseGlobalFilterParam("PROVINCIA"), "PROVINCIA");
+  assert.equal(parseGlobalFilterParam("foo"), "");
+  assert.equal(parseGlobalFilterParam(""), "");
+});
+
+test("buildDatosPendientesQueryParams no envía global si es __all__ o vacío", () => {
+  const q1 = buildDatosPendientesQueryParams({
+    page: 1,
+    pageSize: 50,
+    sucursalFilter: "__all__",
+    estadoFilter: "__all__",
+    globalFilter: "__all__",
+    searchText: "",
+    sortBy: "n_servicios_30",
+    sortDir: "desc",
+  });
+  assert.equal(new URLSearchParams(q1).get("global"), null);
 });
 
 test("normalizadores de sort usan defaults seguros", () => {

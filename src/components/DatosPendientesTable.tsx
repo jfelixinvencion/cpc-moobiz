@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,7 @@ import {
 } from "@/lib/datos-pendientes";
 
 const PAGE_SIZE = 50;
+const FILTER_DEBOUNCE_MS = 500;
 
 type DatosPendientesRow = Record<string, unknown>;
 
@@ -77,9 +78,14 @@ export function DatosPendientesTable() {
 
   const [sucursalFilter, setSucursalFilter] = useState("__all__");
   const [estadoFilter, setEstadoFilter] = useState("__all__");
+  const [globalFilter, setGlobalFilter] = useState("__all__");
+  const [sucursalDebounced, setSucursalDebounced] = useState("__all__");
+  const [estadoDebounced, setEstadoDebounced] = useState("__all__");
+  const [globalDebounced, setGlobalDebounced] = useState("__all__");
   const [searchText, setSearchText] = useState("");
   const [searchDebounced, setSearchDebounced] = useState("");
   const [sucursalOptions, setSucursalOptions] = useState<string[]>([]);
+  const fetchAbortRef = useRef<AbortController | null>(null);
 
   const [sortBy, setSortBy] = useState<DatosPendientesColumnKey>("n_servicios_30");
   const [sortDir, setSortDir] = useState<DatosPendientesSortDir>("desc");
@@ -87,31 +93,54 @@ export function DatosPendientesTable() {
   const [detailRow, setDetailRow] = useState<DatosPendientesRow | null>(null);
 
   useEffect(() => {
-    const id = window.setTimeout(() => setSearchDebounced(searchText), 300);
+    const id = window.setTimeout(() => setSearchDebounced(searchText), FILTER_DEBOUNCE_MS);
     return () => window.clearTimeout(id);
   }, [searchText]);
 
   useEffect(() => {
+    const id = window.setTimeout(() => setSucursalDebounced(sucursalFilter), FILTER_DEBOUNCE_MS);
+    return () => window.clearTimeout(id);
+  }, [sucursalFilter]);
+
+  useEffect(() => {
+    const id = window.setTimeout(() => setEstadoDebounced(estadoFilter), FILTER_DEBOUNCE_MS);
+    return () => window.clearTimeout(id);
+  }, [estadoFilter]);
+
+  useEffect(() => {
+    const id = window.setTimeout(() => setGlobalDebounced(globalFilter), FILTER_DEBOUNCE_MS);
+    return () => window.clearTimeout(id);
+  }, [globalFilter]);
+
+  useEffect(() => {
     setPage(1);
-  }, [sucursalFilter, estadoFilter, searchDebounced, sortBy, sortDir]);
+  }, [sucursalDebounced, estadoDebounced, globalDebounced, searchDebounced, sortBy, sortDir]);
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / PAGE_SIZE)), [total]);
   const pageClamped = Math.min(page, totalPages);
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    fetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
+
     setLoading(true);
     setError(null);
     try {
       const query = buildDatosPendientesQueryParams({
         page: pageClamped,
         pageSize: PAGE_SIZE,
-        sucursalFilter,
-        estadoFilter,
+        sucursalFilter: sucursalDebounced,
+        estadoFilter: estadoDebounced,
+        globalFilter: globalDebounced,
         searchText: searchDebounced,
         sortBy,
         sortDir,
       });
-      const res = await fetch(`/api/moobiz-drivers-pendientes?${query}`, { cache: "no-store" });
+      const res = await fetch(`/api/moobiz-drivers-pendientes?${query}`, {
+        cache: "no-store",
+        signal: controller.signal,
+      });
       const body = (await res.json()) as ApiResponse;
       if (!res.ok) {
         const msg =
@@ -131,18 +160,37 @@ export function DatosPendientesTable() {
         Array.isArray(branchOpts) ? branchOpts.filter((x) => String(x).trim()) : [],
       );
     } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return;
       setRows([]);
       setTotal(0);
       setSource(null);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (fetchAbortRef.current === controller) {
+        fetchAbortRef.current = null;
+        setLoading(false);
+      }
     }
-  };
+  }, [
+    pageClamped,
+    sucursalDebounced,
+    estadoDebounced,
+    globalDebounced,
+    searchDebounced,
+    sortBy,
+    sortDir,
+  ]);
 
   useEffect(() => {
     void load();
-  }, [pageClamped, sucursalFilter, estadoFilter, searchDebounced, sortBy, sortDir]);
+  }, [load]);
+
+  useEffect(
+    () => () => {
+      fetchAbortRef.current?.abort();
+    },
+    [],
+  );
 
   const onSortColumn = (key: DatosPendientesColumnKey) => {
     if (sortBy === key) {
@@ -158,16 +206,11 @@ export function DatosPendientesTable() {
       <CardHeader className="space-y-2 border-b border-slate-100 py-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle className="text-base font-semibold">Datos Pendientes</CardTitle>
-          <div className="flex items-center gap-2">
-            <Badge variant="secondary" className="bg-slate-100 text-slate-700">
-              {total} registro{total === 1 ? "" : "s"}
-            </Badge>
-            <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
-              Actualizar
-            </Button>
-          </div>
+          <Badge variant="secondary" className="bg-slate-100 text-slate-700">
+            {total} registro{total === 1 ? "" : "s"}
+          </Badge>
         </div>
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
           <div className="space-y-1">
             <Label className="text-xs text-slate-600">Sucursal</Label>
             <Select value={sucursalFilter} onValueChange={setSucursalFilter}>
@@ -194,6 +237,19 @@ export function DatosPendientesTable() {
                 <SelectItem value="__all__">Todos</SelectItem>
                 <SelectItem value="Pendiente">Pendiente</SelectItem>
                 <SelectItem value="Completado">Completado</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs text-slate-600">GLOBAL</Label>
+            <Select value={globalFilter} onValueChange={setGlobalFilter}>
+              <SelectTrigger className="h-9 border-slate-200 bg-white text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">Todas</SelectItem>
+                <SelectItem value="LIMA">LIMA</SelectItem>
+                <SelectItem value="PROVINCIA">PROVINCIA</SelectItem>
               </SelectContent>
             </Select>
           </div>

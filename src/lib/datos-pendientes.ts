@@ -153,11 +153,23 @@ export function buildPostgrestOrderClause(orderColumn: string, sortDir: DatosPen
   return `${orderColumn}.${sortDir}`;
 }
 
+/** Valores aceptados para query param `global`; cualquier otro se trata como “todas”. */
+export type DatosPendientesGlobalFilter = "" | "LIMA" | "PROVINCIA";
+
+export function parseGlobalFilterParam(raw: unknown): DatosPendientesGlobalFilter {
+  const v = String(raw ?? "")
+    .trim()
+    .toUpperCase();
+  if (v === "LIMA" || v === "PROVINCIA") return v;
+  return "";
+}
+
 export function buildDatosPendientesQueryParams(input: {
   page: number;
   pageSize: number;
   sucursalFilter: string;
   estadoFilter: string;
+  globalFilter: string;
   searchText: string;
   sortBy: DatosPendientesColumnKey;
   sortDir: DatosPendientesSortDir;
@@ -167,6 +179,8 @@ export function buildDatosPendientesQueryParams(input: {
   p.set("pageSize", String(input.pageSize));
   if (input.sucursalFilter && input.sucursalFilter !== "__all__") p.set("sucursal", input.sucursalFilter);
   if (input.estadoFilter && input.estadoFilter !== "__all__") p.set("estado", input.estadoFilter);
+  const g = parseGlobalFilterParam(input.globalFilter);
+  if (g) p.set("global", g);
   if (input.searchText.trim()) p.set("search", input.searchText.trim());
   p.set("sortBy", input.sortBy);
   p.set("sortDir", input.sortDir);

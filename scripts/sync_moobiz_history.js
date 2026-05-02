@@ -10,11 +10,25 @@
  * Prueba rápida:
  *   DOTENV_CONFIG_PATH=.env.local node -r dotenv/config scripts/sync_moobiz_history.js --limit=20 --page=1 --print-sample
  */
+// Carga .env.local SOLO si NO estamos en un entorno CI (ej. GitHub Actions)
+if (!process.env.GITHUB_ACTIONS && !process.env.CI) {
+  // DOTENV_CONFIG_PATH permite Windows/PowerShell overrides si existe
+  require("dotenv").config({ path: process.env.DOTENV_CONFIG_PATH || ".env.local" });
+}
+
 const { randomUUID } = require("node:crypto");
 const { ensureMoobizToken, redactToken } = require("../helpers/refresh_moobiz_token");
 const { fetchWithRetry } = require("../helpers/moobiz_fetch_retry");
+const { ensureEnv, getMoobizTokenFallback, getMoobizTokenFromSyncStateOnly, getSupabaseUrl } = require("./lib/env");
 
-const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+const EXIT_CODES = {
+  MISSING_CRITICAL_ENVS: 2,
+  TOKEN_MISSING: 3,
+  TOKEN_INVALID_AFTER_RETRIES: 4,
+  SYNC_FAILED: 5,
+};
+
+const SUPABASE_URL = getSupabaseUrl();
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MOOBIZ_EMAIL = process.env.MOOBIZ_EMAIL;
 const MOOBIZ_PASSWORD = process.env.MOOBIZ_PASSWORD;
@@ -201,6 +215,18 @@ let moobizBearer = null;
 
 async function ensureMoobizBearer() {
   if (moobizBearer && moobizBearer.trim()) return moobizBearer;
+  const fromEnv = String(process.env.MOOBIZ_TOKEN || "").trim();
+  if (fromEnv) {
+    moobizBearer = fromEnv;
+    console.log("[history-sync] Bearer desde MOOBIZ_TOKEN:", redactToken(moobizBearer));
+    return moobizBearer;
+  }
+  const fallback = await getMoobizTokenFallback();
+  if (fallback) {
+    moobizBearer = fallback;
+    console.log("[history-sync] Bearer desde sync_state fallback:", redactToken(moobizBearer));
+    return moobizBearer;
+  }
   const fresh = await ensureMoobizToken();
   moobizBearer = fresh;
   console.log("[history-sync] Bearer resuelto por ensureMoobizToken:", redactToken(moobizBearer));
@@ -443,12 +469,38 @@ async function fetchServicesPage({
   let res = await doFetch();
   if (res.status === 401 || res.status === 403) {
     console.warn(`[history-sync] Services HTTP ${res.status} (page ${page}) — renovando token…`);
-    const fresh = skipSyncStateToken ? await ensureMoobizBearerNoSyncState() : await ensureMoobizToken();
+    let fresh = null;
+    if (skipSyncStateToken) {
+      fresh = await ensureMoobizBearerNoSyncState();
+    } else {
+      try {
+        fresh = await ensureMoobizToken();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn(`[history-sync] ensureMoobizToken falló (${msg}) — intentando token desde sync_state…`);
+        fresh = await getMoobizTokenFromSyncStateOnly();
+      }
+    }
+    if (!fresh) {
+      throw new Error(
+        `Fetch services page ${page}: token invalid after retries (auth ${res.status}, sin token).`,
+      );
+    }
     moobizBearer = fresh;
     res = await doFetch();
+    if ((res.status === 401 || res.status === 403) && !skipSyncStateToken) {
+      console.warn(
+        `[history-sync] Services HTTP ${res.status} (page ${page}) tras refresh — releyendo moobiz_token en sync_state…`,
+      );
+      const db = await getMoobizTokenFromSyncStateOnly();
+      if (db && db !== moobizBearer) {
+        moobizBearer = db;
+        res = await doFetch();
+      }
+    }
     if (res.status === 401 || res.status === 403) {
       throw new Error(
-        `Fetch services page ${page}: auth falló otra vez (${res.status}) tras renovar token.`,
+        `Fetch services page ${page}: token invalid after retries (auth ${res.status} tras renovación y sync_state).`,
       );
     }
   }
@@ -558,14 +610,25 @@ async function sync() {
   let cursorAfter = "";
 
   try {
+    ensureEnv(["SUPABASE_SERVICE_ROLE_KEY"]);
     if (!SUPABASE_URL || !String(SUPABASE_URL).trim()) {
-      throw new Error("Falta SUPABASE_URL (o NEXT_PUBLIC_SUPABASE_URL).");
+      console.error("[history-sync] Falta SUPABASE_URL (o NEXT_PUBLIC_SUPABASE_URL).");
+      process.exit(EXIT_CODES.MISSING_CRITICAL_ENVS);
     }
     if (!SUPABASE_SERVICE_ROLE_KEY || !String(SUPABASE_SERVICE_ROLE_KEY).trim()) {
-      throw new Error("Falta SUPABASE_SERVICE_ROLE_KEY.");
+      console.error("[history-sync] Falta SUPABASE_SERVICE_ROLE_KEY.");
+      process.exit(EXIT_CODES.MISSING_CRITICAL_ENVS);
     }
 
     moobizBearer = null;
+    if (!PAGES_BACKFILL_MODE) {
+      const initialToken = await ensureMoobizBearer();
+      if (!initialToken) {
+        console.error("[history-sync] No MOOBIZ_TOKEN disponible por env/sync_state.");
+        process.exit(EXIT_CODES.TOKEN_MISSING);
+      }
+      moobizBearer = initialToken;
+    }
 
     const date_to = new Date().toISOString();
     console.log(
@@ -1033,6 +1096,10 @@ async function sync() {
 }
 
 sync().catch((err) => {
-  console.error("[history-sync] ❌ Error:", err);
-  process.exit(1);
+  const msg = err instanceof Error ? err.message : String(err);
+  console.error("[history-sync] ❌ Error:", msg);
+  if (/401|403|auth|token/i.test(msg)) {
+    process.exit(EXIT_CODES.TOKEN_INVALID_AFTER_RETRIES);
+  }
+  process.exit(EXIT_CODES.SYNC_FAILED);
 });

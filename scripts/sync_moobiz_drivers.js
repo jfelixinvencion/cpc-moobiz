@@ -5,18 +5,24 @@
  *
  * Token: `MOOBIZ_DRIVERS_TOKEN` o `sync_state.moobiz_token` + login admin.
  */
-const path = require("node:path");
-const { ensureMoobizToken, redactToken } = require("../helpers/refresh_moobiz_token");
-const { fetchWithRetry } = require("../helpers/moobiz_fetch_retry");
-
-try {
-  require("dotenv").config({ path: path.join(__dirname, "..", ".env.local") });
-  require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
-} catch {
-  /* dotenv opcional */
+// Carga .env.local SOLO si NO estamos en un entorno CI (ej. GitHub Actions)
+if (!process.env.GITHUB_ACTIONS && !process.env.CI) {
+  // DOTENV_CONFIG_PATH permite Windows/PowerShell overrides si existe
+  require("dotenv").config({ path: process.env.DOTENV_CONFIG_PATH || ".env.local" });
 }
 
-const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+const { ensureMoobizToken, redactToken } = require("../helpers/refresh_moobiz_token");
+const { fetchWithRetry } = require("../helpers/moobiz_fetch_retry");
+const { ensureEnv, getMoobizTokenFallback, getMoobizTokenFromSyncStateOnly, getSupabaseUrl } = require("./lib/env");
+
+const EXIT_CODES = {
+  MISSING_CRITICAL_ENVS: 2,
+  TOKEN_MISSING: 3,
+  TOKEN_INVALID_AFTER_RETRIES: 4,
+  SYNC_FAILED: 5,
+};
+
+const SUPABASE_URL = getSupabaseUrl();
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MOOBIZ_DRIVERS_TOKEN = process.env.MOOBIZ_DRIVERS_TOKEN;
 
@@ -51,6 +57,12 @@ async function fetchJsonOrThrow(url, options, label) {
 let moobizBearer = null;
 
 async function ensureMoobizBearer() {
+  const generic = String(process.env.MOOBIZ_TOKEN || "").trim();
+  if (generic) {
+    console.log("[drivers-sync] Bearer desde MOOBIZ_TOKEN:", redactToken(generic));
+    return generic;
+  }
+
   const only = typeof MOOBIZ_DRIVERS_TOKEN === "string" ? MOOBIZ_DRIVERS_TOKEN.trim() : "";
   if (only) {
     console.log("[drivers-sync] Bearer desde MOOBIZ_DRIVERS_TOKEN:", redactToken(only));
@@ -58,6 +70,12 @@ async function ensureMoobizBearer() {
   }
 
   if (moobizBearer && moobizBearer.trim()) return moobizBearer;
+  const fallback = await getMoobizTokenFallback();
+  if (fallback) {
+    moobizBearer = fallback;
+    console.log("[drivers-sync] Bearer desde sync_state fallback:", redactToken(moobizBearer));
+    return moobizBearer;
+  }
   const fresh = await ensureMoobizToken();
   moobizBearer = fresh;
   console.log("[drivers-sync] Bearer resuelto por ensureMoobizToken:", redactToken(moobizBearer));
@@ -154,7 +172,7 @@ async function fetchDriversSingleLimit(token, limit) {
   });
 
   let bearer = token;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let recovery = 0; ; recovery += 1) {
     const res = await fetchWithRetry(
       url.toString(),
       {
@@ -167,15 +185,34 @@ async function fetchDriversSingleLimit(token, limit) {
     const text = await res.text();
 
     if (responseLooksLikeAuthFailure(res, text)) {
-      if (attempt === 1) {
-        throw new Error(AUTH_401_AFTER_REFRESH_MSG);
+      if (recovery >= 2) {
+        throw new Error(`${AUTH_401_AFTER_REFRESH_MSG} (token invalid after retries)`);
       }
       console.warn(
-        `[drivers-sync] Sesión/token inválido (HTTP ${res.status} o ok!=true auth) — ensureMoobizToken() y reintento…`,
+        `[drivers-sync] Sesión/token inválido (HTTP ${res.status} o ok!=true auth) — recuperación ${recovery + 1}/2…`,
       );
-      const fresh = await ensureMoobizToken();
-      moobizBearer = fresh;
-      bearer = fresh;
+      if (recovery === 0) {
+        let next = null;
+        try {
+          next = await ensureMoobizToken();
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          console.warn(`[drivers-sync] ensureMoobizToken falló (${msg}) — intentando token desde sync_state…`);
+          next = await getMoobizTokenFromSyncStateOnly();
+        }
+        if (!next) {
+          throw new Error(`${AUTH_401_AFTER_REFRESH_MSG} (token invalid after retries)`);
+        }
+        moobizBearer = next;
+        bearer = next;
+        continue;
+      }
+      const next = await getMoobizTokenFromSyncStateOnly();
+      if (!next || next === bearer) {
+        throw new Error(`${AUTH_401_AFTER_REFRESH_MSG} (token invalid after retries)`);
+      }
+      moobizBearer = next;
+      bearer = next;
       continue;
     }
 
@@ -197,12 +234,11 @@ async function fetchDriversSingleLimit(token, limit) {
             : JSON.stringify(body).slice(0, 300);
       throw new Error(`MOOBIZ_DRIVERS_FETCH: ok!=true — ${msg}`);
     }
-    if (attempt === 1) {
-      console.log("[drivers-sync] GET conductores OK tras renovar token");
+    if (recovery > 0) {
+      console.log("[drivers-sync] GET conductores OK tras recuperar token");
     }
     return body;
   }
-  throw new Error(AUTH_401_AFTER_REFRESH_MSG);
 }
 
 async function downloadAllDriversDeduped(token) {
@@ -284,11 +320,16 @@ async function insertSyncMonitor(payload) {
 }
 
 async function sync() {
+  ensureEnv(["SUPABASE_SERVICE_ROLE_KEY"]);
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-    throw new Error("Faltan SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY.");
+    process.exit(EXIT_CODES.MISSING_CRITICAL_ENVS);
   }
 
   const token = await ensureMoobizBearer();
+  if (!token) {
+    console.error("[drivers-sync] No MOOBIZ_TOKEN disponible por env/sync_state.");
+    process.exit(EXIT_CODES.TOKEN_MISSING);
+  }
   let pagesQueried = 0;
 
   console.log(
@@ -418,6 +459,10 @@ async function sync() {
 }
 
 sync().catch((err) => {
-  console.error("[drivers-sync] Error:", err);
-  process.exit(1);
+  const msg = err instanceof Error ? err.message : String(err);
+  console.error("[drivers-sync] Error:", msg);
+  if (/401|403|auth|token/i.test(msg)) {
+    process.exit(EXIT_CODES.TOKEN_INVALID_AFTER_RETRIES);
+  }
+  process.exit(EXIT_CODES.SYNC_FAILED);
 });

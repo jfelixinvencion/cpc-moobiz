@@ -1,4 +1,10 @@
 #!/usr/bin/env node
+// Carga .env.local SOLO si NO estamos en un entorno CI (ej. GitHub Actions)
+if (!process.env.GITHUB_ACTIONS && !process.env.CI) {
+  // DOTENV_CONFIG_PATH permite Windows/PowerShell overrides si existe
+  require("dotenv").config({ path: process.env.DOTENV_CONFIG_PATH || ".env.local" });
+}
+
 const { spawnSync } = require("node:child_process");
 const path = require("node:path");
 

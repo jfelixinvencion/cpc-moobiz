@@ -97,3 +97,40 @@ WHERE v.id = b.id;
 3. Click en `VIP LIMA`: debe ocultar/mostrar la serie.
 4. Doble click en `VIP LIMA`: debe aislar solo esa categoría.
 5. Confirmar tooltip con nombre `VIP LIMA` y conteo correcto.
+
+## Moobiz Sync Jobs (CI-safe)
+
+Los scripts de sync corren de forma independiente y no dependen de `.env.local` en CI:
+
+- `node scripts/sync_moobiz_drivers.js`
+- `node scripts/sync_moobiz_logs_incremental.js`
+- `node scripts/sync_moobiz_history.js`
+
+Comportamiento de entorno:
+
+- En local, cada script carga `.env.local` solo si no detecta `CI`/`GITHUB_ACTIONS`.
+- En CI, usa variables del entorno/secrets del workflow.
+- Si `MOOBIZ_TOKEN` no existe, intenta fallback a `sync_state` en Supabase.
+- Tras `401/403`, los scripts reintentan con `ensureMoobizToken()` (login + escritura en DB) cuando aplica, y si eso falla o el token sigue inválido, vuelven a leer `moobiz_token` desde `sync_state` vía API.
+- `ensureMoobizToken()` usa Postgres directo (`DATABASE_URL`) para lock y upsert atómico; si no está definido, el refresh por login puede no ejecutarse y se prioriza el token ya guardado en `sync_state`.
+
+Variables recomendadas en GitHub Secrets:
+
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `MOOBIZ_TOKEN` (opcional)
+- `MOOBIZ_EMAIL` y `MOOBIZ_PASSWORD` (recomendadas para refresh automático)
+- `DATABASE_URL` (opcional pero recomendada si quieres renovación atómica del token en `sync_state` sin depender solo del valor previo)
+
+Preflight:
+
+```bash
+npm run check:env
+```
+
+Códigos de salida de sync:
+
+- `2`: faltan variables críticas de entorno.
+- `3`: token Moobiz no disponible (env ni fallback).
+- `4`: token inválido tras reintentos.
+- `5`: fallo general de sincronización.

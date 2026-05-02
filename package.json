@@ -8,9 +8,11 @@
     "start": "next start",
     "lint": "eslint",
     "test": "node --test --experimental-strip-types tests/**/*.test.ts",
+    "check:env": "node scripts/check_env.js SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY",
     "sync:history": "node scripts/sync_moobiz_history.js",
     "sync:history:pages": "node -r dotenv/config scripts/sync_moobiz_history.js --mode=pages_backfill --pages=20 --limit=1000",
     "sync:drivers": "node scripts/sync_moobiz_drivers.js",
+    "sync:logs": "node scripts/sync_moobiz_logs_incremental.js",
     "probe:drivers-pagination": "node scripts/probe_moobiz_drivers_pagination.js"
   },
   "dependencies": {

@@ -1,0 +1,28 @@
+name: sync-drivers
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  sync-drivers:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      MOOBIZ_TOKEN: ${{ secrets.MOOBIZ_TOKEN }}
+      MOOBIZ_EMAIL: ${{ secrets.MOOBIZ_EMAIL }}
+      MOOBIZ_PASSWORD: ${{ secrets.MOOBIZ_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install
+        run: npm ci
+      - name: Preflight env check
+        run: npm run check:env
+      - name: Run sync drivers
+        run: node scripts/sync_moobiz_drivers.js

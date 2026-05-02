@@ -74,6 +74,18 @@ test("mapea filas de vista con etiquetas legibles a campos del frontend", () => 
   assert.equal(rows[0].estado, "Pendiente");
 });
 
+test("mapea columna Status de vw_moobiz_drivers_excel a estado", () => {
+  const rows = normalizeDriverPendienteRowsFromVistaLabels([
+    {
+      "ID Conductor": 1,
+      "Nombre Conductor": "Test",
+      Status: "Completado",
+    },
+  ]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].estado, "Completado");
+});
+
 test("contrato filtro GLOBAL: todas las filas normalizadas comparten el mismo valor GLOBAL", () => {
   const rows = normalizeDriverPendienteRowsFromVistaLabels([
     {

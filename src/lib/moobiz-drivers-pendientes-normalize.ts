@@ -40,7 +40,7 @@ export function mapVistaMoobizDriversPendientesRow(row: Record<string, unknown>)
     numero_ruc_factura: g(L.numero_ruc_factura),
     usuario_sunat: g(L.usuario_sunat),
     clave_sol_sunat: g(L.clave_sol_sunat),
-    estado: g(L.estado),
+    estado: g(L.estado) ?? g("Status"),
   };
 }
 

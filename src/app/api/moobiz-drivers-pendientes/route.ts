@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import { formatApiError } from "@/lib/format-api-error";
 import {
@@ -11,9 +12,28 @@ import {
   normalizeDriverPendienteRowsFromVistaLabels,
 } from "@/lib/moobiz-drivers-pendientes-normalize";
 import { assertQualityReadAccess } from "@/lib/panel-session";
-import { getSupabaseServerClient } from "@/lib/supabase-server";
 
 export const runtime = "nodejs";
+
+const EXCEL_VIEW = "vw_moobiz_drivers_excel" as const;
+
+/** Cliente Supabase admin (service role); solo Route Handler Node — no importar desde cliente. */
+let supabaseAdminSingleton: SupabaseClient | null = null;
+function getSupabaseAdmin(): SupabaseClient {
+  if (supabaseAdminSingleton) return supabaseAdminSingleton;
+  const supabaseUrl =
+    process.env.SUPABASE_URL?.trim() || process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() || "";
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || "";
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error(
+      "Faltan SUPABASE_URL (o NEXT_PUBLIC_SUPABASE_URL) y SUPABASE_SERVICE_ROLE_KEY.",
+    );
+  }
+  supabaseAdminSingleton = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  return supabaseAdminSingleton;
+}
 
 /** Identificador PostgREST para `.order()` cuando la columna en la vista tiene `<` o espacios (nombre legible). */
 const VISTA_ORDER_QUOTED_N_SERVICIOS = '"N Servicios <30"';
@@ -25,6 +45,9 @@ function vistaOrderColumnForSupabase(sortColumn: string): string {
   if (sortColumn === "n_servicios_30" || sortColumn === "n_servicios_lt_30") {
     return VISTA_ORDER_QUOTED_N_SERVICIOS;
   }
+  if (sortColumn === "estado") {
+    return "Status";
+  }
   return sortColumn;
 }
 
@@ -35,15 +58,6 @@ function toErrorMessage(err: unknown): string {
     if (typeof msg === "string" && msg.trim()) return msg;
   }
   return formatApiError(err);
-}
-
-function isMissingRelationError(message: string): boolean {
-  const lower = message.toLowerCase();
-  return (
-    lower.includes("does not exist") ||
-    lower.includes("no existe la relación") ||
-    lower.includes("could not find the table")
-  );
 }
 
 function isMissingColumnError(err: unknown): boolean {
@@ -83,8 +97,8 @@ function logJwtRoleFromServiceKey(url: string, key: string): void {
 
 function logSupabaseEnvForRoute(usingServiceRole: boolean): void {
   const url =
-    process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() ||
     process.env.SUPABASE_URL?.trim() ||
+    process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() ||
     "";
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || "";
   console.log("[moobiz-drivers-pendientes] SUPABASE_URL_IN_USE:", url || "(vacío)");
@@ -96,7 +110,7 @@ function logSupabaseEnvForRoute(usingServiceRole: boolean): void {
   if (url && key) logJwtRoleFromServiceKey(url, key);
 }
 
-async function probeMoobizDriversTable(sb: ReturnType<typeof getSupabaseServerClient>["client"]): Promise<void> {
+async function probeMoobizDriversTable(sb: SupabaseClient): Promise<void> {
   const { data, error } = await sb.from("moobiz_drivers").select("id").limit(1);
   if (error) {
     console.warn("[moobiz-drivers-pendientes] PROBE moobiz_drivers FAILED:", {
@@ -110,13 +124,12 @@ async function probeMoobizDriversTable(sb: ReturnType<typeof getSupabaseServerCl
   });
 }
 
-async function queryFromSource(args: {
-  sb: ReturnType<typeof getSupabaseServerClient>["client"];
-  sourceName: "mv_moobiz_drivers_pendientes" | "vw_moobiz_drivers_pendientes";
+async function queryExcelView(args: {
+  sb: SupabaseClient;
   page: number;
   pageSize: number;
   sucursalFilter: string;
-  estadoFilter: string;
+  statusFilter: string;
   globalFilter: string;
   searchText: string;
   sortColumn: string;
@@ -134,7 +147,7 @@ async function queryFromSource(args: {
 
   console.log("[moobiz-drivers-pendientes] ORDER_COLUMN_SENT_TO_SUPABASE:", sortColumnForSource);
   console.log("[moobiz-drivers-pendientes] Supabase ORDER / range:", {
-    source: args.sourceName,
+    source: EXCEL_VIEW,
     schema: "vista",
     sortColumn: sortColumnForSource,
     ascending: args.ascending,
@@ -143,12 +156,9 @@ async function queryFromSource(args: {
   });
 
   const baseQuery = () => {
-    let q = supabase
-      .schema("vista")
-      .from(args.sourceName)
-      .select("*", { count: "exact" });
+    let q = supabase.schema("vista").from(EXCEL_VIEW).select("*", { count: "exact" });
     if (args.sucursalFilter) q = q.eq("Sucursal", args.sucursalFilter);
-    if (args.estadoFilter) q = q.eq("Estado", args.estadoFilter);
+    if (args.statusFilter) q = q.eq("Status", args.statusFilter);
     if (args.globalFilter) q = q.eq("GLOBAL", args.globalFilter);
     if (args.searchText) {
       q = q.ilike("Nombre Conductor", `%${args.searchText.replaceAll("%", "\\%")}%`);
@@ -164,7 +174,7 @@ async function queryFromSource(args: {
 
   if (result.error && isMissingColumnError(result.error)) {
     console.warn("[moobiz-drivers-pendientes] ORDER_FINAL fallback sin ORDER por columna faltante:", {
-      source: args.sourceName,
+      source: EXCEL_VIEW,
       attemptedOrder: orderClauseForSource,
     });
     result = await baseQuery().range(from, to);
@@ -180,18 +190,18 @@ async function queryFromSource(args: {
   let sucursalesDistinct: string[] = [];
   const sucRes = await supabase
     .schema("vista")
-    .from(args.sourceName)
+    .from(EXCEL_VIEW)
     .select(`sucursal:"Sucursal"`)
     .not("Sucursal", "is", null)
     .limit(5000);
   if (!sucRes.error) {
-    sucursalesDistinct = Array.from(
-      new Set(
-        (Array.isArray(sucRes.data) ? sucRes.data : [])
-          .map((r) => String((r as { sucursal?: unknown }).sucursal ?? "").trim())
-          .filter(Boolean),
-      ),
-    ).sort((a, b) => a.localeCompare(b, "es"));
+    const rawRows = Array.isArray(sucRes.data) ? sucRes.data : [];
+    const names: string[] = rawRows.map((r: { sucursal?: unknown }) =>
+      String(r.sucursal ?? "").trim(),
+    );
+    sucursalesDistinct = Array.from(new Set(names.filter(Boolean))).sort((a, b) =>
+      a.localeCompare(b, "es"),
+    );
   }
 
   return {
@@ -219,7 +229,8 @@ function successPayload(
 export async function GET(request: NextRequest) {
   try {
     assertQualityReadAccess(request);
-    const { client: sb, usingServiceRole } = getSupabaseServerClient();
+    const sb = getSupabaseAdmin();
+    const usingServiceRole = Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY?.trim());
     console.log("[moobiz-drivers-pendientes] USING_SERVICE_ROLE:", usingServiceRole);
     logSupabaseEnvForRoute(usingServiceRole);
 
@@ -228,7 +239,14 @@ export async function GET(request: NextRequest) {
     const pageSizeRaw = Number.parseInt(url.searchParams.get("pageSize") ?? "50", 10) || 50;
     const pageSize = Math.min(100, Math.max(1, pageSizeRaw));
     const sucursalFilter = String(url.searchParams.get("sucursal") ?? "").trim();
-    const estadoFilter = String(url.searchParams.get("estado") ?? "").trim();
+    const rawEstado = url.searchParams.get("estado");
+    let statusFilter = "";
+    if (rawEstado !== null && String(rawEstado).trim() !== "") {
+      const t = String(rawEstado).trim().toLowerCase();
+      if (t !== "all" && t !== "__all__") {
+        statusFilter = String(rawEstado).trim();
+      }
+    }
     const searchText = String(url.searchParams.get("search") ?? "").trim();
     const globalFilter = parseGlobalFilterParam(url.searchParams.get("global"));
     const rawSortBy = url.searchParams.get("sortBy");
@@ -254,7 +272,7 @@ export async function GET(request: NextRequest) {
       page,
       pageSize,
       sucursalFilter,
-      estadoFilter,
+      statusFilter,
       globalFilter,
       searchText,
       rawSortBy,
@@ -272,39 +290,12 @@ export async function GET(request: NextRequest) {
       supabaseOrderFirstArg: vistaOrderColumnForSupabase(sortColumn),
     });
 
-    try {
-      const mv = await queryFromSource({
-        sb,
-        sourceName: "mv_moobiz_drivers_pendientes",
-        page,
-        pageSize,
-        sucursalFilter,
-        estadoFilter,
-        globalFilter,
-        searchText,
-        sortColumn,
-        ascending,
-        orderClause,
-      });
-      return NextResponse.json(
-        successPayload(mv, {
-          page,
-          pageSize,
-          source: "vista.mv_moobiz_drivers_pendientes",
-        }),
-      );
-    } catch (mvError) {
-      const mvMsg = toErrorMessage(mvError);
-      if (!isMissingRelationError(mvMsg)) throw mvError;
-    }
-
-    const vw = await queryFromSource({
+    const result = await queryExcelView({
       sb,
-      sourceName: "vw_moobiz_drivers_pendientes",
       page,
       pageSize,
       sucursalFilter,
-      estadoFilter,
+      statusFilter,
       globalFilter,
       searchText,
       sortColumn,
@@ -312,10 +303,10 @@ export async function GET(request: NextRequest) {
       orderClause,
     });
     return NextResponse.json(
-      successPayload(vw, {
+      successPayload(result, {
         page,
         pageSize,
-        source: "vista.vw_moobiz_drivers_pendientes",
+        source: `vista.${EXCEL_VIEW}`,
       }),
     );
   } catch (err: unknown) {
@@ -326,8 +317,7 @@ export async function GET(request: NextRequest) {
     const message = toErrorMessage(err);
     if (/permission denied/i.test(message)) {
       try {
-        const { client: sbProbe } = getSupabaseServerClient();
-        await probeMoobizDriversTable(sbProbe);
+        await probeMoobizDriversTable(getSupabaseAdmin());
       } catch (probeErr) {
         console.warn("[moobiz-drivers-pendientes] PROBE moobiz_drivers skipped:", toErrorMessage(probeErr));
       }

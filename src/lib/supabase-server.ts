@@ -1,7 +1,8 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
+/** En servidor, preferir `SUPABASE_URL` cuando exista (p. ej. Vercel sin duplicar URL pública). */
 function getSupabaseUrl(): string {
-  return process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() || process.env.SUPABASE_URL?.trim() || "";
+  return process.env.SUPABASE_URL?.trim() || process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() || "";
 }
 
 export function getSupabaseServerClient(): {
@@ -30,6 +31,6 @@ export function getSupabaseServerClient(): {
     client: createClient(fallbackUrl, fallbackKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     }),
-    usingServiceRole: false,
+    usingServiceRole: true,
   };
 }

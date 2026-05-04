@@ -197,6 +197,14 @@ export type ConductorMatrixProps = {
   dataRevision?: number;
 };
 
+/** Valores del desplegable Seguimiento (matriz conductores en el tiempo). */
+export type SeguimientoOverlapFilter =
+  | "all"
+  | "suspicious"
+  | "level1"
+  | "level2"
+  | "level3";
+
 export function ConductorTimelineMatrix({
   startDate = "",
   endDate = "",
@@ -209,11 +217,9 @@ export function ConductorTimelineMatrix({
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [conductorSearch, setConductorSearch] = useState("");
-  /** Filtro local de seguimiento (cliente): 2+ misma hora / nivel 1 / nivel 2. */
-  const [serviceOverlapFilter, setServiceOverlapFilter] = useState<
-    "all" | "suspicious" | "level1" | "level2"
-  >("all");
-  /** Primera columna horaria visible (izquierda) para filtros nivel 1/2. */
+  /** Filtro local de seguimiento (cliente): 2+ misma hora / niveles 1–3. */
+  const [serviceOverlapFilter, setServiceOverlapFilter] = useState<SeguimientoOverlapFilter>("all");
+  /** Primera columna horaria visible (izquierda); niveles 1–3 usan 1ª y/o 2ª columna visible. */
   const [leftVisibleColumnIndex, setLeftVisibleColumnIndex] = useState(0);
   const [selectedRowCounts, setSelectedRowCounts] = useState<Set<number>>(new Set());
   const [hover, setHover] = useState<{
@@ -350,21 +356,26 @@ export function ConductorTimelineMatrix({
     return out;
   }, [cellMap, slots, leftVisibleColumnIndex]);
 
-  /** Nivel 2:
-   * a) primera visible: "Iniciado" o "Esperando"
-   * b) o segunda visible: "Aceptado"
-   */
+  /** Nivel 2: en la primera columna visible algún viaje "Iniciado" o "Esperando". */
   const conductorsWithLevel2 = useMemo(() => {
     const out = new Set<string>();
     const firstTs = slots[leftVisibleColumnIndex]?.ts;
-    const secondTs = slots[leftVisibleColumnIndex + 1]?.ts;
     if (firstTs == null) return out;
     for (const [name, bySlot] of cellMap) {
       const firstTrips = bySlot.get(firstTs) ?? EMPTY_TRIPS;
-      const secondTrips = secondTs != null ? bySlot.get(secondTs) ?? EMPTY_TRIPS : EMPTY_TRIPS;
-      const condA = firstTrips.some((t) => t.estado === "Iniciado" || t.estado === "Esperando");
-      const condB = secondTrips.some((t) => t.estado === "Aceptado");
-      if (condA || condB) out.add(name);
+      if (firstTrips.some((t) => t.estado === "Iniciado" || t.estado === "Esperando")) out.add(name);
+    }
+    return out;
+  }, [cellMap, slots, leftVisibleColumnIndex]);
+
+  /** Nivel 3: en la segunda columna visible algún viaje "Aceptado". */
+  const conductorsWithLevel3 = useMemo(() => {
+    const out = new Set<string>();
+    const secondTs = slots[leftVisibleColumnIndex + 1]?.ts;
+    if (secondTs == null) return out;
+    for (const [name, bySlot] of cellMap) {
+      const trips = bySlot.get(secondTs) ?? EMPTY_TRIPS;
+      if (trips.some((t) => t.estado === "Aceptado")) out.add(name);
     }
     return out;
   }, [cellMap, slots, leftVisibleColumnIndex]);
@@ -378,6 +389,8 @@ export function ConductorTimelineMatrix({
         if (!conductorsWithLevel1.has(name)) return false;
       } else if (serviceOverlapFilter === "level2") {
         if (!conductorsWithLevel2.has(name)) return false;
+      } else if (serviceOverlapFilter === "level3") {
+        if (!conductorsWithLevel3.has(name)) return false;
       }
       if (q && !name.toLowerCase().includes(q)) return false;
       const total = conductorTotals.get(name) ?? 0;
@@ -393,6 +406,7 @@ export function ConductorTimelineMatrix({
     conductorsWithSlotOverlap,
     conductorsWithLevel1,
     conductorsWithLevel2,
+    conductorsWithLevel3,
   ]);
 
   const rowCount = filteredConductors.length;
@@ -541,9 +555,7 @@ export function ConductorTimelineMatrix({
               <Label className="text-xs text-slate-600">Seguimiento</Label>
               <Select
                 value={serviceOverlapFilter}
-                onValueChange={(v) =>
-                  setServiceOverlapFilter(v as "all" | "suspicious" | "level1" | "level2")
-                }
+                onValueChange={(v) => setServiceOverlapFilter(v as SeguimientoOverlapFilter)}
               >
                 <SelectTrigger className="h-9 w-full border-slate-200 bg-white text-sm">
                   <SelectValue placeholder="Filtro" />
@@ -553,7 +565,7 @@ export function ConductorTimelineMatrix({
                   <SelectItem value="suspicious">2+ en misma hora</SelectItem>
                   <SelectItem value="level1">Nivel 1</SelectItem>
                   <SelectItem value="level2">Nivel 2</SelectItem>
-                  <SelectItem value="gps_off">GPS Apagado</SelectItem>
+                  <SelectItem value="level3">Nivel 3</SelectItem>
                 </SelectContent>
               </Select>
             </div>

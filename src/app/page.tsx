@@ -67,6 +67,7 @@ import {
   type SyncMonitorRow,
 } from "@/components/logs-sync-health-banner";
 import { DatosPendientesTable } from "@/components/DatosPendientesTable";
+import { ControlOperacionesPanel } from "@/components/control-operaciones-panel";
 import {
   type ScheduleProductKey,
   SCHEDULE_PRODUCT_COLORS,
@@ -213,6 +214,7 @@ const DATOS_SUB_VIAJES_ACTIVOS = "viajes-activos" as const;
 const DATOS_SUB_CONDUCTORES = "conductores" as const;
 const DATOS_SUB_REGISTRO_ACTIVIDADES = "registro-actividades" as const;
 const DATOS_SUB_DATOS_PENDIENTES = "datos-pendientes" as const;
+const OPERACIONES_SUB_CONTROL = "control" as const;
 const LOGS_CLEAN_PAGE_SIZE = 50;
 const HISTORY_PAGE_SIZE = 50;
 const DRIVERS_PAGE_SIZE = 50;
@@ -588,6 +590,7 @@ function DashboardContent() {
   const [reservasEndDate, setReservasEndDate] = useState("");
   const [mainTab, setMainTab] = useState("dashboard");
   const [datosSubTab, setDatosSubTab] = useState<string>(DATOS_SUB_VIAJES_ACTIVOS);
+  const [operacionesSubTab, setOperacionesSubTab] = useState<string>(OPERACIONES_SUB_CONTROL);
   const [logsCleanSearch, setLogsCleanSearch] = useState("");
   const [logsCleanSearchDebounced, setLogsCleanSearchDebounced] = useState("");
   const [logsCleanDateFrom, setLogsCleanDateFrom] = useState("");
@@ -704,6 +707,16 @@ function DashboardContent() {
     [pathname, router, searchParams],
   );
 
+  const setOperacionesSubInUrl = useCallback(
+    (value: string) => {
+      const p = new URLSearchParams(searchParams.toString());
+      p.set("operacionesSub", value);
+      const qs = p.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    },
+    [pathname, router, searchParams],
+  );
+
   const handleMainTabChange = useCallback(
     (value: string) => {
       if (value === "calidad") {
@@ -711,10 +724,17 @@ function DashboardContent() {
         return;
       }
       setMainTab(value);
-      if (value !== "datos") {
-        const p = new URLSearchParams(searchParams.toString());
-        if (!p.has("datosSub")) return;
+      const p = new URLSearchParams(searchParams.toString());
+      let changed = false;
+      if (value !== "datos" && p.has("datosSub")) {
         p.delete("datosSub");
+        changed = true;
+      }
+      if (value !== "operaciones" && p.has("operacionesSub")) {
+        p.delete("operacionesSub");
+        changed = true;
+      }
+      if (changed) {
         const qs = p.toString();
         router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
       }
@@ -742,6 +762,28 @@ function DashboardContent() {
     },
     [datosSubAllowed, setDatosSubInUrl],
   );
+
+  const operacionesSubAllowed = useMemo(() => new Set<string>([OPERACIONES_SUB_CONTROL]), []);
+
+  const handleOperacionesSubTabChange = useCallback(
+    (value: string) => {
+      if (!operacionesSubAllowed.has(value)) return;
+      setOperacionesSubTab(value);
+      setOperacionesSubInUrl(value);
+    },
+    [operacionesSubAllowed, setOperacionesSubInUrl],
+  );
+
+  useEffect(() => {
+    if (mainTab !== "operaciones") return;
+    const raw = searchParams.get("operacionesSub");
+    if (raw === OPERACIONES_SUB_CONTROL) {
+      setOperacionesSubTab(raw);
+      return;
+    }
+    setOperacionesSubTab(OPERACIONES_SUB_CONTROL);
+    setOperacionesSubInUrl(OPERACIONES_SUB_CONTROL);
+  }, [mainTab, searchParams, setOperacionesSubInUrl]);
 
   useEffect(() => {
     if (mainTab !== "datos") return;
@@ -1644,12 +1686,18 @@ function DashboardContent() {
               </div>
             </div>
 
-            <TabsList className="h-8 w-full max-w-xl bg-white/10 p-0.5 md:h-9">
+            <TabsList className="h-8 w-full max-w-2xl flex-wrap bg-white/10 p-0.5 md:h-9">
               <TabsTrigger
                 value="dashboard"
                 className="flex-1 text-xs data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
               >
                 Dashboard
+              </TabsTrigger>
+              <TabsTrigger
+                value="operaciones"
+                className="flex-1 text-xs data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
+              >
+                Operaciones
               </TabsTrigger>
               <TabsTrigger
                 value="datos"
@@ -2289,6 +2337,22 @@ function DashboardContent() {
               </TabsContent>
               <TabsContent value={DATOS_SUB_DATOS_PENDIENTES} className="mt-0 space-y-4 outline-none">
                 <DatosPendientesTable />
+              </TabsContent>
+            </Tabs>
+          </TabsContent>
+
+          <TabsContent value="operaciones" className="mt-0 outline-none">
+            <Tabs value={operacionesSubTab} onValueChange={handleOperacionesSubTabChange} className="w-full">
+              <TabsList className="mb-3 h-10 w-full max-w-md bg-slate-200/90 p-1">
+                <TabsTrigger
+                  value={OPERACIONES_SUB_CONTROL}
+                  className="flex-1 text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm"
+                >
+                  Control
+                </TabsTrigger>
+              </TabsList>
+              <TabsContent value={OPERACIONES_SUB_CONTROL} className="mt-0 outline-none">
+                <ControlOperacionesPanel />
               </TabsContent>
             </Tabs>
           </TabsContent>

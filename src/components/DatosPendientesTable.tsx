@@ -21,7 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   buildDatosPendientesQueryParams,
   DATOS_PENDIENTES_COLUMNS,
@@ -262,13 +262,13 @@ export function DatosPendientesTable() {
           </p>
         ) : null}
         <div className="max-h-[min(70vh,640px)] overflow-y-auto overflow-x-auto rounded-lg border border-slate-200">
-          <Table>
-            <TableHeader>
+          <table className="w-full caption-bottom text-sm">
+            <TableHeader className="sticky top-0 z-20 bg-slate-50 shadow-[0_1px_0_0_rgb(226,232,240)]">
               <TableRow className="border-slate-200 bg-slate-50 hover:bg-slate-50">
                 {DATOS_PENDIENTES_COLUMNS.map((col) => (
                   <TableHead
                     key={col.key}
-                    className="sticky top-0 z-20 border-b border-slate-200 bg-slate-50 font-medium text-slate-900 shadow-[inset_0_-1px_0_0_rgb(226,232,240)]"
+                    className="border-b border-slate-200 bg-slate-50 font-medium text-slate-900"
                   >
                     {col.label}
                   </TableHead>
@@ -326,7 +326,7 @@ export function DatosPendientesTable() {
                 })
               )}
             </TableBody>
-          </Table>
+          </table>
         </div>
 
         <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">

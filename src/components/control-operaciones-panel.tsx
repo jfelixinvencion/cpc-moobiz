@@ -28,6 +28,9 @@ import { semaforoSwatch } from "@/lib/control-operaciones-map";
 import { normalizeConductorName } from "@/lib/gps-filter";
 
 const ROW_H = 44;
+const PAGE_SIZE = 125;
+const CHUNK_NAMES = 55;
+const CHUNK_IDS = 80;
 const GLOBAL_ALL = "__all__";
 const ESTADO_ALL = "__all__";
 const GPS_ALL = "__all__";
@@ -38,18 +41,21 @@ const SOLICITANTE_ALL = "__all__";
 const SOLICITANTE_EMPTY = "__empty__";
 
 type MergedDriver = ControlDriverExcelRow & {
-  servicios_activos: number;
-  semaforo: string | null;
+  /** undefined = aún no cargado (mostrar "-"). */
+  servicios_activos?: number;
+  /** undefined = aún no cargado (mostrar "-"). */
+  semaforo?: string | null;
 };
 
 type ControlCell = { solicitante: string | null; observacion: string | null };
 
-type ApiFull = {
-  drivers: MergedDriver[];
+type ApiPage = {
+  drivers: ControlDriverExcelRow[];
   controlById: Record<string, ControlCell>;
-  operatorOptions: { value: string; label: string }[];
+  page: number;
+  pageSize: number;
+  total: number;
   semanaLabel: string;
-  semaforoOptions: string[];
   error?: string;
 };
 
@@ -60,8 +66,17 @@ function SearchableMiniSelect(props: {
   placeholder?: string;
   widthClass?: string;
   markEditing?: boolean;
+  disabled?: boolean;
 }) {
-  const { value, onChange, options, placeholder = "Buscar…", widthClass = "w-[200px]", markEditing } = props;
+  const {
+    value,
+    onChange,
+    options,
+    placeholder = "Buscar…",
+    widthClass = "w-[200px]",
+    markEditing,
+    disabled,
+  } = props;
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
@@ -89,8 +104,10 @@ function SearchableMiniSelect(props: {
         type="button"
         variant="outline"
         size="sm"
+        disabled={disabled}
         className="h-8 w-full justify-between px-2 text-left text-xs font-normal"
         onClick={() => {
+          if (disabled) return;
           setQ("");
           setOpen((o) => !o);
         }}
@@ -98,7 +115,7 @@ function SearchableMiniSelect(props: {
       >
         <span className="truncate">{label || "—"}</span>
       </Button>
-      {open ? (
+      {open && !disabled ? (
         <div className="absolute z-50 mt-1 max-h-56 w-full min-w-[180px] overflow-hidden rounded-md border border-slate-200 bg-white shadow-md">
           <div className="border-b border-slate-100 p-1.5">
             <Input
@@ -147,17 +164,83 @@ async function postUpsert(
   if (!res.ok) throw new Error(j.error || "Error al guardar");
 }
 
+async function fetchViajesCountsChunked(names: string[]): Promise<Record<string, number>> {
+  const uniq = [...new Set(names.map((n) => String(n).trim()).filter(Boolean))];
+  const merged: Record<string, number> = {};
+  for (let i = 0; i < uniq.length; i += CHUNK_NAMES) {
+    const part = uniq.slice(i, i + CHUNK_NAMES);
+    const sp = new URLSearchParams({ partial: "viajes" });
+    for (const n of part) sp.append("n", n);
+    const res = await fetch(`/api/control-operaciones?${sp.toString()}`, { cache: "no-store" });
+    const j = (await res.json()) as { viajesCounts?: Record<string, number>; error?: string };
+    if (!res.ok) throw new Error(j.error || "viajes");
+    if (j.viajesCounts && typeof j.viajesCounts === "object") {
+      for (const [k, v] of Object.entries(j.viajesCounts)) {
+        merged[k] = (merged[k] ?? 0) + (typeof v === "number" ? v : 0);
+      }
+    }
+  }
+  return merged;
+}
+
+async function fetchSemaforoChunked(ids: string[], semanaLabel?: string): Promise<{
+  semaforoById: Record<string, string>;
+  semaforoOptions: string[];
+}> {
+  const uniq = [...new Set(ids.map((id) => String(id).trim()).filter(Boolean))];
+  const semaforoById: Record<string, string> = {};
+  for (let i = 0; i < uniq.length; i += CHUNK_IDS) {
+    const part = uniq.slice(i, i + CHUNK_IDS);
+    const sp = new URLSearchParams({ partial: "semaforo" });
+    if (semanaLabel) sp.set("semanaLabel", semanaLabel);
+    for (const id of part) sp.append("id", id);
+    const res = await fetch(`/api/control-operaciones?${sp.toString()}`, { cache: "no-store" });
+    const j = (await res.json()) as {
+      semaforoById?: Record<string, string>;
+      semaforoOptions?: string[];
+      error?: string;
+    };
+    if (!res.ok) throw new Error(j.error || "semaforo");
+    if (j.semaforoById && typeof j.semaforoById === "object") {
+      Object.assign(semaforoById, j.semaforoById);
+    }
+  }
+  const semaforoOptions = Array.from(
+    new Set(
+      Object.values(semaforoById)
+        .map((s) => String(s).trim())
+        .filter(Boolean),
+    ),
+  ).sort((a, b) => a.localeCompare(b, "es"));
+  return { semaforoById, semaforoOptions };
+}
+
+function withPendingHeavy(drivers: ControlDriverExcelRow[]): MergedDriver[] {
+  return drivers.map((d) => ({
+    ...d,
+    servicios_activos: undefined,
+    semaforo: undefined,
+  }));
+}
+
 export function ControlOperacionesPanel() {
   const [rows, setRows] = useState<MergedDriver[]>([]);
   const [controlById, setControlById] = useState<Record<string, ControlCell>>({});
   const [operatorOptions, setOperatorOptions] = useState<{ value: string; label: string }[]>([]);
+  const [operatorsReady, setOperatorsReady] = useState(false);
   const [semanaLabel, setSemanaLabel] = useState("");
   const [semaforoOptionsFromApi, setSemaforoOptionsFromApi] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [heavyBusy, setHeavyBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [syncConductoresBusy, setSyncConductoresBusy] = useState(false);
   const [viajesBusy, setViajesBusy] = useState(false);
+  const [semaforoBusy, setSemaforoBusy] = useState(false);
+
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
 
   const [region, setRegion] = useState(GLOBAL_ALL);
   const [estado, setEstado] = useState(ESTADO_ALL);
@@ -174,7 +257,12 @@ export function ControlOperacionesPanel() {
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkSolicitante, setBulkSolicitante] = useState("");
 
+  /** Evita que `operatorsReady` recree callbacks y dispare el `useEffect` de carga inicial en bucle. */
+  const operatorsFetchedRef = useRef(false);
+
   const hoyStr = useMemo(() => format(new Date(), "dd/MM/yyyy"), []);
+
+  const hasMore = rows.length < total;
 
   const distritoOptions = useMemo(() => {
     const s = new Set<string>();
@@ -219,51 +307,153 @@ export function ControlOperacionesPanel() {
     });
   }, [rows, region, estado, gps, semaforo, distrito, conductorQ, solicitanteFilter, controlById]);
 
-  const loadFull = useCallback(async () => {
-    setLoading(true);
+  const enrichHeavyForSlice = useCallback(async (slice: ControlDriverExcelRow[], semana: string) => {
+    if (slice.length === 0) return;
+    setHeavyBusy(true);
+    const sliceIds = new Set(slice.map((s) => s.id_conductor));
+    try {
+      if (!operatorsFetchedRef.current) {
+        const ro = await fetch("/api/control-operaciones?partial=operators", { cache: "no-store" });
+        const jo = (await ro.json()) as { operatorOptions?: { value: string; label: string }[]; error?: string };
+        if (ro.ok && Array.isArray(jo.operatorOptions)) {
+          setOperatorOptions(jo.operatorOptions);
+          setOperatorsReady(true);
+          operatorsFetchedRef.current = true;
+        }
+      }
+
+      const names = slice.map((d) => d.nombre_conductor);
+      const viajesCounts = await fetchViajesCountsChunked(names);
+      setRows((prev) =>
+        prev.map((r) => {
+          if (!sliceIds.has(r.id_conductor)) return r;
+          const k = normalizeConductorName(r.nombre_conductor);
+          const v = viajesCounts[k] ?? 0;
+          return { ...r, servicios_activos: v };
+        }),
+      );
+
+      const ids = slice.map((d) => d.id_conductor);
+      const { semaforoById, semaforoOptions } = await fetchSemaforoChunked(ids, semana);
+      setSemaforoOptionsFromApi((prev) =>
+        Array.from(new Set([...prev, ...semaforoOptions])).sort((a, b) => a.localeCompare(b, "es")),
+      );
+      setRows((prev) =>
+        prev.map((r) => {
+          if (!sliceIds.has(r.id_conductor)) return r;
+          return { ...r, semaforo: semaforoById[r.id_conductor] ?? null };
+        }),
+      );
+    } finally {
+      setHeavyBusy(false);
+    }
+  }, []);
+
+  const fetchPage = useCallback(async (nextPage: number, append: boolean) => {
+    const isFirst = !append;
+    if (isFirst) setLoading(true);
+    else setLoadingMore(true);
     setError(null);
     try {
-      const res = await fetch("/api/control-operaciones", { cache: "no-store" });
-      const j = (await res.json()) as ApiFull;
+      const sp = new URLSearchParams({
+        page: String(nextPage),
+        pageSize: String(PAGE_SIZE),
+      });
+      const res = await fetch(`/api/control-operaciones?${sp.toString()}`, { cache: "no-store" });
+      const j = (await res.json()) as ApiPage & { loadStrategy?: unknown };
       if (!res.ok) throw new Error(j.error || "Error al cargar control");
-      setRows(Array.isArray(j.drivers) ? j.drivers : []);
-      setControlById(j.controlById && typeof j.controlById === "object" ? j.controlById : {});
-      setOperatorOptions(Array.isArray(j.operatorOptions) ? j.operatorOptions : []);
-      setSemanaLabel(typeof j.semanaLabel === "string" ? j.semanaLabel : "");
-      setSemaforoOptionsFromApi(Array.isArray(j.semaforoOptions) ? j.semaforoOptions : []);
+
+      const drivers = Array.isArray(j.drivers) ? j.drivers : [];
+      const control = j.controlById && typeof j.controlById === "object" ? j.controlById : {};
+      const tot = typeof j.total === "number" ? j.total : drivers.length;
+      const sl = typeof j.semanaLabel === "string" ? j.semanaLabel : "";
+
+      setTotal(tot);
+      setSemanaLabel(sl);
+      setControlById(control);
+
+      const merged = withPendingHeavy(drivers);
+      if (append) {
+        setRows((prev) => [...prev, ...merged]);
+        setPage(nextPage);
+      } else {
+        setRows(merged);
+        setOperatorOptions([]);
+        setOperatorsReady(false);
+        operatorsFetchedRef.current = false;
+        setSemaforoOptionsFromApi([]);
+        setPage(nextPage);
+      }
+
+      void enrichHeavyForSlice(drivers, sl);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error");
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
-  }, []);
+  }, [enrichHeavyForSlice]);
+
+  const reloadTable = useCallback(() => {
+    setPage(1);
+    setSelected(new Set());
+    void fetchPage(1, false);
+  }, [fetchPage]);
 
   useEffect(() => {
-    void loadFull();
-  }, [loadFull]);
+    void fetchPage(1, false);
+  }, [fetchPage]);
 
-  const mergeViajesCounts = useCallback((counts: Record<string, number>) => {
-    setRows((prev) =>
-      prev.map((r) => {
-        const key = normalizeConductorName(r.nombre_conductor);
-        return { ...r, servicios_activos: counts[key] ?? 0 };
-      }),
-    );
-  }, []);
+  const loadMore = useCallback(() => {
+    if (!hasMore || loading || loadingMore) return;
+    void fetchPage(page + 1, true);
+  }, [hasMore, loading, loadingMore, page, fetchPage]);
 
   const refreshViajes = useCallback(async () => {
+    if (rows.length === 0) return;
     setViajesBusy(true);
+    setError(null);
     try {
-      const res = await fetch("/api/control-operaciones?partial=viajes", { cache: "no-store" });
-      const j = (await res.json()) as { viajesCounts?: Record<string, number>; error?: string };
-      if (!res.ok) throw new Error(j.error || "Error viajes");
-      if (j.viajesCounts && typeof j.viajesCounts === "object") mergeViajesCounts(j.viajesCounts);
+      const base = rows.map((r) => ({
+        id_conductor: r.id_conductor,
+        nombre_conductor: r.nombre_conductor,
+      })) as ControlDriverExcelRow[];
+      const viajesCounts = await fetchViajesCountsChunked(base.map((d) => d.nombre_conductor));
+      setRows((prev) =>
+        prev.map((r) => {
+          const k = normalizeConductorName(r.nombre_conductor);
+          const v = viajesCounts[k] ?? 0;
+          return { ...r, servicios_activos: v };
+        }),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error viajes");
     } finally {
       setViajesBusy(false);
     }
-  }, [mergeViajesCounts]);
+  }, [rows]);
+
+  const refreshSemaforo = useCallback(async () => {
+    if (rows.length === 0) return;
+    setSemaforoBusy(true);
+    setError(null);
+    try {
+      const ids = rows.map((r) => r.id_conductor);
+      const requested = new Set(ids);
+      const { semaforoById, semaforoOptions } = await fetchSemaforoChunked(ids, semanaLabel || undefined);
+      setSemaforoOptionsFromApi(semaforoOptions);
+      setRows((prev) =>
+        prev.map((r) => {
+          if (!requested.has(r.id_conductor)) return r;
+          return { ...r, semaforo: semaforoById[r.id_conductor] ?? null };
+        }),
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error semáforo");
+    } finally {
+      setSemaforoBusy(false);
+    }
+  }, [rows, semanaLabel]);
 
   const syncConductores = useCallback(async () => {
     setSyncConductoresBusy(true);
@@ -272,13 +462,13 @@ export function ControlOperacionesPanel() {
       const res = await fetch("/api/moobiz-drivers/sync", { method: "POST" });
       const j = (await res.json()) as { error?: string };
       if (!res.ok) throw new Error(j.error || "Sync conductores falló");
-      await loadFull();
+      reloadTable();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Sync");
     } finally {
       setSyncConductoresBusy(false);
     }
-  }, [loadFull]);
+  }, [reloadTable]);
 
   useEffect(() => {
     const tick = async () => {
@@ -310,26 +500,29 @@ export function ControlOperacionesPanel() {
     overscan: 12,
   });
 
-  const toggleSelected = useCallback((id: string, idx: number, shift: boolean) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (shift && anchorIdx.current !== null) {
-        const a = Math.min(anchorIdx.current, idx);
-        const b = Math.max(anchorIdx.current, idx);
-        const slice = filtered.slice(a, b + 1).map((r) => r.id_conductor);
-        const allOn = slice.every((x) => next.has(x));
-        for (const x of slice) {
-          if (allOn) next.delete(x);
-          else next.add(x);
+  const toggleSelected = useCallback(
+    (id: string, idx: number, shift: boolean) => {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        if (shift && anchorIdx.current !== null) {
+          const a = Math.min(anchorIdx.current, idx);
+          const b = Math.max(anchorIdx.current, idx);
+          const slice = filtered.slice(a, b + 1).map((r) => r.id_conductor);
+          const allOn = slice.every((x) => next.has(x));
+          for (const x of slice) {
+            if (allOn) next.delete(x);
+            else next.add(x);
+          }
+          return next;
         }
+        anchorIdx.current = idx;
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
         return next;
-      }
-      anchorIdx.current = idx;
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, [filtered]);
+      });
+    },
+    [filtered],
+  );
 
   const allFilteredSelected =
     filtered.length > 0 && filtered.every((r) => selected.has(r.id_conductor));
@@ -425,6 +618,16 @@ export function ControlOperacionesPanel() {
   const gridTemplate =
     "40px minmax(72px,0.65fr) minmax(120px,1fr) minmax(88px,0.75fr) minmax(64px,0.5fr) minmax(52px,0.45fr) minmax(100px,0.75fr) minmax(64px,0.45fr) minmax(140px,0.9fr) minmax(140px,1fr)";
 
+  const serviciosCell = (r: MergedDriver) =>
+    r.servicios_activos === undefined ? "—" : String(r.servicios_activos);
+
+  const semaforoCell = (r: MergedDriver) => {
+    if (r.semaforo === undefined) {
+      return { className: "bg-slate-200", label: "—" };
+    }
+    return semaforoSwatch(r.semaforo);
+  };
+
   return (
     <div className="space-y-4">
       <Card className="border-slate-200 bg-white shadow-sm">
@@ -434,6 +637,10 @@ export function ControlOperacionesPanel() {
               <CardTitle className="text-base font-semibold text-slate-900">Control de operaciones</CardTitle>
               <p className="text-xs text-slate-500">
                 Semana liquidaciones: <span className="font-mono text-slate-700">{semanaLabel || "—"}</span>
+                {" · "}
+                <span>
+                  Página {page} · {PAGE_SIZE} / carga · {rows.length} cargados / {total} total
+                </span>
               </p>
             </div>
             <Badge variant="secondary" className="shrink-0 bg-slate-100 text-slate-800">
@@ -554,17 +761,37 @@ export function ControlOperacionesPanel() {
               type="button"
               size="sm"
               variant="outline"
-              disabled={viajesBusy || loading}
+              disabled={viajesBusy || loading || rows.length === 0}
               onClick={() => void refreshViajes()}
               className="text-xs"
             >
               {viajesBusy ? "…" : "🚗 Viajes"}
             </Button>
-            <Button type="button" size="sm" variant="secondary" disabled={loading} onClick={() => void loadFull()}>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={semaforoBusy || loading || rows.length === 0}
+              onClick={() => void refreshSemaforo()}
+              className="text-xs"
+            >
+              {semaforoBusy ? "…" : "🚦 Semáforo"}
+            </Button>
+            <Button type="button" size="sm" variant="secondary" disabled={loading} onClick={() => void reloadTable()}>
               Recargar tabla
             </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={!hasMore || loading || loadingMore}
+              onClick={() => void loadMore()}
+            >
+              {loadingMore ? "…" : "Cargar más"}
+            </Button>
             <span className="text-[10px] text-slate-500">
-              {loading ? "Cargando…" : `${filtered.length} filas visibles · ${rows.length} conductores`}
+              {loading ? "Cargando…" : `${filtered.length} visibles · ${rows.length} en memoria`}
+              {heavyBusy ? " · Sincronizando viajes/semáforo…" : ""}
               {saving ? " · Guardando…" : ""}
             </span>
           </div>
@@ -613,86 +840,85 @@ export function ControlOperacionesPanel() {
               <span>Solicitante</span>
               <span>Observación</span>
             </div>
-            <div
-              ref={parentRef}
-              className="max-h-[min(640px,calc(100vh-320px))] overflow-auto"
-            >
-            <div className="relative" style={{ height: rowVirtualizer.getTotalSize() }}>
-              {rowVirtualizer.getVirtualItems().map((vi) => {
-                const r = filtered[vi.index];
-                if (!r) return null;
-                const c = controlById[r.id_conductor] ?? { solicitante: null, observacion: null };
-                const sem = semaforoSwatch(r.semaforo);
-                const checked = selected.has(r.id_conductor);
-                return (
-                  <div
-                    key={r.id_conductor}
-                    className="absolute left-0 grid w-full gap-1 border-b border-slate-100 px-1 py-1 text-xs hover:bg-slate-50/80"
-                    style={{
-                      transform: `translateY(${vi.start}px)`,
-                      height: vi.size,
-                      gridTemplateColumns: gridTemplate,
-                    }}
-                    onClick={(e) => {
-                      if ((e.target as HTMLElement).closest("input,button,select,a,[data-no-shift-select]")) return;
-                      toggleSelected(r.id_conductor, vi.index, e.shiftKey);
-                    }}
-                  >
-                    <div className="flex items-center justify-center">
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={() => toggleSelected(r.id_conductor, vi.index, false)}
-                        aria-label={`Sel ${r.id_conductor}`}
-                      />
-                    </div>
-                    <span className="truncate font-mono text-[11px]" title={r.id_conductor}>
-                      {r.id_conductor}
-                    </span>
-                    <span className="truncate" title={r.nombre_conductor}>
-                      {r.nombre_conductor}
-                    </span>
-                    <span className="truncate text-[11px]" title={r.distrito_vive}>
-                      {r.distrito_vive || "—"}
-                    </span>
-                    <span className="truncate text-[11px]">{r.turno || "—"}</span>
-                    <span className="text-center tabular-nums">{r.servicios_activos}</span>
-                    <div className="flex min-w-0 items-center gap-1.5" data-no-shift-select>
-                      <span className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${sem.className}`} />
-                      <span className="truncate text-[11px]" title={r.semaforo ?? ""}>
-                        {sem.label}
-                      </span>
-                    </div>
-                    <Badge
-                      variant="outline"
-                      className={
-                        r.gps_label === "Apagado"
-                          ? "h-6 justify-self-start border-amber-200 bg-amber-50 text-[10px] text-amber-900"
-                          : "h-6 justify-self-start border-emerald-200 bg-emerald-50 text-[10px] text-emerald-900"
-                      }
+            <div ref={parentRef} className="max-h-[min(640px,calc(100vh-320px))] overflow-auto">
+              <div className="relative" style={{ height: rowVirtualizer.getTotalSize() }}>
+                {rowVirtualizer.getVirtualItems().map((vi) => {
+                  const r = filtered[vi.index];
+                  if (!r) return null;
+                  const c = controlById[r.id_conductor] ?? { solicitante: null, observacion: null };
+                  const sem = semaforoCell(r);
+                  const checked = selected.has(r.id_conductor);
+                  return (
+                    <div
+                      key={r.id_conductor}
+                      className="absolute left-0 grid w-full gap-1 border-b border-slate-100 px-1 py-1 text-xs hover:bg-slate-50/80"
+                      style={{
+                        transform: `translateY(${vi.start}px)`,
+                        height: vi.size,
+                        gridTemplateColumns: gridTemplate,
+                      }}
+                      onClick={(e) => {
+                        if ((e.target as HTMLElement).closest("input,button,select,a,[data-no-shift-select]"))
+                          return;
+                        toggleSelected(r.id_conductor, vi.index, e.shiftKey);
+                      }}
                     >
-                      {r.gps_label}
-                    </Badge>
-                    <div data-no-shift-select>
-                      <SearchableMiniSelect
-                        value={c.solicitante ?? ""}
-                        onChange={(v) => void persistRow(r.id_conductor, { solicitante: v || null })}
-                        options={[{ value: "", label: "— vacío —" }, ...operatorOptions]}
-                        widthClass="w-full min-w-[120px]"
-                        markEditing
-                      />
+                      <div className="flex items-center justify-center">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={() => toggleSelected(r.id_conductor, vi.index, false)}
+                          aria-label={`Sel ${r.id_conductor}`}
+                        />
+                      </div>
+                      <span className="truncate font-mono text-[11px]" title={r.id_conductor}>
+                        {r.id_conductor}
+                      </span>
+                      <span className="truncate" title={r.nombre_conductor}>
+                        {r.nombre_conductor}
+                      </span>
+                      <span className="truncate text-[11px]" title={r.distrito_vive}>
+                        {r.distrito_vive || "—"}
+                      </span>
+                      <span className="truncate text-[11px]">{r.turno || "—"}</span>
+                      <span className="text-center tabular-nums">{serviciosCell(r)}</span>
+                      <div className="flex min-w-0 items-center gap-1.5" data-no-shift-select>
+                        <span className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${sem.className}`} />
+                        <span className="truncate text-[11px]" title={r.semaforo ?? ""}>
+                          {sem.label}
+                        </span>
+                      </div>
+                      <Badge
+                        variant="outline"
+                        className={
+                          r.gps_label === "Apagado"
+                            ? "h-6 justify-self-start border-amber-200 bg-amber-50 text-[10px] text-amber-900"
+                            : "h-6 justify-self-start border-emerald-200 bg-emerald-50 text-[10px] text-emerald-900"
+                        }
+                      >
+                        {r.gps_label}
+                      </Badge>
+                      <div data-no-shift-select>
+                        <SearchableMiniSelect
+                          value={c.solicitante ?? ""}
+                          onChange={(v) => void persistRow(r.id_conductor, { solicitante: v || null })}
+                          options={[{ value: "", label: "— vacío —" }, ...operatorOptions]}
+                          widthClass="w-full min-w-[120px]"
+                          markEditing
+                          disabled={!operatorsReady}
+                        />
+                      </div>
+                      <div data-no-shift-select>
+                        <ObservacionCell
+                          initial={c.observacion ?? ""}
+                          onCommit={(text) => void persistRow(r.id_conductor, { observacion: text || null })}
+                        />
+                      </div>
                     </div>
-                    <div data-no-shift-select>
-                      <ObservacionCell
-                        initial={c.observacion ?? ""}
-                        onCommit={(text) => void persistRow(r.id_conductor, { observacion: text || null })}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
         </CardContent>
@@ -709,12 +935,17 @@ export function ControlOperacionesPanel() {
             options={operatorOptions}
             placeholder="Buscar operador…"
             widthClass="w-full"
+            disabled={!operatorsReady}
           />
           <DialogFooter className="gap-2 sm:justify-end">
             <Button type="button" variant="outline" onClick={() => setBulkOpen(false)}>
               Cancelar
             </Button>
-            <Button type="button" onClick={() => void applyBulkSolicitante()} disabled={!bulkSolicitante.trim()}>
+            <Button
+              type="button"
+              onClick={() => void applyBulkSolicitante()}
+              disabled={!bulkSolicitante.trim() || !operatorsReady}
+            >
               Aplicar
             </Button>
           </DialogFooter>

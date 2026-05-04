@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { getISOWeek, getISOWeekYear, startOfISOWeek, subDays } from "date-fns";
 
-import { semanaLabelLiquidaciones } from "../src/lib/control-operaciones-semana";
+import { semanaLabelLiquidaciones } from "../src/lib/control-operaciones-semana.ts";
 
 test("semanaLabelLiquidaciones usa ISO semana de (hoy - 7 días)", () => {
   const ref = new Date(2026, 4, 4, 12, 0, 0);

@@ -28,14 +28,16 @@ export function mapExcelRowToControlDriver(row: Record<string, unknown>): Contro
   const nombre_conductor = pickText(row, ["Nombre Conductor", "nombre_conductor"]);
   const distrito_vive = pickText(row, ["En que distrito vive", "distrito_vive"]);
   const turno = pickText(row, ["Turno", "turno"]);
-  const global = pickText(row, ["GLOBAL", "global"]).toUpperCase();
+  const global = pickText(row, ["global_col", "GLOBAL", "global"]).toUpperCase();
 
   const estadoRaw = pickText(row, [
+    "estado_conductor_col",
     "Estado Conductor",
-    "Estado",
-    "Status",
     "estado_conductor",
+    "status_col",
+    "Status",
     "estado",
+    "Estado",
     "status",
   ]);
   const el = estadoRaw.toLowerCase();
@@ -44,6 +46,8 @@ export function mapExcelRowToControlDriver(row: Record<string, unknown>): Contro
   else if (el.includes("rechaz")) estado_conductor = "Rechazado";
 
   const onlineRaw =
+    row["online_col"] ??
+    row["gps_col"] ??
     row["Online"] ??
     row["online"] ??
     row["GPS"] ??

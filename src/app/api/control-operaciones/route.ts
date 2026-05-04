@@ -9,8 +9,35 @@ import { getSupabaseAdmin } from "@/lib/quality-audit";
 
 export const runtime = "nodejs";
 
-const EXCEL_PAGE = 2500;
-const VIAJES_PAGE = 5000;
+/** Columnas mínimas de la vista (alias PostgREST → mapExcelRowToControlDriver). */
+const DRIVER_SELECT = [
+  `id_conductor:"ID Conductor"`,
+  `nombre_conductor:"Nombre Conductor"`,
+  `distrito_vive:"En que distrito vive"`,
+  `turno:"Turno"`,
+  `global_col:GLOBAL`,
+  `estado_conductor_col:"Estado Conductor"`,
+  `estado:"Estado"`,
+  `status_col:"Status"`,
+  `online_col:"Online"`,
+  `gps_col:"GPS"`,
+].join(",");
+
+const DEFAULT_PAGE_SIZE = 125;
+const MAX_PAGE_SIZE = 300;
+const MAX_NAMES_VIAJES = 250;
+const MAX_IDS_SEMAFORO = 250;
+const CONTROL_LIMIT = 50_000;
+
+function nowMs(): number {
+  return Date.now();
+}
+
+function logBlock(label: string, t0: number): number {
+  const ms = Date.now() - t0;
+  console.log(`[control-operaciones][timing] ${label}: ${ms}ms`);
+  return ms;
+}
 
 function pickSemaforo(row: Record<string, unknown>): string {
   const v = row.Semaforo ?? row.semaforo ?? row.SEMAFORO;
@@ -27,46 +54,61 @@ function pickSemanaLabel(row: Record<string, unknown>): string {
   return v === null || v === undefined ? "" : String(v).trim();
 }
 
-async function fetchAllExcelDrivers(): Promise<ControlDriverExcelRow[]> {
+async function fetchDriversPage(
+  page: number,
+  pageSize: number,
+): Promise<{ drivers: ControlDriverExcelRow[]; total: number }> {
   const sb = getSupabaseAdmin();
-  const out: ControlDriverExcelRow[] = [];
-  for (let from = 0; ; from += EXCEL_PAGE) {
-    const { data, error } = await sb
+  const safePage = Math.max(1, page);
+  const safeSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Math.min(pageSize, MAX_PAGE_SIZE)));
+  const from = (safePage - 1) * safeSize;
+  const to = from + safeSize - 1;
+
+  let result = await sb
+    .schema("vista")
+    .from("vw_moobiz_drivers_excel")
+    .select(DRIVER_SELECT, { count: "exact" })
+    .range(from, to);
+
+  if (result.error) {
+    console.warn("[control-operaciones] DRIVER_SELECT explícito falló, fallback select(*):", result.error.message);
+    result = await sb
       .schema("vista")
       .from("vw_moobiz_drivers_excel")
-      .select("*")
-      .range(from, from + EXCEL_PAGE - 1);
-    if (error) throw error;
-    const rows = Array.isArray(data) ? data : [];
-    for (const raw of rows) {
-      if (!raw || typeof raw !== "object") continue;
-      const m = mapExcelRowToControlDriver(raw as Record<string, unknown>);
-      if (m) out.push(m);
-    }
-    if (rows.length < EXCEL_PAGE) break;
+      .select("*", { count: "exact" })
+      .range(from, to);
   }
-  return out;
+
+  const { data, count, error } = result;
+  if (error) throw error;
+  const rows = Array.isArray(data) ? data : [];
+  const drivers: ControlDriverExcelRow[] = [];
+  for (const raw of rows) {
+    if (!raw || typeof raw !== "object") continue;
+    const m = mapExcelRowToControlDriver(raw as Record<string, unknown>);
+    if (m) drivers.push(m);
+  }
+  const total = typeof count === "number" && Number.isFinite(count) ? count : drivers.length;
+  return { drivers, total };
 }
 
-async function fetchViajesActivosCounts(): Promise<Record<string, number>> {
+async function fetchViajesCountsForExactConductorNames(names: string[]): Promise<Record<string, number>> {
   const sb = getSupabaseAdmin();
   const counts = new Map<string, number>();
-  for (let from = 0; ; from += VIAJES_PAGE) {
-    const { data, error } = await sb
-      .from("viajes_activos")
-      .select("conductor")
-      .range(from, from + VIAJES_PAGE - 1);
+  const uniq = [...new Set(names.map((n) => String(n).trim()).filter(Boolean))].slice(0, MAX_NAMES_VIAJES);
+  const chunk = 80;
+  for (let i = 0; i < uniq.length; i += chunk) {
+    const part = uniq.slice(i, i + chunk);
+    if (part.length === 0) continue;
+    const { data, error } = await sb.from("viajes_activos").select("conductor").in("conductor", part);
     if (error) throw error;
-    const rows = Array.isArray(data) ? data : [];
-    for (const r of rows) {
-      if (!r || typeof r !== "object") continue;
-      const c = (r as { conductor?: unknown }).conductor;
-      const name = c === null || c === undefined ? "" : String(c).trim();
-      if (!name) continue;
-      const key = normalizeConductorName(name);
-      counts.set(key, (counts.get(key) ?? 0) + 1);
+    for (const raw of data || []) {
+      if (!raw || typeof raw !== "object") continue;
+      const c = String((raw as { conductor?: unknown }).conductor ?? "").trim();
+      if (!c) continue;
+      const k = normalizeConductorName(c);
+      counts.set(k, (counts.get(k) ?? 0) + 1);
     }
-    if (rows.length < VIAJES_PAGE) break;
   }
   return Object.fromEntries(counts.entries());
 }
@@ -78,9 +120,10 @@ async function fetchLiquidacionesSemaforoByConductor(
   if (ids.length === 0) return {};
   const sb = getSupabaseAdmin();
   const map: Record<string, string> = {};
-  const chunk = 200;
-  for (let i = 0; i < ids.length; i += chunk) {
-    const slice = ids.slice(i, i + chunk);
+  const sliceIds = ids.map((id) => String(id).trim()).filter(Boolean).slice(0, MAX_IDS_SEMAFORO);
+  const chunk = 120;
+  for (let i = 0; i < sliceIds.length; i += chunk) {
+    const slice = sliceIds.slice(i, i + chunk);
     const { data, error } = await sb
       .schema("reportes")
       .from("liquidaciones_conductores")
@@ -104,8 +147,21 @@ async function fetchLiquidacionesSemaforoByConductor(
 
 async function fetchOperatorsActivos(): Promise<{ value: string; label: string }[]> {
   const sb = getSupabaseAdmin();
-  const { data, error } = await sb.schema("vista").from("vw_moobiz_operators").select("*").limit(5000);
-  if (error) throw error;
+  const { data, error } = await sb
+    .schema("vista")
+    .from("vw_moobiz_operators")
+    .select("name,Estado,estado")
+    .limit(3000);
+  if (error) {
+    console.warn("[control-operaciones] operators select(name,Estado) falló, fallback *:", error.message);
+    const fb = await sb.schema("vista").from("vw_moobiz_operators").select("*").limit(3000);
+    if (fb.error) throw fb.error;
+    return normalizeOperatorRows(fb.data);
+  }
+  return normalizeOperatorRows(data);
+}
+
+function normalizeOperatorRows(data: unknown): { value: string; label: string }[] {
   const rows = Array.isArray(data) ? data : [];
   const out: { value: string; label: string }[] = [];
   for (const raw of rows) {
@@ -128,7 +184,7 @@ async function fetchControlRows(): Promise<
   const { data, error } = await sb
     .from("control_operaciones")
     .select("id_conductor, solicitante, observacion")
-    .limit(50000);
+    .limit(CONTROL_LIMIT);
   if (error) throw error;
   const rows = Array.isArray(data) ? data : [];
   return rows
@@ -146,72 +202,128 @@ async function fetchControlRows(): Promise<
     .filter(Boolean) as { id_conductor: string; solicitante: string | null; observacion: string | null }[];
 }
 
-/** GET ?partial=control — solo filas de `control_operaciones` (polling). */
+function controlByIdFromRows(
+  controlRows: { id_conductor: string; solicitante: string | null; observacion: string | null }[],
+): Record<string, { solicitante: string | null; observacion: string | null }> {
+  const controlById: Record<string, { solicitante: string | null; observacion: string | null }> = {};
+  for (const r of controlRows) {
+    controlById[r.id_conductor] = { solicitante: r.solicitante, observacion: r.observacion };
+  }
+  return controlById;
+}
+
+/**
+ * GET principal (sin partial): solo página de drivers + control_operaciones + meta.
+ * Causa histórica de timeout 57014: Promise.all de (a) paginación completa de la vista con select(*),
+ * (b) scan completo de viajes_activos por rangos, (c) liquidaciones para todos los ids,
+ * (d) operadores en el mismo request — excedía statement_timeout y/o acumulaba I/O.
+ */
 export async function GET(request: NextRequest) {
+  const tRequest = nowMs();
   try {
     assertQualityReadAccess(request);
-    const url = new URL(request.url);
+    const url = request.nextUrl;
+
     if (url.searchParams.get("partial") === "control") {
+      const t0 = nowMs();
       const controlRows = await fetchControlRows();
-      const controlById: Record<string, { solicitante: string | null; observacion: string | null }> = {};
-      for (const r of controlRows) {
-        controlById[r.id_conductor] = { solicitante: r.solicitante, observacion: r.observacion };
-      }
+      const ms = logBlock("partial=control fetchControlRows", t0);
+      console.log("[control-operaciones][timing] partial=control total:", nowMs() - tRequest, "ms (control:", ms, "ms)");
+      const controlById = controlByIdFromRows(controlRows);
       return NextResponse.json({
         semanaLabel: semanaLabelLiquidaciones(),
         controlById,
+        timingsMs: { control: nowMs() - tRequest },
       });
     }
 
+    if (url.searchParams.get("partial") === "operators") {
+      const t0 = nowMs();
+      const operatorOptions = await fetchOperatorsActivos();
+      logBlock("partial=operators", t0);
+      return NextResponse.json({ operatorOptions, timingsMs: { operators: nowMs() - tRequest } });
+    }
+
     if (url.searchParams.get("partial") === "viajes") {
-      const viajesCounts = await fetchViajesActivosCounts();
-      return NextResponse.json({ viajesCounts });
+      const t0 = nowMs();
+      const names = url.searchParams.getAll("n").map((s) => s.trim()).filter(Boolean);
+      if (names.length === 0) {
+        return NextResponse.json(
+          { error: "Indica al menos un nombre con el query repetido n= (conductores de la página cargada)." },
+          { status: 400 },
+        );
+      }
+      const viajesCounts = await fetchViajesCountsForExactConductorNames(names);
+      logBlock(`partial=viajes n=${names.length}`, t0);
+      return NextResponse.json({ viajesCounts, timingsMs: { viajes: nowMs() - tRequest } });
     }
 
-    const [drivers, controlRows, operatorOptions, viajesCounts] = await Promise.all([
-      fetchAllExcelDrivers(),
-      fetchControlRows(),
-      fetchOperatorsActivos(),
-      fetchViajesActivosCounts(),
-    ]);
-
-    const controlById: Record<string, { solicitante: string | null; observacion: string | null }> = {};
-    for (const r of controlRows) {
-      controlById[r.id_conductor] = { solicitante: r.solicitante, observacion: r.observacion };
+    if (url.searchParams.get("partial") === "semaforo") {
+      const t0 = nowMs();
+      const ids = url.searchParams.getAll("id").map((s) => s.trim()).filter(Boolean);
+      if (ids.length === 0) {
+        return NextResponse.json(
+          { error: "Indica al menos un id_conductor con el query repetido id=." },
+          { status: 400 },
+        );
+      }
+      const semanaLabel =
+        url.searchParams.get("semanaLabel")?.trim() || semanaLabelLiquidaciones();
+      const semaforoById = await fetchLiquidacionesSemaforoByConductor(semanaLabel, ids);
+      const semaforoOptions = Array.from(
+        new Set(
+          Object.values(semaforoById)
+            .map((s) => String(s).trim())
+            .filter(Boolean),
+        ),
+      ).sort((a, b) => a.localeCompare(b, "es"));
+      logBlock(`partial=semaforo ids=${ids.length}`, t0);
+      return NextResponse.json({
+        semanaLabel,
+        semaforoById,
+        semaforoOptions,
+        timingsMs: { semaforo: nowMs() - tRequest },
+      });
     }
 
+    const page = Math.max(1, Number.parseInt(url.searchParams.get("page") ?? "1", 10) || 1);
+    const pageSizeRaw = Number.parseInt(url.searchParams.get("pageSize") ?? String(DEFAULT_PAGE_SIZE), 10);
+    const pageSize = Number.isFinite(pageSizeRaw) ? pageSizeRaw : DEFAULT_PAGE_SIZE;
+
+    const tDrivers = nowMs();
+    const { drivers, total } = await fetchDriversPage(page, pageSize);
+    const msDrivers = logBlock(`drivers page=${page} size=${pageSize} rows=${drivers.length}`, tDrivers);
+
+    const tControl = nowMs();
+    const controlRows = await fetchControlRows();
+    const msControl = logBlock(`control_operaciones rows=${controlRows.length}`, tControl);
+
+    const controlById = controlByIdFromRows(controlRows);
     const semanaLabel = semanaLabelLiquidaciones();
-    const ids = drivers.map((d) => d.id_conductor);
-    const semaforoById = await fetchLiquidacionesSemaforoByConductor(semanaLabel, ids);
 
-    const rows = drivers.map((d) => {
-      const key = normalizeConductorName(d.nombre_conductor);
-      const serviciosActivos = viajesCounts[key] ?? 0;
-      return {
-        ...d,
-        servicios_activos: serviciosActivos,
-        semaforo: semaforoById[d.id_conductor] ?? null,
-      };
-    });
-
-    const semaforoOptions = Array.from(
-      new Set(
-        Object.values(semaforoById)
-          .map((s) => String(s).trim())
-          .filter(Boolean),
-      ),
-    ).sort((a, b) => a.localeCompare(b, "es"));
+    logBlock(`GET total (solo drivers+control) page=${page}`, tRequest);
 
     return NextResponse.json({
-      drivers: rows,
+      drivers,
       controlById,
-      operatorOptions,
+      page,
+      pageSize,
+      total,
       semanaLabel,
-      semaforoOptions,
-      fetchedAt: new Date().toISOString(),
+      /** Resumen diagnóstico (timeout histórico por mezcla de datasets + scan completo). */
+      loadStrategy: {
+        cause:
+          "Antes: Promise.all de toda la vista (rangos 2500 + select *), viajes_activos completo en rangos, liquidaciones para todos los ids y operadores en un solo request; eso superaba el tiempo de sentencia. Ahora: solo una página de columnas mínimas + control; viajes/semaforo/operators van aparte y acotados.",
+        timingsMs: {
+          drivers: msDrivers,
+          control: msControl,
+          total: nowMs() - tRequest,
+        },
+      },
     });
   } catch (err) {
     const message = formatApiError(err);
+    console.error("[control-operaciones] GET error:", message);
     const status = message.startsWith("AUTH_REQUIRED") ? 401 : 500;
     return NextResponse.json({ error: message }, { status });
   }

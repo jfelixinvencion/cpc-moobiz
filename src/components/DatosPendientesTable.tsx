@@ -25,11 +25,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import {
   buildDatosPendientesQueryParams,
   DATOS_PENDIENTES_COLUMNS,
-  type DatosPendientesColumnKey,
-  type DatosPendientesSortDir,
 } from "@/lib/datos-pendientes";
 
 const PAGE_SIZE = 50;
+/** Orden fijo en servidor (sin UI de ordenamiento en cabeceras). */
+const API_SORT_BY = "n_servicios_30" as const;
+const API_SORT_DIR = "desc" as const;
 const FILTER_DEBOUNCE_MS = 500;
 
 type DatosPendientesRow = Record<string, unknown>;
@@ -87,9 +88,6 @@ export function DatosPendientesTable() {
   const [sucursalOptions, setSucursalOptions] = useState<string[]>([]);
   const fetchAbortRef = useRef<AbortController | null>(null);
 
-  const [sortBy, setSortBy] = useState<DatosPendientesColumnKey>("n_servicios_30");
-  const [sortDir, setSortDir] = useState<DatosPendientesSortDir>("desc");
-
   const [detailRow, setDetailRow] = useState<DatosPendientesRow | null>(null);
 
   useEffect(() => {
@@ -114,7 +112,7 @@ export function DatosPendientesTable() {
 
   useEffect(() => {
     setPage(1);
-  }, [sucursalDebounced, estadoDebounced, globalDebounced, searchDebounced, sortBy, sortDir]);
+  }, [sucursalDebounced, estadoDebounced, globalDebounced, searchDebounced]);
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / PAGE_SIZE)), [total]);
   const pageClamped = Math.min(page, totalPages);
@@ -134,8 +132,8 @@ export function DatosPendientesTable() {
         estadoFilter: estadoDebounced,
         globalFilter: globalDebounced,
         searchText: searchDebounced,
-        sortBy,
-        sortDir,
+        sortBy: API_SORT_BY,
+        sortDir: API_SORT_DIR,
       });
       const res = await fetch(`/api/moobiz-drivers-pendientes?${query}`, {
         cache: "no-store",
@@ -177,8 +175,6 @@ export function DatosPendientesTable() {
     estadoDebounced,
     globalDebounced,
     searchDebounced,
-    sortBy,
-    sortDir,
   ]);
 
   useEffect(() => {
@@ -191,15 +187,6 @@ export function DatosPendientesTable() {
     },
     [],
   );
-
-  const onSortColumn = (key: DatosPendientesColumnKey) => {
-    if (sortBy === key) {
-      setSortDir((prev) => (prev === "asc" ? "desc" : "asc"));
-      return;
-    }
-    setSortBy(key);
-    setSortDir(key === "n_servicios_30" ? "desc" : "asc");
-  };
 
   return (
     <Card className="border-slate-200 bg-white text-slate-900 shadow-sm">
@@ -274,25 +261,18 @@ export function DatosPendientesTable() {
             {hint ? ` ${hint}` : ""}
           </p>
         ) : null}
-        <div className="overflow-x-auto rounded-lg border border-slate-200">
+        <div className="max-h-[min(70vh,640px)] overflow-y-auto overflow-x-auto rounded-lg border border-slate-200">
           <Table>
             <TableHeader>
               <TableRow className="border-slate-200 bg-slate-50 hover:bg-slate-50">
-                {DATOS_PENDIENTES_COLUMNS.map((col) => {
-                  const active = sortBy === col.key;
-                  return (
-                    <TableHead key={col.key}>
-                      <button
-                        type="button"
-                        onClick={() => onSortColumn(col.key)}
-                        className="inline-flex items-center gap-1 text-left hover:text-slate-900"
-                      >
-                        {col.label}
-                        {active ? <span className="text-[10px]">{sortDir === "asc" ? "▲" : "▼"}</span> : null}
-                      </button>
-                    </TableHead>
-                  );
-                })}
+                {DATOS_PENDIENTES_COLUMNS.map((col) => (
+                  <TableHead
+                    key={col.key}
+                    className="sticky top-0 z-20 border-b border-slate-200 bg-slate-50 font-medium text-slate-900 shadow-[inset_0_-1px_0_0_rgb(226,232,240)]"
+                  >
+                    {col.label}
+                  </TableHead>
+                ))}
               </TableRow>
             </TableHeader>
             <TableBody>

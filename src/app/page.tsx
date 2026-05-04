@@ -2466,7 +2466,7 @@ function DashboardContent() {
               </TabsList>
 
               <TabsContent value="conductores" className="mt-0 outline-none">
-                <ConductorTimelineMatrix dataRevision={refreshKey} driversRows={driversRows} />
+                <ConductorTimelineMatrix dataRevision={refreshKey} />
               </TabsContent>
 
               <TabsContent value="reservas" className="mt-0 space-y-4 outline-none">

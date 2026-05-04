@@ -86,6 +86,18 @@ test("mapea columna Status de vw_moobiz_drivers_excel a estado", () => {
   assert.equal(rows[0].estado, "Completado");
 });
 
+test("mapea Clave Sol Sunat desde etiqueta larga de vw_moobiz_drivers_excel", () => {
+  const rows = normalizeDriverPendienteRowsFromVistaLabels([
+    {
+      "ID Conductor": 1,
+      "Nombre Conductor": "X",
+      "Clave Sol Sunat: (Para emisión de facturas)": "mi-clave",
+    },
+  ]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].clave_sol_sunat, "mi-clave");
+});
+
 test("contrato filtro GLOBAL: todas las filas normalizadas comparten el mismo valor GLOBAL", () => {
   const rows = normalizeDriverPendienteRowsFromVistaLabels([
     {

@@ -39,7 +39,10 @@ export function mapVistaMoobizDriversPendientesRow(row: Record<string, unknown>)
     marca_contabilidad_moobiz: g(L.marca_contabilidad_moobiz),
     numero_ruc_factura: g(L.numero_ruc_factura),
     usuario_sunat: g(L.usuario_sunat),
-    clave_sol_sunat: g(L.clave_sol_sunat),
+    clave_sol_sunat:
+      row["Clave Sol Sunat"] ??
+      row["Clave Sol Sunat: (Para emisión de facturas)"] ??
+      null,
     estado: g(L.estado) ?? g("Status"),
   };
 }

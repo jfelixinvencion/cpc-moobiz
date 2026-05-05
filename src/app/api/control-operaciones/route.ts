@@ -135,7 +135,7 @@ async function fetchLiquidacionesSemaforoBySemanaLabel(
   const { data, error } = await sb
     .schema("reportes")
     .from("liquidaciones_conductores")
-    .select("id_conductor,semana_label,Semaforo,semaforo")
+    .select('id_conductor,semana_label,"Semaforo"')
     .eq("semana_label", semanaLabel);
   if (error) throw error;
   const rows = Array.isArray(data) ? data : [];

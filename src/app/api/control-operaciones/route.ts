@@ -247,6 +247,16 @@ export async function GET(request: NextRequest) {
       });
     }
 
+    if (url.searchParams.get("partial") === "asignaciones") {
+      const t0 = nowMs();
+      const asignaciones = await fetchControlRows();
+      logBlock("partial=asignaciones fetchControlRows", t0);
+      return NextResponse.json({
+        asignaciones,
+        timingsMs: { asignaciones: nowMs() - tRequest },
+      });
+    }
+
     if (url.searchParams.get("partial") === "operators") {
       const t0 = nowMs();
       const operatorOptions = await fetchOperatorsActivos();

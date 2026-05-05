@@ -280,6 +280,7 @@ export function ControlOperacionesPanel() {
   const [saving, setSaving] = useState(false);
   const [syncConductoresBusy, setSyncConductoresBusy] = useState(false);
   const [viajesBusy, setViajesBusy] = useState(false);
+  const [asignacionesBusy, setAsignacionesBusy] = useState(false);
 
   const [total, setTotal] = useState(0);
 
@@ -459,6 +460,36 @@ export function ControlOperacionesPanel() {
     setSelected(new Set());
     void loadApprovedDriversBase();
   }, [loadApprovedDriversBase]);
+
+  const refreshAsignacionesOnly = useCallback(async () => {
+    setAsignacionesBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/control-operaciones?partial=asignaciones", { cache: "no-store" });
+      const j = (await res.json()) as {
+        asignaciones?: { id_conductor: string; solicitante: string | null; observacion: string | null }[];
+        error?: string;
+      };
+      if (!res.ok) throw new Error(j.error || "Error al actualizar asignaciones");
+      const list = Array.isArray(j.asignaciones) ? j.asignaciones : [];
+      setControlById((prev) => {
+        const next = { ...prev };
+        for (const a of list) {
+          const id = String(a.id_conductor ?? "").trim();
+          if (!id) continue;
+          next[id] = {
+            solicitante: a.solicitante == null || a.solicitante === "" ? null : String(a.solicitante),
+            observacion: a.observacion == null || a.observacion === "" ? null : String(a.observacion),
+          };
+        }
+        return next;
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error al actualizar asignaciones");
+    } finally {
+      setAsignacionesBusy(false);
+    }
+  }, []);
 
   useEffect(() => {
     void loadApprovedDriversBase();
@@ -886,11 +917,11 @@ export function ControlOperacionesPanel() {
               type="button"
               size="sm"
               variant="secondary"
-              disabled={loading}
-              onClick={() => void reloadTable()}
+              disabled={loading || asignacionesBusy}
+              onClick={() => void refreshAsignacionesOnly()}
               className="h-8 px-2 text-xs"
             >
-              Recargar tabla
+              {asignacionesBusy ? "Actualizando…" : "Actualizar asignaciones"}
             </Button>
             <span className="text-[10px] leading-none text-slate-500">
               {loading ? "Cargando…" : `${filtered.length} visibles · ${rows.length} en memoria`}

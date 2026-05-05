@@ -215,6 +215,7 @@ const DATOS_SUB_CONDUCTORES = "conductores" as const;
 const DATOS_SUB_REGISTRO_ACTIVIDADES = "registro-actividades" as const;
 const DATOS_SUB_DATOS_PENDIENTES = "datos-pendientes" as const;
 const OPERACIONES_SUB_CONTROL = "control" as const;
+const OPERACIONES_SUB_CONDUCTORES_TIEMPO = "conductores-tiempo" as const;
 const LOGS_CLEAN_PAGE_SIZE = 50;
 const HISTORY_PAGE_SIZE = 50;
 const DRIVERS_PAGE_SIZE = 50;
@@ -763,7 +764,10 @@ function DashboardContent() {
     [datosSubAllowed, setDatosSubInUrl],
   );
 
-  const operacionesSubAllowed = useMemo(() => new Set<string>([OPERACIONES_SUB_CONTROL]), []);
+  const operacionesSubAllowed = useMemo(
+    () => new Set<string>([OPERACIONES_SUB_CONTROL, OPERACIONES_SUB_CONDUCTORES_TIEMPO]),
+    [],
+  );
 
   const handleOperacionesSubTabChange = useCallback(
     (value: string) => {
@@ -777,7 +781,7 @@ function DashboardContent() {
   useEffect(() => {
     if (mainTab !== "operaciones") return;
     const raw = searchParams.get("operacionesSub");
-    if (raw === OPERACIONES_SUB_CONTROL) {
+    if (raw === OPERACIONES_SUB_CONTROL || raw === OPERACIONES_SUB_CONDUCTORES_TIEMPO) {
       setOperacionesSubTab(raw);
       return;
     }
@@ -2343,16 +2347,25 @@ function DashboardContent() {
 
           <TabsContent value="operaciones" className="mt-0 outline-none">
             <Tabs value={operacionesSubTab} onValueChange={handleOperacionesSubTabChange} className="w-full">
-              <TabsList className="mb-3 h-10 w-full max-w-md bg-slate-200/90 p-1">
+              <TabsList className="mb-3 grid h-auto min-h-10 w-full max-w-2xl grid-cols-1 gap-1 bg-slate-200/90 p-1 sm:grid-cols-2 sm:gap-0">
                 <TabsTrigger
                   value={OPERACIONES_SUB_CONTROL}
-                  className="flex-1 text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm"
+                  className="text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm sm:flex-1"
                 >
                   Control
+                </TabsTrigger>
+                <TabsTrigger
+                  value={OPERACIONES_SUB_CONDUCTORES_TIEMPO}
+                  className="text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm sm:flex-1"
+                >
+                  Conductores en el tiempo
                 </TabsTrigger>
               </TabsList>
               <TabsContent value={OPERACIONES_SUB_CONTROL} className="mt-0 outline-none">
                 <ControlOperacionesPanel />
+              </TabsContent>
+              <TabsContent value={OPERACIONES_SUB_CONDUCTORES_TIEMPO} className="mt-0 outline-none">
+                <ConductorTimelineMatrix dataRevision={refreshKey} />
               </TabsContent>
             </Tabs>
           </TabsContent>
@@ -2508,18 +2521,12 @@ function DashboardContent() {
             )}
 
             <Tabs value={dashboardSubTab} onValueChange={setDashboardSubTab} className="w-full">
-              <TabsList className="mb-3 grid h-auto min-h-10 w-full max-w-3xl grid-cols-1 gap-1 bg-slate-200/90 p-1 sm:grid-cols-3 sm:gap-0">
+              <TabsList className="mb-3 grid h-auto min-h-10 w-full max-w-3xl grid-cols-1 gap-1 bg-slate-200/90 p-1 sm:grid-cols-2 sm:gap-0">
                 <TabsTrigger
                   value="reservas"
                   className="text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm sm:flex-1"
                 >
                   Reservas
-                </TabsTrigger>
-                <TabsTrigger
-                  value="conductores"
-                  className="text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm sm:flex-1"
-                >
-                  Conductores en el tiempo
                 </TabsTrigger>
                 <TabsTrigger
                   value="productividad"
@@ -2528,10 +2535,6 @@ function DashboardContent() {
                   Productividad
                 </TabsTrigger>
               </TabsList>
-
-              <TabsContent value="conductores" className="mt-0 outline-none">
-                <ConductorTimelineMatrix dataRevision={refreshKey} />
-              </TabsContent>
 
               <TabsContent value="reservas" className="mt-0 space-y-4 outline-none">
                 <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm sm:flex-row sm:items-start sm:justify-between">

@@ -3,6 +3,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { format } from "date-fns";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -76,14 +77,32 @@ function SearchableMiniSelect(props: {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number } | null>(null);
 
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
       if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
     };
+    const recalc = () => {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setMenuPos({
+        top: rect.bottom + window.scrollY + 4,
+        left: rect.left + window.scrollX,
+        width: Math.max(rect.width, 180),
+      });
+    };
+    recalc();
     document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
+    window.addEventListener("resize", recalc);
+    window.addEventListener("scroll", recalc, true);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      window.removeEventListener("resize", recalc);
+      window.removeEventListener("scroll", recalc, true);
+    };
   }, [open]);
 
   const filtered = useMemo(() => {
@@ -97,6 +116,7 @@ function SearchableMiniSelect(props: {
   return (
     <div ref={rootRef} className={`relative ${widthClass}`}>
       <Button
+        ref={triggerRef}
         type="button"
         variant="outline"
         size="sm"
@@ -111,39 +131,45 @@ function SearchableMiniSelect(props: {
       >
         <span className="truncate">{label || "—"}</span>
       </Button>
-      {open && !disabled ? (
-        <div className="absolute z-50 mt-1 max-h-56 w-full min-w-[180px] overflow-hidden rounded-md border border-slate-200 bg-white shadow-md">
-          <div className="border-b border-slate-100 p-1.5">
-            <Input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder={placeholder}
-              className="h-8 text-xs"
-              {...(markEditing && open ? { "data-control-edit": "true" } : {})}
-            />
-          </div>
-          <div className="max-h-40 overflow-auto p-1">
-            {filtered.length === 0 ? (
-              <p className="px-2 py-1 text-xs text-slate-500">Sin coincidencias</p>
-            ) : (
-              filtered.map((o) => (
-                <button
-                  key={o.value}
-                  type="button"
-                  className="block w-full truncate rounded px-2 py-1.5 text-left text-xs hover:bg-slate-100"
-                  onClick={() => {
-                    onChange(o.value);
-                    setOpen(false);
-                    setQ("");
-                  }}
-                >
-                  {o.label}
-                </button>
-              ))
-            )}
-          </div>
-        </div>
-      ) : null}
+      {open && !disabled && menuPos
+        ? createPortal(
+            <div
+              className="fixed z-[120] max-h-56 overflow-hidden rounded-md border border-slate-200 bg-white shadow-lg"
+              style={{ top: menuPos.top, left: menuPos.left, width: menuPos.width }}
+            >
+              <div className="border-b border-slate-100 p-1.5">
+                <Input
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  placeholder={placeholder}
+                  className="h-8 text-xs"
+                  {...(markEditing && open ? { "data-control-edit": "true" } : {})}
+                />
+              </div>
+              <div className="max-h-40 overflow-auto p-1">
+                {filtered.length === 0 ? (
+                  <p className="px-2 py-1 text-xs text-slate-500">Sin coincidencias</p>
+                ) : (
+                  filtered.map((o) => (
+                    <button
+                      key={o.value}
+                      type="button"
+                      className="block w-full truncate rounded px-2 py-1.5 text-left text-xs hover:bg-slate-100"
+                      onClick={() => {
+                        onChange(o.value);
+                        setOpen(false);
+                        setQ("");
+                      }}
+                    >
+                      {o.label}
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }
@@ -242,6 +268,8 @@ export function ControlOperacionesPanel() {
 
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkSolicitante, setBulkSolicitante] = useState("");
+  const [bulkClearMenuOpen, setBulkClearMenuOpen] = useState(false);
+  const bulkClearMenuRef = useRef<HTMLDivElement>(null);
 
   /** Evita que `operatorsReady` recree callbacks y dispare el `useEffect` de carga inicial en bucle. */
   const operatorsFetchedRef = useRef(false);
@@ -256,6 +284,21 @@ export function ControlOperacionesPanel() {
     }
     return [DISTRITO_ALL, ...Array.from(s).sort((a, b) => a.localeCompare(b, "es"))];
   }, [rows]);
+
+  const solicitanteFilterOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of rows) {
+      const sol = controlById[r.id_conductor]?.solicitante?.trim();
+      if (sol) set.add(sol);
+    }
+    return [
+      { value: SOLICITANTE_ALL, label: "Todos" },
+      { value: SOLICITANTE_EMPTY, label: "Vacíos" },
+      ...Array.from(set)
+        .sort((a, b) => a.localeCompare(b, "es"))
+        .map((s) => ({ value: s, label: s })),
+    ];
+  }, [rows, controlById]);
 
   const semaforoFilterOptions = useMemo(() => {
     const s = new Set<string>(semaforoOptionsFromApi);
@@ -560,6 +603,46 @@ export function ControlOperacionesPanel() {
     }
   }, [selected, controlById]);
 
+  const clearBulkSolicitantes = useCallback(async () => {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    const payload = ids.map((id) => {
+      const cur = controlById[id] ?? { solicitante: null, observacion: null };
+      return {
+        id_conductor: id,
+        solicitante: null,
+        observacion: cur.observacion,
+      };
+    });
+    setSaving(true);
+    try {
+      await postUpsert(payload);
+      setControlById((prev) => {
+        const n = { ...prev };
+        for (const id of ids) {
+          const cur = n[id] ?? { solicitante: null, observacion: null };
+          n[id] = { solicitante: null, observacion: cur.observacion };
+        }
+        return n;
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Guardar");
+    } finally {
+      setSaving(false);
+    }
+  }, [selected, controlById]);
+
+  useEffect(() => {
+    if (!bulkClearMenuOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!bulkClearMenuRef.current?.contains(e.target as Node)) {
+        setBulkClearMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [bulkClearMenuOpen]);
+
   const gridTemplate =
     "40px minmax(72px,0.65fr) minmax(120px,1fr) minmax(88px,0.75fr) minmax(64px,0.5fr) minmax(52px,0.45fr) minmax(100px,0.75fr) minmax(64px,0.45fr) minmax(140px,0.9fr) minmax(140px,1fr)";
 
@@ -662,11 +745,7 @@ export function ControlOperacionesPanel() {
               <SearchableMiniSelect
                 value={solicitanteFilter}
                 onChange={setSolicitanteFilter}
-                options={[
-                  { value: SOLICITANTE_ALL, label: "Todos" },
-                  { value: SOLICITANTE_EMPTY, label: "Vacíos" },
-                  ...operatorOptions.map((o) => ({ value: o.value, label: o.label })),
-                ]}
+                options={solicitanteFilterOptions}
                 placeholder="Buscar solicitante…"
                 widthClass="w-full"
               />
@@ -718,15 +797,41 @@ export function ControlOperacionesPanel() {
             >
               Aplicar solicitante a seleccionados ({selected.size})
             </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={selected.size === 0}
-              onClick={() => void clearBulkObservaciones()}
-            >
-              Limpiar observaciones seleccionadas
-            </Button>
+            <div className="relative" ref={bulkClearMenuRef}>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={selected.size === 0}
+                onClick={() => setBulkClearMenuOpen((v) => !v)}
+              >
+                Limpiar seleccionadas
+              </Button>
+              {bulkClearMenuOpen ? (
+                <div className="absolute z-40 mt-1 min-w-[220px] rounded-md border border-slate-200 bg-white p-1 shadow-md">
+                  <button
+                    type="button"
+                    className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-slate-100"
+                    onClick={() => {
+                      setBulkClearMenuOpen(false);
+                      void clearBulkObservaciones();
+                    }}
+                  >
+                    Limpiar observaciones
+                  </button>
+                  <button
+                    type="button"
+                    className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-slate-100"
+                    onClick={() => {
+                      setBulkClearMenuOpen(false);
+                      void clearBulkSolicitantes();
+                    }}
+                  >
+                    Limpiar solicitantes
+                  </button>
+                </div>
+              ) : null}
+            </div>
           </div>
 
           <div className="overflow-hidden rounded-lg border border-slate-200">

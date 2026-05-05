@@ -701,29 +701,26 @@ export function ControlOperacionesPanel() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <Card className="border-slate-200 bg-white shadow-sm">
-        <CardHeader className="space-y-3 border-b border-slate-100 py-3">
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div>
-              <CardTitle className="text-base font-semibold text-slate-900">Control de operaciones</CardTitle>
-              <p className="text-xs text-slate-500">
-                Semana liquidaciones: <span className="font-mono text-slate-700">{semanaLabel || "—"}</span>
-                {" · "}
-                <span>
-                  {rows.length} cargados / {total} aprobados
-                </span>
-              </p>
-            </div>
-            <Badge variant="secondary" className="shrink-0 bg-slate-100 text-slate-800">
+        <CardHeader className="space-y-1.5 border-b border-slate-100 py-2">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+            <CardTitle className="text-sm font-semibold text-slate-900">Control de operaciones</CardTitle>
+            <p className="text-xs text-slate-500">
+              Semana liquidaciones: <span className="font-mono text-slate-700">{semanaLabel || "—"}</span>
+            </p>
+            <p className="text-xs text-slate-500">
+              {rows.length} cargados / {total} aprobados
+            </p>
+            <Badge variant="secondary" className="h-6 shrink-0 bg-slate-100 px-2 text-[11px] text-slate-800">
               Fecha sistema: {hoyStr}
             </Badge>
           </div>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-            <div className="space-y-1">
-              <Label className="text-[10px] uppercase text-slate-500">Región</Label>
+          <div className="grid grid-cols-2 gap-1.5 md:grid-cols-3 xl:grid-cols-6">
+            <div className="space-y-0.5">
+              <Label className="text-[9px] uppercase leading-none text-slate-500">Región</Label>
               <Select value={region} onValueChange={setRegion}>
-                <SelectTrigger className="h-9 text-xs">
+                <SelectTrigger className="h-8 text-[11px]">
                   <SelectValue placeholder="GLOBAL" />
                 </SelectTrigger>
                 <SelectContent>
@@ -733,10 +730,10 @@ export function ControlOperacionesPanel() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1">
-              <Label className="text-[10px] uppercase text-slate-500">GPS (Online)</Label>
+            <div className="space-y-0.5">
+              <Label className="text-[9px] uppercase leading-none text-slate-500">GPS (Online)</Label>
               <Select value={gps} onValueChange={setGps}>
-                <SelectTrigger className="h-9 text-xs">
+                <SelectTrigger className="h-8 text-[11px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -746,10 +743,10 @@ export function ControlOperacionesPanel() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1">
-              <Label className="text-[10px] uppercase text-slate-500">Semáforo</Label>
+            <div className="space-y-0.5">
+              <Label className="text-[9px] uppercase leading-none text-slate-500">Semáforo</Label>
               <Select value={semaforo} onValueChange={setSemaforo}>
-                <SelectTrigger className="h-9 text-xs">
+                <SelectTrigger className="h-8 text-[11px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -765,8 +762,8 @@ export function ControlOperacionesPanel() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1">
-              <Label className="text-[10px] uppercase text-slate-500">Distrito</Label>
+            <div className="space-y-0.5">
+              <Label className="text-[9px] uppercase leading-none text-slate-500">Distrito</Label>
               <SearchableMiniSelect
                 value={distrito}
                 onChange={setDistrito}
@@ -775,17 +772,17 @@ export function ControlOperacionesPanel() {
                 widthClass="w-full"
               />
             </div>
-            <div className="space-y-1">
-              <Label className="text-[10px] uppercase text-slate-500">Conductor</Label>
+            <div className="space-y-0.5">
+              <Label className="text-[9px] uppercase leading-none text-slate-500">Conductor</Label>
               <Input
                 value={conductorQ}
                 onChange={(e) => setConductorQ(e.target.value)}
                 placeholder="ID o nombre…"
-                className="h-9 text-xs"
+                className="h-8 text-[11px]"
               />
             </div>
-            <div className="space-y-1">
-              <Label className="text-[10px] uppercase text-slate-500">Solicitante</Label>
+            <div className="space-y-0.5">
+              <Label className="text-[9px] uppercase leading-none text-slate-500">Solicitante</Label>
               <SearchableMiniSelect
                 value={solicitanteFilter}
                 onChange={setSolicitanteFilter}
@@ -796,18 +793,18 @@ export function ControlOperacionesPanel() {
             </div>
           </div>
         </CardHeader>
-        <CardContent className="space-y-3 pt-4">
+        <CardContent className="space-y-2 pt-2">
           {error ? (
             <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">{error}</p>
           ) : null}
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
             <Button
               type="button"
               size="sm"
               variant="outline"
               disabled={syncConductoresBusy || loading}
               onClick={() => void syncConductores()}
-              className="text-xs"
+              className="h-8 px-2 text-xs"
             >
               {syncConductoresBusy ? "…" : "🔄 Conductores"}
             </Button>
@@ -817,25 +814,30 @@ export function ControlOperacionesPanel() {
               variant="outline"
               disabled={viajesBusy || loading || rows.length === 0}
               onClick={() => void refreshViajes()}
-              className="text-xs"
+              className="h-8 px-2 text-xs"
             >
               {viajesBusy ? "…" : "🚗 Viajes"}
             </Button>
-            <Button type="button" size="sm" variant="secondary" disabled={loading} onClick={() => void reloadTable()}>
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              disabled={loading}
+              onClick={() => void reloadTable()}
+              className="h-8 px-2 text-xs"
+            >
               Recargar tabla
             </Button>
-            <span className="text-[10px] text-slate-500">
+            <span className="text-[10px] leading-none text-slate-500">
               {loading ? "Cargando…" : `${filtered.length} visibles · ${rows.length} en memoria`}
               {heavyBusy ? " · Sincronizando viajes/semáforo…" : ""}
               {saving ? " · Guardando…" : ""}
             </span>
-          </div>
-          <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
             <Button
               type="button"
               size="sm"
               variant="default"
-              className="bg-[#0b1131] text-xs text-white hover:bg-[#0b1131]/90"
+              className="h-8 bg-[#0b1131] px-2 text-xs text-white hover:bg-[#0b1131]/90"
               disabled={selected.size === 0}
               onClick={() => setBulkOpen(true)}
             >
@@ -846,6 +848,7 @@ export function ControlOperacionesPanel() {
                 type="button"
                 size="sm"
                 variant="outline"
+                className="h-8 px-2 text-xs"
                 disabled={selected.size === 0}
                 onClick={() => setBulkClearMenuOpen((v) => !v)}
               >
@@ -901,7 +904,7 @@ export function ControlOperacionesPanel() {
               <span>Solicitante</span>
               <span>Observación</span>
             </div>
-            <div ref={parentRef} className="max-h-[min(640px,calc(100vh-320px))] overflow-auto">
+            <div ref={parentRef} className="max-h-[min(680px,calc(100vh-260px))] overflow-auto">
               <div className="relative" style={{ height: rowVirtualizer.getTotalSize() }}>
                 {rowVirtualizer.getVirtualItems().map((vi) => {
                   const r = filtered[vi.index];

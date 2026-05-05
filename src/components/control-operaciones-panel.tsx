@@ -464,29 +464,41 @@ export function ControlOperacionesPanel() {
     void loadApprovedDriversBase();
   }, [loadApprovedDriversBase]);
 
+  /** Solo recalcula conteos SERV. desde `viajes_activos` (sin sync Moobiz). */
   const refreshViajes = useCallback(async () => {
+    if (rows.length === 0) return;
+    const viajesCounts = await fetchViajesCountsChunked(rows.map((d) => d.nombre_conductor));
+    setRows((prev) =>
+      prev.map((r) => {
+        const k = normalizeConductorName(r.nombre_conductor);
+        const v = viajesCounts[k] ?? 0;
+        return { ...r, servicios_activos: v };
+      }),
+    );
+  }, [rows]);
+
+  /** GET /api/extract (viajes_activos) y luego refresco de conteos en la tabla. */
+  const syncServiciosYConteos = useCallback(async () => {
     if (rows.length === 0) return;
     setViajesBusy(true);
     setError(null);
     try {
-      const base = rows.map((r) => ({
-        id_conductor: r.id_conductor,
-        nombre_conductor: r.nombre_conductor,
-      })) as ControlDriverExcelRow[];
-      const viajesCounts = await fetchViajesCountsChunked(base.map((d) => d.nombre_conductor));
-      setRows((prev) =>
-        prev.map((r) => {
-          const k = normalizeConductorName(r.nombre_conductor);
-          const v = viajesCounts[k] ?? 0;
-          return { ...r, servicios_activos: v };
-        }),
-      );
+      const res = await fetch("/api/extract", { cache: "no-store" });
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) {
+        const msg =
+          typeof data.error === "string" && data.error.trim()
+            ? data.error
+            : `No se pudo sincronizar servicios desde Moobiz (HTTP ${res.status}).`;
+        throw new Error(msg);
+      }
+      await refreshViajes();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Error viajes");
+      setError(e instanceof Error ? e.message : "Error al sincronizar servicios o actualizar conteos");
     } finally {
       setViajesBusy(false);
     }
-  }, [rows]);
+  }, [rows, refreshViajes]);
 
   const syncConductores = useCallback(async () => {
     setSyncConductoresBusy(true);
@@ -864,10 +876,11 @@ export function ControlOperacionesPanel() {
               size="sm"
               variant="outline"
               disabled={viajesBusy || loading || rows.length === 0}
-              onClick={() => void refreshViajes()}
-              className="h-8 px-2 text-xs"
+              onClick={() => void syncServiciosYConteos()}
+              className="h-8 max-w-[200px] truncate px-2 text-xs"
+              title={viajesBusy ? undefined : "Sincronizar viajes activos en Supabase y actualizar conteos SERV."}
             >
-              {viajesBusy ? "…" : "🚗 Viajes"}
+              {viajesBusy ? "Actualizando servicios..." : "🚗 Servicios"}
             </Button>
             <Button
               type="button"

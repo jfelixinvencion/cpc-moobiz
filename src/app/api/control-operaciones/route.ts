@@ -134,7 +134,7 @@ async function fetchLiquidacionesSemaforoBySemanaLabel(
   const map: Record<string, string> = {};
   const { data, error } = await sb
     .schema("reportes")
-    .from("liquidaciones_conductores")
+    .from("liquidaciones_conductores_resumen_mv")
     .select('id_conductor,semana_label,"Semaforo"')
     .eq("semana_label", semanaLabel);
   if (error) throw error;

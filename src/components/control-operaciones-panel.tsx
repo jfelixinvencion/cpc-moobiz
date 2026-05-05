@@ -689,7 +689,7 @@ export function ControlOperacionesPanel() {
   }, [bulkClearMenuOpen]);
 
   const gridTemplate =
-    "40px minmax(72px,0.65fr) minmax(120px,1fr) minmax(88px,0.75fr) minmax(64px,0.5fr) minmax(52px,0.45fr) minmax(100px,0.75fr) minmax(64px,0.45fr) minmax(140px,0.9fr) minmax(140px,1fr) minmax(108px,0.75fr)";
+    "40px minmax(72px,0.65fr) minmax(120px,1fr) minmax(88px,0.75fr) minmax(64px,0.5fr) minmax(52px,0.45fr) minmax(100px,0.75fr) minmax(64px,0.45fr) minmax(140px,0.9fr) minmax(140px,1fr) 40px";
 
   const serviciosCell = (r: MergedDriver) =>
     r.servicios_activos === undefined ? "—" : String(r.servicios_activos);
@@ -909,7 +909,7 @@ export function ControlOperacionesPanel() {
               <span>Solicitante</span>
               <span>Observación</span>
               <span className="flex items-center justify-center">
-                <ExternalLink className="h-3.5 w-3.5 text-slate-400" />
+                <ExternalLink className="h-3.5 w-3.5 text-blue-500" />
               </span>
             </div>
             <div ref={parentRef} className="max-h-[min(680px,calc(100vh-260px))] overflow-auto">
@@ -992,11 +992,11 @@ export function ControlOperacionesPanel() {
                           href={`https://app.moobiz.pe/actives?id_driver=${encodeURIComponent(r.id_conductor)}`}
                           target="_blank"
                           rel="noopener noreferrer"
+                          title="Ver servicios en Moobiz"
                           onClick={(e) => e.stopPropagation()}
-                          className="inline-flex items-center gap-1 text-[10px] text-slate-500 underline decoration-slate-300 underline-offset-2 hover:text-slate-700"
+                          className="inline-flex items-center justify-center text-blue-500 hover:text-blue-600"
                         >
-                          Ver en Moobiz
-                          <ExternalLink className="h-3 w-3" />
+                          <ExternalLink className="h-4 w-4" />
                         </a>
                       </div>
                     </div>

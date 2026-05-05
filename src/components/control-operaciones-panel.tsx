@@ -64,6 +64,7 @@ function SearchableMiniSelect(props: {
   widthClass?: string;
   markEditing?: boolean;
   disabled?: boolean;
+  portalContainer?: HTMLElement | null;
 }) {
   const {
     value,
@@ -73,12 +74,14 @@ function SearchableMiniSelect(props: {
     widthClass = "w-[200px]",
     markEditing,
     disabled,
+    portalContainer,
   } = props;
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number } | null>(null);
 
   useEffect(() => {
@@ -90,12 +93,21 @@ function SearchableMiniSelect(props: {
       setOpen(false);
     };
     const recalc = () => {
-      const rect = triggerRef.current?.getBoundingClientRect();
-      if (!rect) return;
+      const triggerRect = triggerRef.current?.getBoundingClientRect();
+      if (!triggerRect) return;
+      if (portalContainer) {
+        const containerRect = portalContainer.getBoundingClientRect();
+        setMenuPos({
+          top: triggerRect.bottom - containerRect.top + 4,
+          left: triggerRect.left - containerRect.left,
+          width: Math.max(triggerRect.width, 180),
+        });
+        return;
+      }
       setMenuPos({
-        top: rect.bottom + window.scrollY + 4,
-        left: rect.left + window.scrollX,
-        width: Math.max(rect.width, 180),
+        top: triggerRect.bottom + window.scrollY + 4,
+        left: triggerRect.left + window.scrollX,
+        width: Math.max(triggerRect.width, 180),
       });
     };
     recalc();
@@ -107,6 +119,15 @@ function SearchableMiniSelect(props: {
       window.removeEventListener("resize", recalc);
       window.removeEventListener("scroll", recalc, true);
     };
+  }, [open, portalContainer]);
+
+  useEffect(() => {
+    if (!open) return;
+    const id = window.requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    });
+    return () => window.cancelAnimationFrame(id);
   }, [open]);
 
   const filtered = useMemo(() => {
@@ -139,12 +160,13 @@ function SearchableMiniSelect(props: {
         ? createPortal(
             <div
               ref={menuRef}
-              className="fixed z-[120] max-h-56 overflow-hidden rounded-md border border-slate-200 bg-white shadow-lg"
+              className={`${portalContainer ? "absolute" : "fixed"} z-[120] max-h-56 overflow-hidden rounded-md border border-slate-200 bg-white shadow-lg`}
               style={{ top: menuPos.top, left: menuPos.left, width: menuPos.width }}
             >
               <div className="border-b border-slate-100 p-1.5">
                 <Input
                   value={q}
+                  ref={searchInputRef}
                   onChange={(e) => setQ(e.target.value)}
                   placeholder={placeholder}
                   className="h-8 text-xs"
@@ -172,7 +194,7 @@ function SearchableMiniSelect(props: {
                 )}
               </div>
             </div>,
-            document.body,
+            portalContainer ?? document.body,
           )
         : null}
     </div>
@@ -275,6 +297,7 @@ export function ControlOperacionesPanel() {
   const [bulkSolicitante, setBulkSolicitante] = useState("");
   const [bulkClearMenuOpen, setBulkClearMenuOpen] = useState(false);
   const bulkClearMenuRef = useRef<HTMLDivElement>(null);
+  const [bulkModalPortalContainer, setBulkModalPortalContainer] = useState<HTMLElement | null>(null);
 
   /** Evita que `operatorsReady` recree callbacks y dispare el `useEffect` de carga inicial en bucle. */
   const operatorsFetchedRef = useRef(false);
@@ -967,14 +990,17 @@ export function ControlOperacionesPanel() {
           <DialogHeader>
             <DialogTitle>Solicitante masivo</DialogTitle>
           </DialogHeader>
-          <SearchableMiniSelect
-            value={bulkSolicitante}
-            onChange={setBulkSolicitante}
-            options={operatorOptions}
-            placeholder="Buscar operador…"
-            widthClass="w-full"
-            disabled={!operatorsReady}
-          />
+          <div ref={setBulkModalPortalContainer}>
+            <SearchableMiniSelect
+              value={bulkSolicitante}
+              onChange={setBulkSolicitante}
+              options={operatorOptions}
+              placeholder="Buscar operador…"
+              widthClass="w-full"
+              disabled={!operatorsReady}
+              portalContainer={bulkModalPortalContainer}
+            />
+          </div>
           <DialogFooter className="gap-2 sm:justify-end">
             <Button type="button" variant="outline" onClick={() => setBulkOpen(false)}>
               Cancelar

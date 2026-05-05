@@ -2361,12 +2361,22 @@ function DashboardContent() {
                   Conductores en el tiempo
                 </TabsTrigger>
               </TabsList>
-              <TabsContent value={OPERACIONES_SUB_CONTROL} className="mt-0 outline-none">
-                <ControlOperacionesPanel />
-              </TabsContent>
-              <TabsContent value={OPERACIONES_SUB_CONDUCTORES_TIEMPO} className="mt-0 outline-none">
-                <ConductorTimelineMatrix dataRevision={refreshKey} />
-              </TabsContent>
+              <div className="mt-0">
+                <div
+                  className={operacionesSubTab === OPERACIONES_SUB_CONTROL ? "block" : "hidden"}
+                  aria-hidden={operacionesSubTab !== OPERACIONES_SUB_CONTROL}
+                >
+                  <ControlOperacionesPanel />
+                </div>
+                <div
+                  className={
+                    operacionesSubTab === OPERACIONES_SUB_CONDUCTORES_TIEMPO ? "block" : "hidden"
+                  }
+                  aria-hidden={operacionesSubTab !== OPERACIONES_SUB_CONDUCTORES_TIEMPO}
+                >
+                  <ConductorTimelineMatrix dataRevision={refreshKey} />
+                </div>
+              </div>
             </Tabs>
           </TabsContent>
 

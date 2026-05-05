@@ -294,6 +294,8 @@ export function ControlOperacionesPanel() {
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const anchorIdx = useRef<number | null>(null);
   const parentRef = useRef<HTMLDivElement>(null);
+  /** Evita solapar auto-refresh silencioso (no usa `asignacionesBusy`). */
+  const silentAsignacionesInFlightRef = useRef(false);
 
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkSolicitante, setBulkSolicitante] = useState("");
@@ -461,16 +463,31 @@ export function ControlOperacionesPanel() {
     void loadApprovedDriversBase();
   }, [loadApprovedDriversBase]);
 
-  const refreshAsignacionesOnly = useCallback(async () => {
-    setAsignacionesBusy(true);
-    setError(null);
+  const refreshAsignacionesOnly = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent === true;
+    if (silent && silentAsignacionesInFlightRef.current) return;
+    if (silent) {
+      silentAsignacionesInFlightRef.current = true;
+    } else {
+      setAsignacionesBusy(true);
+      setError(null);
+    }
     try {
       const res = await fetch("/api/control-operaciones?partial=asignaciones", { cache: "no-store" });
-      const j = (await res.json()) as {
+      let j: {
         asignaciones?: { id_conductor: string; solicitante: string | null; observacion: string | null }[];
         error?: string;
       };
-      if (!res.ok) throw new Error(j.error || "Error al actualizar asignaciones");
+      try {
+        j = (await res.json()) as typeof j;
+      } catch {
+        if (silent) return;
+        throw new Error("Error al actualizar asignaciones");
+      }
+      if (!res.ok) {
+        if (silent) return;
+        throw new Error(j.error || "Error al actualizar asignaciones");
+      }
       const list = Array.isArray(j.asignaciones) ? j.asignaciones : [];
       setControlById((prev) => {
         const next = { ...prev };
@@ -485,15 +502,29 @@ export function ControlOperacionesPanel() {
         return next;
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Error al actualizar asignaciones");
+      if (!silent) {
+        setError(e instanceof Error ? e.message : "Error al actualizar asignaciones");
+      }
     } finally {
-      setAsignacionesBusy(false);
+      if (silent) {
+        silentAsignacionesInFlightRef.current = false;
+      } else {
+        setAsignacionesBusy(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     void loadApprovedDriversBase();
   }, [loadApprovedDriversBase]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (loading || asignacionesBusy || rows.length === 0) return;
+      void refreshAsignacionesOnly({ silent: true });
+    }, 120_000);
+    return () => window.clearInterval(id);
+  }, [loading, asignacionesBusy, rows.length, refreshAsignacionesOnly]);
 
   /** Solo recalcula conteos SERV. desde `viajes_activos` (sin sync Moobiz). */
   const refreshViajes = useCallback(async () => {

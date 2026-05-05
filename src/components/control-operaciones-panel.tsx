@@ -233,7 +233,6 @@ export function ControlOperacionesPanel() {
   const [saving, setSaving] = useState(false);
   const [syncConductoresBusy, setSyncConductoresBusy] = useState(false);
   const [viajesBusy, setViajesBusy] = useState(false);
-  const [semaforoBusy, setSemaforoBusy] = useState(false);
 
   const [total, setTotal] = useState(0);
 
@@ -404,28 +403,6 @@ export function ControlOperacionesPanel() {
       setViajesBusy(false);
     }
   }, [rows]);
-
-  const refreshSemaforo = useCallback(async () => {
-    if (rows.length === 0) return;
-    setSemaforoBusy(true);
-    setError(null);
-    try {
-      const ids = rows.map((r) => r.id_conductor);
-      const requested = new Set(ids);
-      const { semaforoById, semaforoOptions } = await fetchSemaforoChunked(ids, semanaLabel || undefined);
-      setSemaforoOptionsFromApi(semaforoOptions);
-      setRows((prev) =>
-        prev.map((r) => {
-          if (!requested.has(r.id_conductor)) return r;
-          return { ...r, semaforo: semaforoById[r.id_conductor] ?? null };
-        }),
-      );
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Error semáforo");
-    } finally {
-      setSemaforoBusy(false);
-    }
-  }, [rows, semanaLabel]);
 
   const syncConductores = useCallback(async () => {
     setSyncConductoresBusy(true);
@@ -724,16 +701,6 @@ export function ControlOperacionesPanel() {
               className="text-xs"
             >
               {viajesBusy ? "…" : "🚗 Viajes"}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={semaforoBusy || loading || rows.length === 0}
-              onClick={() => void refreshSemaforo()}
-              className="text-xs"
-            >
-              {semaforoBusy ? "…" : "🚦 Semáforo"}
             </Button>
             <Button type="button" size="sm" variant="secondary" disabled={loading} onClick={() => void reloadTable()}>
               Recargar tabla

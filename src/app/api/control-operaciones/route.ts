@@ -157,14 +157,16 @@ async function fetchOperatorsActivos(): Promise<{ value: string; label: string }
   const { data, error } = await sb
     .schema("vista")
     .from("vw_moobiz_operators")
-    .select("name,Estado,estado")
+    .select('"ID Operador","Solicitante",Estado,estado')
     .limit(3000);
   if (error) {
-    console.warn("[control-operaciones] operators select(name,Estado) falló, fallback *:", error.message);
+    console.warn("[control-operaciones] operators select(ID Operador,Solicitante) falló, fallback *:", error.message);
     const fb = await sb.schema("vista").from("vw_moobiz_operators").select("*").limit(3000);
     if (fb.error) throw fb.error;
+    console.log("[operators] count (fallback *):", Array.isArray(fb.data) ? fb.data.length : 0);
     return normalizeOperatorRows(fb.data);
   }
+  console.log("[operators] count:", Array.isArray(data) ? data.length : 0);
   return normalizeOperatorRows(data);
 }
 
@@ -176,9 +178,10 @@ function normalizeOperatorRows(data: unknown): { value: string; label: string }[
     const row = raw as Record<string, unknown>;
     const estado = String(row.Estado ?? row.estado ?? "").trim().toLowerCase();
     if (estado !== "activo") continue;
-    const name = String(row.name ?? row.Name ?? row.nombre ?? "").trim();
-    if (!name) continue;
-    out.push({ value: name, label: name });
+    const idOperador = String((row as Record<string, unknown>)["ID Operador"] ?? "").trim();
+    const solicitante = String((row as Record<string, unknown>)["Solicitante"] ?? "").trim();
+    if (!idOperador || !solicitante) continue;
+    out.push({ value: idOperador, label: solicitante });
   }
   out.sort((a, b) => a.label.localeCompare(b.label, "es"));
   return out;

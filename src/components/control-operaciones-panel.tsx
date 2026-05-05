@@ -29,7 +29,6 @@ import { normalizeConductorName } from "@/lib/gps-filter";
 
 const ROW_H = 44;
 const CHUNK_NAMES = 55;
-const CHUNK_IDS = 80;
 const GLOBAL_ALL = "__all__";
 const GPS_ALL = "__all__";
 const SEMAFORO_ALL = "__all__";
@@ -180,35 +179,29 @@ async function fetchViajesCountsChunked(names: string[]): Promise<Record<string,
   return merged;
 }
 
-async function fetchSemaforoChunked(ids: string[], semanaLabel?: string): Promise<{
+async function fetchSemaforoMap(semanaLabel?: string): Promise<{
   semaforoById: Record<string, string>;
   semaforoOptions: string[];
 }> {
-  const uniq = [...new Set(ids.map((id) => String(id).trim()).filter(Boolean))];
-  const semaforoById: Record<string, string> = {};
-  for (let i = 0; i < uniq.length; i += CHUNK_IDS) {
-    const part = uniq.slice(i, i + CHUNK_IDS);
-    const sp = new URLSearchParams({ partial: "semaforo" });
-    if (semanaLabel) sp.set("semanaLabel", semanaLabel);
-    for (const id of part) sp.append("id", id);
-    const res = await fetch(`/api/control-operaciones?${sp.toString()}`, { cache: "no-store" });
-    const j = (await res.json()) as {
-      semaforoById?: Record<string, string>;
-      semaforoOptions?: string[];
-      error?: string;
-    };
-    if (!res.ok) throw new Error(j.error || "semaforo");
-    if (j.semaforoById && typeof j.semaforoById === "object") {
-      Object.assign(semaforoById, j.semaforoById);
-    }
-  }
-  const semaforoOptions = Array.from(
-    new Set(
-      Object.values(semaforoById)
-        .map((s) => String(s).trim())
-        .filter(Boolean),
-    ),
-  ).sort((a, b) => a.localeCompare(b, "es"));
+  const sp = new URLSearchParams({ partial: "semaforo" });
+  if (semanaLabel) sp.set("semanaLabel", semanaLabel);
+  const res = await fetch(`/api/control-operaciones?${sp.toString()}`, { cache: "no-store" });
+  const j = (await res.json()) as {
+    semaforoById?: Record<string, string>;
+    semaforoOptions?: string[];
+    error?: string;
+  };
+  if (!res.ok) throw new Error(j.error || "semaforo");
+  const semaforoById = j.semaforoById && typeof j.semaforoById === "object" ? j.semaforoById : {};
+  const semaforoOptions = Array.isArray(j.semaforoOptions)
+    ? j.semaforoOptions
+    : Array.from(
+        new Set(
+          Object.values(semaforoById)
+            .map((s) => String(s).trim())
+            .filter(Boolean),
+        ),
+      ).sort((a, b) => a.localeCompare(b, "es"));
   return { semaforoById, semaforoOptions };
 }
 
@@ -323,17 +316,20 @@ export function ControlOperacionesPanel() {
         }),
       );
 
-      const ids = slice.map((d) => d.id_conductor);
-      const { semaforoById, semaforoOptions } = await fetchSemaforoChunked(ids, semana);
-      setSemaforoOptionsFromApi((prev) =>
-        Array.from(new Set([...prev, ...semaforoOptions])).sort((a, b) => a.localeCompare(b, "es")),
-      );
-      setRows((prev) =>
-        prev.map((r) => {
-          if (!sliceIds.has(r.id_conductor)) return r;
-          return { ...r, semaforo: semaforoById[r.id_conductor] ?? null };
-        }),
-      );
+      try {
+        const { semaforoById, semaforoOptions } = await fetchSemaforoMap(semana);
+        setSemaforoOptionsFromApi((prev) =>
+          Array.from(new Set([...prev, ...semaforoOptions])).sort((a, b) => a.localeCompare(b, "es")),
+        );
+        setRows((prev) =>
+          prev.map((r) => {
+            if (!sliceIds.has(r.id_conductor)) return r;
+            return { ...r, semaforo: semaforoById[r.id_conductor] ?? null };
+          }),
+        );
+      } catch (e) {
+        console.error("[control-operaciones] semaforo auto-load:", e);
+      }
     } finally {
       setHeavyBusy(false);
     }

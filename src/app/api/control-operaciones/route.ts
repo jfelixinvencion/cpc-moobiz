@@ -25,7 +25,6 @@ const DRIVER_SELECT = [
 
 const DRIVERS_INTERNAL_CHUNK = 150;
 const MAX_NAMES_VIAJES = 250;
-const MAX_IDS_SEMAFORO = 250;
 const CONTROL_LIMIT = 50_000;
 
 function nowMs(): number {
@@ -128,34 +127,27 @@ async function fetchViajesCountsForExactConductorNames(names: string[]): Promise
   return Object.fromEntries(counts.entries());
 }
 
-async function fetchLiquidacionesSemaforoByConductor(
+async function fetchLiquidacionesSemaforoBySemanaLabel(
   semanaLabel: string,
-  ids: string[],
 ): Promise<Record<string, string>> {
-  if (ids.length === 0) return {};
   const sb = getSupabaseAdmin();
   const map: Record<string, string> = {};
-  const sliceIds = ids.map((id) => String(id).trim()).filter(Boolean).slice(0, MAX_IDS_SEMAFORO);
-  const chunk = 120;
-  for (let i = 0; i < sliceIds.length; i += chunk) {
-    const slice = sliceIds.slice(i, i + chunk);
-    const { data, error } = await sb
-      .schema("reportes")
-      .from("liquidaciones_conductores")
-      .select("*")
-      .in("id_conductor", slice);
-    if (error) throw error;
-    const rows = Array.isArray(data) ? data : [];
-    for (const raw of rows) {
-      if (!raw || typeof raw !== "object") continue;
-      const row = raw as Record<string, unknown>;
-      const id = pickIdConductorLiq(row);
-      if (!id) continue;
-      const sl = pickSemanaLabel(row);
-      if (!sl || sl !== semanaLabel) continue;
-      const sem = pickSemaforo(row);
-      if (sem) map[String(id)] = sem;
-    }
+  const { data, error } = await sb
+    .schema("reportes")
+    .from("liquidaciones_conductores")
+    .select("id_conductor,semana_label,Semaforo,semaforo")
+    .eq("semana_label", semanaLabel);
+  if (error) throw error;
+  const rows = Array.isArray(data) ? data : [];
+  for (const raw of rows) {
+    if (!raw || typeof raw !== "object") continue;
+    const row = raw as Record<string, unknown>;
+    const id = pickIdConductorLiq(row);
+    if (!id) continue;
+    const sl = pickSemanaLabel(row);
+    if (!sl || sl !== semanaLabel) continue;
+    const sem = pickSemaforo(row);
+    if (sem) map[String(id)] = sem;
   }
   return map;
 }
@@ -275,16 +267,9 @@ export async function GET(request: NextRequest) {
 
     if (url.searchParams.get("partial") === "semaforo") {
       const t0 = nowMs();
-      const ids = url.searchParams.getAll("id").map((s) => s.trim()).filter(Boolean);
-      if (ids.length === 0) {
-        return NextResponse.json(
-          { error: "Indica al menos un id_conductor con el query repetido id=." },
-          { status: 400 },
-        );
-      }
       const semanaLabel =
         url.searchParams.get("semanaLabel")?.trim() || semanaLabelLiquidaciones();
-      const semaforoById = await fetchLiquidacionesSemaforoByConductor(semanaLabel, ids);
+      const semaforoById = await fetchLiquidacionesSemaforoBySemanaLabel(semanaLabel);
       const semaforoOptions = Array.from(
         new Set(
           Object.values(semaforoById)
@@ -292,7 +277,7 @@ export async function GET(request: NextRequest) {
             .filter(Boolean),
         ),
       ).sort((a, b) => a.localeCompare(b, "es"));
-      logBlock(`partial=semaforo ids=${ids.length}`, t0);
+      logBlock("partial=semaforo by semanaLabel", t0);
       return NextResponse.json({
         semanaLabel,
         semaforoById,

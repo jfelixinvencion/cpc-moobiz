@@ -77,13 +77,17 @@ function SearchableMiniSelect(props: {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number } | null>(null);
 
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (rootRef.current?.contains(target)) return;
+      if (menuRef.current?.contains(target)) return;
+      setOpen(false);
     };
     const recalc = () => {
       const rect = triggerRef.current?.getBoundingClientRect();
@@ -134,6 +138,7 @@ function SearchableMiniSelect(props: {
       {open && !disabled && menuPos
         ? createPortal(
             <div
+              ref={menuRef}
               className="fixed z-[120] max-h-56 overflow-hidden rounded-md border border-slate-200 bg-white shadow-lg"
               style={{ top: menuPos.top, left: menuPos.left, width: menuPos.width }}
             >
@@ -275,6 +280,22 @@ export function ControlOperacionesPanel() {
   const operatorsFetchedRef = useRef(false);
 
   const hoyStr = useMemo(() => format(new Date(), "dd/MM/yyyy"), []);
+  const operatorLabelByValue = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const o of operatorOptions) {
+      map.set(String(o.value), String(o.label));
+    }
+    return map;
+  }, [operatorOptions]);
+
+  const solicitanteLabel = useCallback(
+    (raw: string | null | undefined): string => {
+      const v = String(raw ?? "").trim();
+      if (!v) return "";
+      return operatorLabelByValue.get(v) ?? v;
+    },
+    [operatorLabelByValue],
+  );
 
   const distritoOptions = useMemo(() => {
     const s = new Set<string>();
@@ -288,7 +309,7 @@ export function ControlOperacionesPanel() {
   const solicitanteFilterOptions = useMemo(() => {
     const set = new Set<string>();
     for (const r of rows) {
-      const sol = controlById[r.id_conductor]?.solicitante?.trim();
+      const sol = solicitanteLabel(controlById[r.id_conductor]?.solicitante);
       if (sol) set.add(sol);
     }
     return [
@@ -298,7 +319,7 @@ export function ControlOperacionesPanel() {
         .sort((a, b) => a.localeCompare(b, "es"))
         .map((s) => ({ value: s, label: s })),
     ];
-  }, [rows, controlById]);
+  }, [rows, controlById, solicitanteLabel]);
 
   const semaforoFilterOptions = useMemo(() => {
     const s = new Set<string>(semaforoOptionsFromApi);
@@ -323,7 +344,7 @@ export function ControlOperacionesPanel() {
         const nm = r.nombre_conductor.toLowerCase();
         if (!idm.includes(cq) && !nm.includes(cq)) return false;
       }
-      const sol = controlById[r.id_conductor]?.solicitante?.trim() ?? "";
+      const sol = solicitanteLabel(controlById[r.id_conductor]?.solicitante);
       if (solicitanteFilter === SOLICITANTE_EMPTY) {
         if (sol) return false;
       } else if (solicitanteFilter !== SOLICITANTE_ALL) {

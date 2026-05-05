@@ -33,11 +33,41 @@ const ROW_H = 44;
 const CHUNK_NAMES = 55;
 const GLOBAL_ALL = "__all__";
 const GPS_ALL = "__all__";
-const SEMAFORO_ALL = "__all__";
-const SEMAFORO_EMPTY = "__empty__";
-const DISTRITO_ALL = "__all__";
 const SOLICITANTE_ALL = "__all__";
 const SOLICITANTE_EMPTY = "__empty__";
+
+/** Valores internos del multi-filtro de semáforo (cada fila se clasifica a un bucket). */
+const SEMAFORO_MULTI_SIN = "__sin__";
+
+const SEMAFORO_MULTI_OPTIONS: { value: string; label: string }[] = [
+  { value: SEMAFORO_MULTI_SIN, label: "Sin semáforo" },
+  { value: "verde", label: "Verde" },
+  { value: "amarillo", label: "Amarillo" },
+  { value: "naranja", label: "Naranja" },
+  { value: "rojo", label: "Rojo" },
+];
+
+function rowSemaforoBucket(raw: string | null | undefined): string {
+  if (raw === undefined) return SEMAFORO_MULTI_SIN;
+  const s = String(raw).trim();
+  if (!s) return SEMAFORO_MULTI_SIN;
+  const lower = s.toLowerCase();
+  if (lower.includes("verde") || lower === "v" || lower === "1") return "verde";
+  if (lower.includes("amar")) return "amarillo";
+  if (lower.includes("naranj")) return "naranja";
+  if (lower.includes("rojo") || lower === "r" || lower === "3") return "rojo";
+  return "";
+}
+
+function rowMatchesSemaforoMultiFilter(
+  row: { semaforo?: string | null },
+  selected: string[],
+): boolean {
+  if (selected.length === 0) return true;
+  const bucket = rowSemaforoBucket(row.semaforo);
+  if (bucket === "") return false;
+  return selected.includes(bucket);
+}
 
 type MergedDriver = ControlDriverExcelRow & {
   /** undefined = aún no cargado (mostrar "-"). */
@@ -202,6 +232,160 @@ function SearchableMiniSelect(props: {
   );
 }
 
+function SearchableMultiMiniSelect(props: {
+  values: string[];
+  onChange: (next: string[]) => void;
+  options: { value: string; label: string }[];
+  placeholder?: string;
+  widthClass?: string;
+  disabled?: boolean;
+  portalContainer?: HTMLElement | null;
+}) {
+  const {
+    values,
+    onChange,
+    options,
+    placeholder = "Buscar…",
+    widthClass = "w-[200px]",
+    disabled,
+    portalContainer,
+  } = props;
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const rootRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number } | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (rootRef.current?.contains(target)) return;
+      if (menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const recalc = () => {
+      const triggerRect = triggerRef.current?.getBoundingClientRect();
+      if (!triggerRect) return;
+      if (portalContainer) {
+        const containerRect = portalContainer.getBoundingClientRect();
+        setMenuPos({
+          top: triggerRect.bottom - containerRect.top + 4,
+          left: triggerRect.left - containerRect.left,
+          width: Math.max(triggerRect.width, 180),
+        });
+        return;
+      }
+      setMenuPos({
+        top: triggerRect.bottom + window.scrollY + 4,
+        left: triggerRect.left + window.scrollX,
+        width: Math.max(triggerRect.width, 180),
+      });
+    };
+    recalc();
+    document.addEventListener("mousedown", onDoc);
+    window.addEventListener("resize", recalc);
+    window.addEventListener("scroll", recalc, true);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      window.removeEventListener("resize", recalc);
+      window.removeEventListener("scroll", recalc, true);
+    };
+  }, [open, portalContainer]);
+
+  useEffect(() => {
+    if (!open) return;
+    const id = window.requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [open]);
+
+  const filtered = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    if (!t) return options;
+    return options.filter((o) => o.label.toLowerCase().includes(t));
+  }, [options, q]);
+
+  const summary = useMemo(() => {
+    if (values.length === 0) return "Todos";
+    if (values.length === 1) {
+      return options.find((o) => o.value === values[0])?.label ?? `${values.length} seleccionados`;
+    }
+    return `${values.length} seleccionados`;
+  }, [values, options]);
+
+  const toggle = (v: string) => {
+    const has = values.includes(v);
+    const next = has ? values.filter((x) => x !== v) : [...values, v];
+    onChange(next);
+  };
+
+  return (
+    <div ref={rootRef} className={`relative ${widthClass}`}>
+      <Button
+        ref={triggerRef}
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={disabled}
+        className="h-8 w-full justify-between px-2 text-left text-xs font-normal"
+        onClick={() => {
+          if (disabled) return;
+          setQ("");
+          setOpen((o) => !o);
+        }}
+      >
+        <span className="truncate">{summary}</span>
+      </Button>
+      {open && !disabled && menuPos
+        ? createPortal(
+            <div
+              ref={menuRef}
+              className={`${portalContainer ? "absolute" : "fixed"} z-[120] max-h-56 overflow-hidden rounded-md border border-slate-200 bg-white shadow-lg`}
+              style={{ top: menuPos.top, left: menuPos.left, width: menuPos.width }}
+            >
+              <div className="border-b border-slate-100 p-1.5">
+                <Input
+                  value={q}
+                  ref={searchInputRef}
+                  onChange={(e) => setQ(e.target.value)}
+                  placeholder={placeholder}
+                  className="h-8 text-xs"
+                />
+              </div>
+              <div className="max-h-40 overflow-auto p-1">
+                {filtered.length === 0 ? (
+                  <p className="px-2 py-1 text-xs text-slate-500">Sin coincidencias</p>
+                ) : (
+                  filtered.map((o) => (
+                    <label
+                      key={o.value}
+                      className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-slate-100"
+                    >
+                      <input
+                        type="checkbox"
+                        className="h-3.5 w-3.5 shrink-0 rounded border-slate-300"
+                        checked={values.includes(o.value)}
+                        onChange={() => toggle(o.value)}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                      <span className="min-w-0 flex-1 truncate">{o.label}</span>
+                    </label>
+                  ))
+                )}
+              </div>
+            </div>,
+            portalContainer ?? document.body,
+          )
+        : null}
+    </div>
+  );
+}
+
 async function postUpsert(
   rows: { id_conductor: string; solicitante: string | null; observacion: string | null }[],
 ): Promise<void> {
@@ -273,7 +457,6 @@ export function ControlOperacionesPanel() {
   const [operatorOptions, setOperatorOptions] = useState<{ value: string; label: string }[]>([]);
   const [operatorsReady, setOperatorsReady] = useState(false);
   const [semanaLabel, setSemanaLabel] = useState("");
-  const [semaforoOptionsFromApi, setSemaforoOptionsFromApi] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [heavyBusy, setHeavyBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -286,8 +469,8 @@ export function ControlOperacionesPanel() {
 
   const [region, setRegion] = useState(GLOBAL_ALL);
   const [gps, setGps] = useState(GPS_ALL);
-  const [semaforo, setSemaforo] = useState(SEMAFORO_ALL);
-  const [distrito, setDistrito] = useState(DISTRITO_ALL);
+  const [semaforoFilter, setSemaforoFilter] = useState<string[]>([]);
+  const [distritoFilter, setDistritoFilter] = useState<string[]>([]);
   const [conductorQ, setConductorQ] = useState("");
   const [solicitanteFilter, setSolicitanteFilter] = useState(SOLICITANTE_ALL);
 
@@ -324,15 +507,6 @@ export function ControlOperacionesPanel() {
     [operatorLabelByValue],
   );
 
-  const distritoOptions = useMemo(() => {
-    const s = new Set<string>();
-    for (const r of rows) {
-      const d = r.distrito_vive.trim();
-      if (d) s.add(d);
-    }
-    return [DISTRITO_ALL, ...Array.from(s).sort((a, b) => a.localeCompare(b, "es"))];
-  }, [rows]);
-
   const solicitanteFilterOptions = useMemo(() => {
     const set = new Set<string>();
     for (const r of rows) {
@@ -348,24 +522,12 @@ export function ControlOperacionesPanel() {
     ];
   }, [rows, controlById, solicitanteLabel]);
 
-  const semaforoFilterOptions = useMemo(() => {
-    const s = new Set<string>(semaforoOptionsFromApi);
-    for (const r of rows) {
-      const v = r.semaforo?.trim();
-      if (v) s.add(v);
-    }
-    return [SEMAFORO_ALL, SEMAFORO_EMPTY, ...Array.from(s).sort((a, b) => a.localeCompare(b, "es"))];
-  }, [rows, semaforoOptionsFromApi]);
-
-  const filtered = useMemo(() => {
+  const rowsBeforeDistritoFilter = useMemo(() => {
     const cq = conductorQ.trim().toLowerCase();
     return rows.filter((r) => {
       if (region !== GLOBAL_ALL && String(r.global).trim().toUpperCase() !== region) return false;
       if (gps !== GPS_ALL && r.gps_label !== gps) return false;
-      if (semaforo === SEMAFORO_EMPTY) {
-        if ((r.semaforo ?? "").trim()) return false;
-      } else if (semaforo !== SEMAFORO_ALL && (r.semaforo ?? "").trim() !== semaforo) return false;
-      if (distrito !== DISTRITO_ALL && r.distrito_vive !== distrito) return false;
+      if (!rowMatchesSemaforoMultiFilter(r, semaforoFilter)) return false;
       if (cq) {
         const idm = r.id_conductor.toLowerCase();
         const nm = r.nombre_conductor.toLowerCase();
@@ -379,7 +541,38 @@ export function ControlOperacionesPanel() {
       }
       return true;
     });
-  }, [rows, region, gps, semaforo, distrito, conductorQ, solicitanteFilter, controlById]);
+  }, [rows, region, gps, semaforoFilter, conductorQ, solicitanteFilter, controlById, solicitanteLabel]);
+
+  const distritosDisponibles = useMemo(() => {
+    const s = new Set<string>();
+    for (const r of rowsBeforeDistritoFilter) {
+      const d = r.distrito_vive.trim();
+      if (d) s.add(d);
+    }
+    return Array.from(s).sort((a, b) => a.localeCompare(b, "es"));
+  }, [rowsBeforeDistritoFilter]);
+
+  const distritoMultiOptions = useMemo(
+    () => distritosDisponibles.map((d) => ({ value: d, label: d })),
+    [distritosDisponibles],
+  );
+
+  useEffect(() => {
+    setDistritoFilter((prev) => {
+      if (prev.length === 0) return prev;
+      const allowed = new Set(distritosDisponibles);
+      const next = prev.filter((d) => allowed.has(d));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [distritosDisponibles]);
+
+  const filtered = useMemo(() => {
+    if (distritoFilter.length === 0) return rowsBeforeDistritoFilter;
+    return rowsBeforeDistritoFilter.filter((r) => {
+      const d = r.distrito_vive.trim();
+      return distritoFilter.includes(d);
+    });
+  }, [rowsBeforeDistritoFilter, distritoFilter]);
 
   const enrichHeavyForSlice = useCallback(async (slice: ControlDriverExcelRow[], semana: string) => {
     if (slice.length === 0) return;
@@ -408,10 +601,7 @@ export function ControlOperacionesPanel() {
       );
 
       try {
-        const { semaforoById, semaforoOptions } = await fetchSemaforoMap(semana);
-        setSemaforoOptionsFromApi((prev) =>
-          Array.from(new Set([...prev, ...semaforoOptions])).sort((a, b) => a.localeCompare(b, "es")),
-        );
+        const { semaforoById } = await fetchSemaforoMap(semana);
         setRows((prev) =>
           prev.map((r) => {
             if (!sliceIds.has(r.id_conductor)) return r;
@@ -448,7 +638,6 @@ export function ControlOperacionesPanel() {
       setOperatorOptions([]);
       setOperatorsReady(false);
       operatorsFetchedRef.current = false;
-      setSemaforoOptionsFromApi([]);
 
       void enrichHeavyForSlice(drivers, sl);
     } catch (e) {
@@ -824,29 +1013,20 @@ export function ControlOperacionesPanel() {
             </div>
             <div className="space-y-0.5">
               <Label className="text-[9px] uppercase leading-none text-slate-500">Semáforo</Label>
-              <Select value={semaforo} onValueChange={setSemaforo}>
-                <SelectTrigger className="h-8 text-[11px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {semaforoFilterOptions.map((v) => (
-                    <SelectItem key={v} value={v}>
-                      {v === SEMAFORO_ALL
-                        ? "Todos"
-                        : v === SEMAFORO_EMPTY
-                          ? "Sin semáforo"
-                          : v}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <SearchableMultiMiniSelect
+                values={semaforoFilter}
+                onChange={setSemaforoFilter}
+                options={SEMAFORO_MULTI_OPTIONS}
+                placeholder="Buscar semáforo…"
+                widthClass="w-full"
+              />
             </div>
             <div className="space-y-0.5">
               <Label className="text-[9px] uppercase leading-none text-slate-500">Distrito</Label>
-              <SearchableMiniSelect
-                value={distrito}
-                onChange={setDistrito}
-                options={distritoOptions.map((d) => ({ value: d, label: d === DISTRITO_ALL ? "Todos" : d }))}
+              <SearchableMultiMiniSelect
+                values={distritoFilter}
+                onChange={setDistritoFilter}
+                options={distritoMultiOptions}
                 placeholder="Buscar distrito…"
                 widthClass="w-full"
               />

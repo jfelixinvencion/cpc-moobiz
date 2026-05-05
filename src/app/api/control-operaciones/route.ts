@@ -23,8 +23,7 @@ const DRIVER_SELECT = [
   `gps_col:"GPS"`,
 ].join(",");
 
-const DEFAULT_PAGE_SIZE = 125;
-const MAX_PAGE_SIZE = 300;
+const DRIVERS_INTERNAL_CHUNK = 150;
 const MAX_NAMES_VIAJES = 250;
 const MAX_IDS_SEMAFORO = 250;
 const CONTROL_LIMIT = 50_000;
@@ -60,7 +59,7 @@ async function fetchDriversPage(
 ): Promise<{ drivers: ControlDriverExcelRow[]; total: number }> {
   const sb = getSupabaseAdmin();
   const safePage = Math.max(1, page);
-  const safeSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Math.min(pageSize, MAX_PAGE_SIZE)));
+  const safeSize = Math.max(1, pageSize);
   const from = (safePage - 1) * safeSize;
   const to = from + safeSize - 1;
 
@@ -68,6 +67,7 @@ async function fetchDriversPage(
     .schema("vista")
     .from("vw_moobiz_drivers_excel")
     .select(DRIVER_SELECT, { count: "exact" })
+    .eq("Estado Conductor", "Aprobado")
     .range(from, to);
 
   if (result.error) {
@@ -76,6 +76,7 @@ async function fetchDriversPage(
       .schema("vista")
       .from("vw_moobiz_drivers_excel")
       .select("*", { count: "exact" })
+      .eq("Estado Conductor", "Aprobado")
       .range(from, to);
   }
 
@@ -86,10 +87,24 @@ async function fetchDriversPage(
   for (const raw of rows) {
     if (!raw || typeof raw !== "object") continue;
     const m = mapExcelRowToControlDriver(raw as Record<string, unknown>);
-    if (m) drivers.push(m);
+    if (m && m.estado_conductor === "Aprobado") drivers.push(m);
   }
   const total = typeof count === "number" && Number.isFinite(count) ? count : drivers.length;
   return { drivers, total };
+}
+
+async function fetchAllApprovedDrivers(): Promise<{ drivers: ControlDriverExcelRow[]; total: number }> {
+  const all: ControlDriverExcelRow[] = [];
+  let page = 1;
+  let total = 0;
+  for (;;) {
+    const { drivers, total: t } = await fetchDriversPage(page, DRIVERS_INTERNAL_CHUNK);
+    if (page === 1) total = t;
+    all.push(...drivers);
+    if (drivers.length < DRIVERS_INTERNAL_CHUNK) break;
+    page += 1;
+  }
+  return { drivers: all, total };
 }
 
 async function fetchViajesCountsForExactConductorNames(names: string[]): Promise<Record<string, number>> {
@@ -286,13 +301,9 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const page = Math.max(1, Number.parseInt(url.searchParams.get("page") ?? "1", 10) || 1);
-    const pageSizeRaw = Number.parseInt(url.searchParams.get("pageSize") ?? String(DEFAULT_PAGE_SIZE), 10);
-    const pageSize = Number.isFinite(pageSizeRaw) ? pageSizeRaw : DEFAULT_PAGE_SIZE;
-
     const tDrivers = nowMs();
-    const { drivers, total } = await fetchDriversPage(page, pageSize);
-    const msDrivers = logBlock(`drivers page=${page} size=${pageSize} rows=${drivers.length}`, tDrivers);
+    const { drivers, total } = await fetchAllApprovedDrivers();
+    const msDrivers = logBlock(`drivers approved total=${drivers.length}`, tDrivers);
 
     const tControl = nowMs();
     const controlRows = await fetchControlRows();
@@ -301,19 +312,18 @@ export async function GET(request: NextRequest) {
     const controlById = controlByIdFromRows(controlRows);
     const semanaLabel = semanaLabelLiquidaciones();
 
-    logBlock(`GET total (solo drivers+control) page=${page}`, tRequest);
+    logBlock("GET total (drivers aprobados + control)", tRequest);
 
     return NextResponse.json({
       drivers,
       controlById,
-      page,
-      pageSize,
       total,
+      approvedCount: drivers.length,
       semanaLabel,
       /** Resumen diagnóstico (timeout histórico por mezcla de datasets + scan completo). */
       loadStrategy: {
         cause:
-          "Antes: Promise.all de toda la vista (rangos 2500 + select *), viajes_activos completo en rangos, liquidaciones para todos los ids y operadores en un solo request; eso superaba el tiempo de sentencia. Ahora: solo una página de columnas mínimas + control; viajes/semaforo/operators van aparte y acotados.",
+          "Antes: mezcla de datasets pesados en un solo request. Ahora: solo universo aprobado + control en carga base; enriquecimiento pesado sigue en parciales separados y acotados.",
         timingsMs: {
           drivers: msDrivers,
           control: msControl,

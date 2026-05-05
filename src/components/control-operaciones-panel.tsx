@@ -28,11 +28,9 @@ import { semaforoSwatch } from "@/lib/control-operaciones-map";
 import { normalizeConductorName } from "@/lib/gps-filter";
 
 const ROW_H = 44;
-const PAGE_SIZE = 125;
 const CHUNK_NAMES = 55;
 const CHUNK_IDS = 80;
 const GLOBAL_ALL = "__all__";
-const ESTADO_ALL = "__all__";
 const GPS_ALL = "__all__";
 const SEMAFORO_ALL = "__all__";
 const SEMAFORO_EMPTY = "__empty__";
@@ -52,9 +50,8 @@ type ControlCell = { solicitante: string | null; observacion: string | null };
 type ApiPage = {
   drivers: ControlDriverExcelRow[];
   controlById: Record<string, ControlCell>;
-  page: number;
-  pageSize: number;
   total: number;
+  approvedCount?: number;
   semanaLabel: string;
   error?: string;
 };
@@ -231,7 +228,6 @@ export function ControlOperacionesPanel() {
   const [semanaLabel, setSemanaLabel] = useState("");
   const [semaforoOptionsFromApi, setSemaforoOptionsFromApi] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [heavyBusy, setHeavyBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -239,11 +235,9 @@ export function ControlOperacionesPanel() {
   const [viajesBusy, setViajesBusy] = useState(false);
   const [semaforoBusy, setSemaforoBusy] = useState(false);
 
-  const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
 
   const [region, setRegion] = useState(GLOBAL_ALL);
-  const [estado, setEstado] = useState(ESTADO_ALL);
   const [gps, setGps] = useState(GPS_ALL);
   const [semaforo, setSemaforo] = useState(SEMAFORO_ALL);
   const [distrito, setDistrito] = useState(DISTRITO_ALL);
@@ -261,8 +255,6 @@ export function ControlOperacionesPanel() {
   const operatorsFetchedRef = useRef(false);
 
   const hoyStr = useMemo(() => format(new Date(), "dd/MM/yyyy"), []);
-
-  const hasMore = rows.length < total;
 
   const distritoOptions = useMemo(() => {
     const s = new Set<string>();
@@ -286,7 +278,6 @@ export function ControlOperacionesPanel() {
     const cq = conductorQ.trim().toLowerCase();
     return rows.filter((r) => {
       if (region !== GLOBAL_ALL && String(r.global).trim().toUpperCase() !== region) return false;
-      if (estado !== ESTADO_ALL && r.estado_conductor !== estado) return false;
       if (gps !== GPS_ALL && r.gps_label !== gps) return false;
       if (semaforo === SEMAFORO_EMPTY) {
         if ((r.semaforo ?? "").trim()) return false;
@@ -305,7 +296,7 @@ export function ControlOperacionesPanel() {
       }
       return true;
     });
-  }, [rows, region, estado, gps, semaforo, distrito, conductorQ, solicitanteFilter, controlById]);
+  }, [rows, region, gps, semaforo, distrito, conductorQ, solicitanteFilter, controlById]);
 
   const enrichHeavyForSlice = useCallback(async (slice: ControlDriverExcelRow[], semana: string) => {
     if (slice.length === 0) return;
@@ -349,17 +340,11 @@ export function ControlOperacionesPanel() {
     }
   }, []);
 
-  const fetchPage = useCallback(async (nextPage: number, append: boolean) => {
-    const isFirst = !append;
-    if (isFirst) setLoading(true);
-    else setLoadingMore(true);
+  const loadApprovedDriversBase = useCallback(async () => {
+    setLoading(true);
     setError(null);
     try {
-      const sp = new URLSearchParams({
-        page: String(nextPage),
-        pageSize: String(PAGE_SIZE),
-      });
-      const res = await fetch(`/api/control-operaciones?${sp.toString()}`, { cache: "no-store" });
+      const res = await fetch("/api/control-operaciones", { cache: "no-store" });
       const j = (await res.json()) as ApiPage & { loadStrategy?: unknown };
       if (!res.ok) throw new Error(j.error || "Error al cargar control");
 
@@ -373,41 +358,28 @@ export function ControlOperacionesPanel() {
       setControlById(control);
 
       const merged = withPendingHeavy(drivers);
-      if (append) {
-        setRows((prev) => [...prev, ...merged]);
-        setPage(nextPage);
-      } else {
-        setRows(merged);
-        setOperatorOptions([]);
-        setOperatorsReady(false);
-        operatorsFetchedRef.current = false;
-        setSemaforoOptionsFromApi([]);
-        setPage(nextPage);
-      }
+      setRows(merged);
+      setOperatorOptions([]);
+      setOperatorsReady(false);
+      operatorsFetchedRef.current = false;
+      setSemaforoOptionsFromApi([]);
 
       void enrichHeavyForSlice(drivers, sl);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error");
     } finally {
       setLoading(false);
-      setLoadingMore(false);
     }
   }, [enrichHeavyForSlice]);
 
   const reloadTable = useCallback(() => {
-    setPage(1);
     setSelected(new Set());
-    void fetchPage(1, false);
-  }, [fetchPage]);
+    void loadApprovedDriversBase();
+  }, [loadApprovedDriversBase]);
 
   useEffect(() => {
-    void fetchPage(1, false);
-  }, [fetchPage]);
-
-  const loadMore = useCallback(() => {
-    if (!hasMore || loading || loadingMore) return;
-    void fetchPage(page + 1, true);
-  }, [hasMore, loading, loadingMore, page, fetchPage]);
+    void loadApprovedDriversBase();
+  }, [loadApprovedDriversBase]);
 
   const refreshViajes = useCallback(async () => {
     if (rows.length === 0) return;
@@ -639,7 +611,7 @@ export function ControlOperacionesPanel() {
                 Semana liquidaciones: <span className="font-mono text-slate-700">{semanaLabel || "—"}</span>
                 {" · "}
                 <span>
-                  Página {page} · {PAGE_SIZE} / carga · {rows.length} cargados / {total} total
+                  {rows.length} cargados / {total} aprobados
                 </span>
               </p>
             </div>
@@ -647,7 +619,7 @@ export function ControlOperacionesPanel() {
               Fecha sistema: {hoyStr}
             </Badge>
           </div>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
             <div className="space-y-1">
               <Label className="text-[10px] uppercase text-slate-500">Región</Label>
               <Select value={region} onValueChange={setRegion}>
@@ -658,20 +630,6 @@ export function ControlOperacionesPanel() {
                   <SelectItem value={GLOBAL_ALL}>Todas</SelectItem>
                   <SelectItem value="LIMA">LIMA</SelectItem>
                   <SelectItem value="PROVINCIA">PROVINCIA</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1">
-              <Label className="text-[10px] uppercase text-slate-500">Estado conductor</Label>
-              <Select value={estado} onValueChange={setEstado}>
-                <SelectTrigger className="h-9 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={ESTADO_ALL}>Todos</SelectItem>
-                  <SelectItem value="Aprobado">Aprobado</SelectItem>
-                  <SelectItem value="Rechazado">Rechazado</SelectItem>
-                  <SelectItem value="Nuevo">Nuevo</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -779,15 +737,6 @@ export function ControlOperacionesPanel() {
             </Button>
             <Button type="button" size="sm" variant="secondary" disabled={loading} onClick={() => void reloadTable()}>
               Recargar tabla
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={!hasMore || loading || loadingMore}
-              onClick={() => void loadMore()}
-            >
-              {loadingMore ? "…" : "Cargar más"}
             </Button>
             <span className="text-[10px] text-slate-500">
               {loading ? "Cargando…" : `${filtered.length} visibles · ${rows.length} en memoria`}

@@ -52,7 +52,7 @@ export type MoobizDriversSyncResult = {
   reachedFetchCap: boolean;
 };
 
-async function getTokenForDriversSync(): Promise<{ token: string; fromEnvOverride: boolean }> {
+export async function getTokenForDriversSync(): Promise<{ token: string; fromEnvOverride: boolean }> {
   const only = getEnvTrimmed(["MOOBIZ_DRIVERS_TOKEN"]);
   if (only) {
     console.log("[drivers-sync] usando MOOBIZ_DRIVERS_TOKEN:", redactMoobizToken(only));

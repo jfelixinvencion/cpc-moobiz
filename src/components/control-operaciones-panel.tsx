@@ -704,17 +704,21 @@ export function ControlOperacionesPanel() {
     <div className="space-y-3">
       <Card className="border-slate-200 bg-white shadow-sm">
         <CardHeader className="space-y-1.5 border-b border-slate-100 py-2">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-            <CardTitle className="text-sm font-semibold text-slate-900">Control de operaciones</CardTitle>
-            <p className="text-xs text-slate-500">
-              Semana liquidaciones: <span className="font-mono text-slate-700">{semanaLabel || "—"}</span>
-            </p>
-            <p className="text-xs text-slate-500">
-              {rows.length} cargados / {total} aprobados
-            </p>
-            <Badge variant="secondary" className="h-6 shrink-0 bg-slate-100 px-2 text-[11px] text-slate-800">
-              Fecha sistema: {hoyStr}
-            </Badge>
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-sm">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <CardTitle className="text-sm font-semibold text-slate-900">Control de operaciones</CardTitle>
+              <p className="text-xs text-slate-500">
+                Semana liquidaciones: <span className="font-mono text-slate-700">{semanaLabel || "—"}</span>
+              </p>
+            </div>
+            <div className="ml-auto flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
+              <p className="text-xs text-slate-500">
+                {rows.length} cargados / {total} aprobados
+              </p>
+              <Badge variant="secondary" className="h-6 shrink-0 bg-slate-100 px-2 text-[11px] text-slate-800">
+                Fecha sistema: {hoyStr}
+              </Badge>
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-1.5 md:grid-cols-3 xl:grid-cols-6">
             <div className="space-y-0.5">
@@ -801,41 +805,6 @@ export function ControlOperacionesPanel() {
             <Button
               type="button"
               size="sm"
-              variant="outline"
-              disabled={syncConductoresBusy || loading}
-              onClick={() => void syncConductores()}
-              className="h-8 px-2 text-xs"
-            >
-              {syncConductoresBusy ? "…" : "🔄 Conductores"}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={viajesBusy || loading || rows.length === 0}
-              onClick={() => void refreshViajes()}
-              className="h-8 px-2 text-xs"
-            >
-              {viajesBusy ? "…" : "🚗 Viajes"}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              disabled={loading}
-              onClick={() => void reloadTable()}
-              className="h-8 px-2 text-xs"
-            >
-              Recargar tabla
-            </Button>
-            <span className="text-[10px] leading-none text-slate-500">
-              {loading ? "Cargando…" : `${filtered.length} visibles · ${rows.length} en memoria`}
-              {heavyBusy ? " · Sincronizando viajes/semáforo…" : ""}
-              {saving ? " · Guardando…" : ""}
-            </span>
-            <Button
-              type="button"
-              size="sm"
               variant="default"
               className="h-8 bg-[#0b1131] px-2 text-xs text-white hover:bg-[#0b1131]/90"
               disabled={selected.size === 0}
@@ -879,6 +848,41 @@ export function ControlOperacionesPanel() {
                 </div>
               ) : null}
             </div>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={syncConductoresBusy || loading}
+              onClick={() => void syncConductores()}
+              className="h-8 px-2 text-xs"
+            >
+              {syncConductoresBusy ? "…" : "🔄 Conductores"}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={viajesBusy || loading || rows.length === 0}
+              onClick={() => void refreshViajes()}
+              className="h-8 px-2 text-xs"
+            >
+              {viajesBusy ? "…" : "🚗 Viajes"}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              disabled={loading}
+              onClick={() => void reloadTable()}
+              className="h-8 px-2 text-xs"
+            >
+              Recargar tabla
+            </Button>
+            <span className="text-[10px] leading-none text-slate-500">
+              {loading ? "Cargando…" : `${filtered.length} visibles · ${rows.length} en memoria`}
+              {heavyBusy ? " · Sincronizando viajes/semáforo…" : ""}
+              {saving ? " · Guardando…" : ""}
+            </span>
           </div>
 
           <div className="overflow-hidden rounded-lg border border-slate-200">

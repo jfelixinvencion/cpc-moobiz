@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 import { formatApiError } from "@/lib/format-api-error";
 import { assertQualityWriteAccess } from "@/lib/panel-session";
 import { runMoobizServicesSync } from "@/lib/moobiz-services-sync";

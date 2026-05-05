@@ -13,6 +13,7 @@
     "sync:history:pages": "node -r dotenv/config scripts/sync_moobiz_history.js --mode=pages_backfill --pages=20 --limit=1000",
     "sync:drivers": "node scripts/sync_moobiz_drivers.js",
     "sync:operators": "node scripts/sync_moobiz_operators.js",
+    "sync:services": "node scripts/sync_moobiz_services.js",
     "sync:logs": "node scripts/sync_moobiz_logs_incremental.js",
     "probe:drivers-pagination": "node scripts/probe_moobiz_drivers_pagination.js"
   },

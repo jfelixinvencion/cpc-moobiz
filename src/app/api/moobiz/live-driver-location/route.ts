@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { formatApiError } from "@/lib/format-api-error";
-import { getMoobizBearerForRequest, moobizFetchWithToken } from "@/lib/moobiz-auth";
+import {
+  getMoobizBearerForRequest,
+  loginAndGetMoobizToken,
+  moobizFetchWithToken,
+  writeMoobizTokenToDb,
+} from "@/lib/moobiz-auth";
 import { assertQualityReadAccess } from "@/lib/panel-session";
 
 export const runtime = "nodejs";
@@ -84,6 +89,46 @@ function pickBestItem(items: LiveDriverLocationItem[], query: string): LiveDrive
   return items[0] ?? null;
 }
 
+/** Moobiz a veces responde HTTP 200 y `ok: true` con `items: []` cuando el Bearer está vencido (sin 401). */
+function moobizLiveVehiclesOkButEmptyItems(parsed: unknown): boolean {
+  if (!parsed || typeof parsed !== "object") return false;
+  const o = parsed as Record<string, unknown>;
+  if (o.ok !== true) return false;
+  return extractItems(parsed).length === 0;
+}
+
+function logLiveLocationBearer(label: string, token: string): void {
+  const t = token.trim();
+  const preview = t.length <= 10 ? t : `${t.slice(0, 10)}…`;
+  console.log(`[live-driver-location] ${label} Bearer (primeros 10): ${preview} [len=${t.length}]`);
+}
+
+function parseJsonResponse(text: string): unknown {
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    return {};
+  }
+}
+
+async function fetchLiveVehiclesJson(
+  upstreamUrl: string,
+  token: string,
+): Promise<{ ok: boolean; status: number; parsed: unknown }> {
+  const res = await moobizFetchWithToken(
+    upstreamUrl,
+    {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    },
+    token,
+  );
+  const text = await res.text();
+  const parsed = parseJsonResponse(text);
+  return { ok: res.ok, status: res.status, parsed };
+}
+
 export async function GET(request: NextRequest): Promise<Response> {
   try {
     assertQualityReadAccess(request);
@@ -99,44 +144,50 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
 
   try {
-    const token = await getMoobizBearerForRequest();
     const upstreamUrl =
       `https://app.moobiz.pe/api/admin/live/vehicles?query=${encodeURIComponent(query)}` +
       `&show_destinations=true`;
 
-    const upstream = await moobizFetchWithToken(
-      upstreamUrl,
-      {
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-        },
-        cache: "no-store",
-      },
-      token,
-    );
+    let token = await getMoobizBearerForRequest();
+    logLiveLocationBearer("intento 1", token);
 
-    const text = await upstream.text();
-    let parsed: unknown = {};
-    try {
-      parsed = text ? JSON.parse(text) : {};
-    } catch {
-      parsed = {};
-    }
+    let { ok: httpOk, status: httpStatus, parsed } = await fetchLiveVehiclesJson(upstreamUrl, token);
 
-    if (!upstream.ok) {
+    if (!httpOk) {
       return NextResponse.json(
         {
           ok: false,
-          msg: `upstream_${upstream.status}`,
+          msg: `upstream_${httpStatus}`,
           item: null,
         },
         { status: 502 },
       );
     }
 
-    const normalized = extractItems(parsed).map(normalizeLocationItem).filter(Boolean) as LiveDriverLocationItem[];
-    const item = pickBestItem(normalized, query);
+    let normalized = extractItems(parsed).map(normalizeLocationItem).filter(Boolean) as LiveDriverLocationItem[];
+    let item = pickBestItem(normalized, query);
+
+    const emptySuccess = moobizLiveVehiclesOkButEmptyItems(parsed);
+    if (emptySuccess) {
+      console.warn(
+        "[live-driver-location] Moobiz respondió ok:true con items vacíos; se asume token desactualizado — login + persistencia en sync_state y reintento…",
+      );
+      const { token: fresh } = await loginAndGetMoobizToken();
+      await writeMoobizTokenToDb(fresh);
+      token = fresh;
+      logLiveLocationBearer("intento 2 (tras renovar y guardar en sync_state)", token);
+
+      const second = await fetchLiveVehiclesJson(upstreamUrl, token);
+      if (!second.ok) {
+        return NextResponse.json(
+          { ok: false, msg: `upstream_${second.status}`, item: null },
+          { status: 502 },
+        );
+      }
+      parsed = second.parsed;
+      normalized = extractItems(parsed).map(normalizeLocationItem).filter(Boolean) as LiveDriverLocationItem[];
+      item = pickBestItem(normalized, query);
+    }
 
     if (!item) {
       return NextResponse.json({ ok: false, msg: "not_found", item: null });

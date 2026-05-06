@@ -170,6 +170,7 @@ async function tryLocateWithToken(
 }
 
 export async function GET(request: NextRequest): Promise<Response> {
+  console.log("[live-driver-location] INICIO REQUEST");
   try {
     assertQualityReadAccess(request);
   } catch (err) {
@@ -192,6 +193,10 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   try {
     let token = await getMoobizBearerForRequest();
+    const preview =
+      token.trim().length <= 10 ? token.trim() : `${token.trim().slice(0, 10)}…`;
+    console.log(`[live-driver-location] intento 1 Bearer (primeros 10): ${preview} [len=${token.trim().length}]`);
+
     let { item, needFreshToken } = await tryLocateWithToken(token, variants, matchName);
 
     if (item) {

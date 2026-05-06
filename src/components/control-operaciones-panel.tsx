@@ -2,7 +2,7 @@
 
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { format } from "date-fns";
-import { ExternalLink, Loader2, MapPin } from "lucide-react";
+import { ExternalLink, Loader2, MapPin, ParkingSquare } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -83,6 +83,7 @@ type DriverLiveLocationItem = {
   date_tracked: string;
   txt_tracked: string;
   icon: string;
+  parked_address?: string | null;
 };
 
 type DriverLiveLocationApiResponse = {
@@ -1497,6 +1498,14 @@ export function ControlOperacionesPanel() {
                 <p>📍 Código: {gpsModalState.item.code || "—"}</p>
                 <p>🕐 Último GPS: {gpsModalState.item.txt_tracked || "—"}</p>
                 <p>📅 Fecha: {formatGpsDate(gpsModalState.item.date_tracked)}</p>
+                {String(gpsModalState.item.parked_address ?? "").trim() ? (
+                  <p className="flex items-start gap-2">
+                    <ParkingSquare className="mt-0.5 h-4 w-4 shrink-0 text-slate-600" aria-hidden />
+                    <span>
+                      Últ. posición parado: {String(gpsModalState.item.parked_address).trim()}
+                    </span>
+                  </p>
+                ) : null}
               </div>
             </div>
           ) : null}

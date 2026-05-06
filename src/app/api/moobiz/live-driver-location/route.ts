@@ -22,6 +22,7 @@ type LiveDriverLocationItem = {
   date_tracked: string;
   txt_tracked: string;
   icon: string;
+  parked_address: string;
 };
 
 function asText(v: unknown): string {
@@ -70,6 +71,7 @@ function normalizeLocationItem(raw: unknown): LiveDriverLocationItem | null {
     date_tracked: asText(row.date_tracked),
     txt_tracked: asText(row.txt_tracked),
     icon: asText(row.icon),
+    parked_address: asText(row.parked_address),
   };
 }
 

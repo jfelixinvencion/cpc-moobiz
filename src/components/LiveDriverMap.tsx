@@ -13,13 +13,18 @@ type Props = {
   iconUrl?: string;
 };
 
+const ICON_SIZE: [number, number] = [24, 24];
+const ICON_ANCHOR: [number, number] = [12, 24];
+const POPUP_ANCHOR: [number, number] = [0, -22];
+const SHADOW_SIZE: [number, number] = [24, 24];
+
 const redFallbackIcon = L.icon({
   iconUrl: "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png",
   shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
-  iconSize: [25, 41],
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  shadowSize: [41, 41],
+  iconSize: ICON_SIZE,
+  iconAnchor: ICON_ANCHOR,
+  popupAnchor: POPUP_ANCHOR,
+  shadowSize: SHADOW_SIZE,
 });
 
 export default function LiveDriverMap(props: Props) {
@@ -30,10 +35,10 @@ export default function LiveDriverMap(props: Props) {
     return L.icon({
       iconUrl,
       shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
-      iconSize: [28, 42],
-      iconAnchor: [14, 42],
-      popupAnchor: [0, -34],
-      shadowSize: [41, 41],
+      iconSize: ICON_SIZE,
+      iconAnchor: ICON_ANCHOR,
+      popupAnchor: POPUP_ANCHOR,
+      shadowSize: SHADOW_SIZE,
     });
   }, [iconUrl]);
 
@@ -41,8 +46,8 @@ export default function LiveDriverMap(props: Props) {
     <div className="h-[320px] w-full overflow-hidden rounded-lg border border-slate-200">
       <MapContainer center={[lat, lng]} zoom={16} className="h-full w-full">
         <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution='&copy; OpenStreetMap contributors &copy; CARTO'
+          url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
         />
         <Marker position={[lat, lng]} icon={markerIcon}>
           <Popup>

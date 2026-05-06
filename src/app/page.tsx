@@ -675,6 +675,14 @@ function DashboardContent() {
     id: ReturnType<typeof setTimeout>;
     key: ScheduleProductKey;
   } | null>(null);
+  const scheduleLegendSessionV2Ref = useRef<{
+    restore: Record<ScheduleProductKey, boolean> | null;
+    isolateFocus: ScheduleProductKey | null;
+  }>({ restore: null, isolateFocus: null });
+  const scheduleLegendClickTimerV2Ref = useRef<{
+    id: ReturnType<typeof setTimeout>;
+    key: ScheduleProductKey;
+  } | null>(null);
   const [scheduleLegendUiEpoch, setScheduleLegendUiEpoch] = useState(0);
   const [scheduleLegendHintOpen, setScheduleLegendHintOpen] = useState(() => {
     if (typeof window === "undefined") return false;
@@ -1570,6 +1578,19 @@ function DashboardContent() {
     }
     return map;
   }, [scheduleV2TimelineData]);
+  const scheduleV2PendingTotalVisible = useMemo(
+    () =>
+      scheduleV2TimelineData.reduce(
+        (acc, row) =>
+          acc +
+          SCHEDULE_STACK_ORDER.reduce(
+            (rowAcc, key) => rowAcc + (visibleProductsV2[key] ? row[key] : 0),
+            0,
+          ),
+        0,
+      ),
+    [scheduleV2TimelineData, visibleProductsV2],
+  );
 
   const syncScheduleViewport = useCallback(() => {
     const el = scheduleTimelineScrollRef.current;
@@ -1742,6 +1763,74 @@ function DashboardContent() {
     setScheduleProductVisibility({ ...snap });
     setScheduleLegendUiEpoch((e) => e + 1);
   }, []);
+  const toggleScheduleProductV2 = useCallback((key: ScheduleProductKey) => {
+    scheduleLegendSessionV2Ref.current = { restore: null, isolateFocus: null };
+    setVisibleProductsV2((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  }, []);
+  const handleScheduleLegendIsolateV2 = useCallback((key: ScheduleProductKey) => {
+    setVisibleProductsV2((vis) => {
+      const session = scheduleLegendSessionV2Ref.current;
+      if (session.restore && session.isolateFocus === key && scheduleOnlyProductVisible(vis, key)) {
+        scheduleLegendSessionV2Ref.current = { restore: null, isolateFocus: null };
+        return { ...session.restore };
+      }
+      scheduleLegendSessionV2Ref.current = { restore: { ...vis }, isolateFocus: key };
+      return scheduleVisibilityOnlyOne(key);
+    });
+  }, []);
+  const clearScheduleLegendPendingClickV2 = useCallback(() => {
+    const p = scheduleLegendClickTimerV2Ref.current;
+    if (p) {
+      clearTimeout(p.id);
+      scheduleLegendClickTimerV2Ref.current = null;
+    }
+  }, []);
+  const onScheduleLegendItemClickV2 = useCallback(
+    (key: ScheduleProductKey) => {
+      const pending = scheduleLegendClickTimerV2Ref.current;
+      if (pending && pending.key === key) {
+        clearTimeout(pending.id);
+        scheduleLegendClickTimerV2Ref.current = null;
+        return;
+      }
+      if (pending) {
+        clearTimeout(pending.id);
+        scheduleLegendClickTimerV2Ref.current = null;
+      }
+      const id = setTimeout(() => {
+        scheduleLegendClickTimerV2Ref.current = null;
+        toggleScheduleProductV2(key);
+      }, 280);
+      scheduleLegendClickTimerV2Ref.current = { id, key };
+    },
+    [toggleScheduleProductV2],
+  );
+  const onScheduleLegendItemDoubleClickV2 = useCallback(
+    (e: MouseEvent, key: ScheduleProductKey) => {
+      e.preventDefault();
+      clearScheduleLegendPendingClickV2();
+      handleScheduleLegendIsolateV2(key);
+    },
+    [clearScheduleLegendPendingClickV2, handleScheduleLegendIsolateV2],
+  );
+  const onScheduleLegendItemKeyDownV2 = useCallback(
+    (e: KeyboardEvent, key: ScheduleProductKey) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (e.shiftKey) {
+          clearScheduleLegendPendingClickV2();
+          handleScheduleLegendIsolateV2(key);
+        } else {
+          clearScheduleLegendPendingClickV2();
+          toggleScheduleProductV2(key);
+        }
+      }
+    },
+    [clearScheduleLegendPendingClickV2, handleScheduleLegendIsolateV2, toggleScheduleProductV2],
+  );
 
   const dismissScheduleLegendHint = useCallback(() => {
     try {
@@ -1755,6 +1844,13 @@ function DashboardContent() {
   useEffect(
     () => () => {
       const p = scheduleLegendClickTimerRef.current;
+      if (p) clearTimeout(p.id);
+    },
+    [],
+  );
+  useEffect(
+    () => () => {
+      const p = scheduleLegendClickTimerV2Ref.current;
       if (p) clearTimeout(p.id);
     },
     [],
@@ -2947,30 +3043,34 @@ function DashboardContent() {
               <CardHeader className="space-y-1 py-3">
                 <div className="flex items-start justify-between gap-2">
                   <CardTitle className="text-sm font-semibold text-slate-800">Servicios pendientes</CardTitle>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-8 shrink-0 text-xs"
-                    onClick={() => void handleSyncServicesV2()}
-                    disabled={syncingServices}
-                  >
-                    {syncingServices ? (
-                      <>
-                        <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-                        Actualizando...
-                      </>
-                    ) : (
-                      <>
-                        <RefreshCw className="mr-1 h-3.5 w-3.5" />
-                        Actualizar
-                      </>
-                    )}
-                  </Button>
+                  <div className="flex flex-col items-end gap-1 sm:flex-row sm:items-center">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 shrink-0 text-xs"
+                      onClick={() => void handleSyncServicesV2()}
+                      disabled={syncingServices}
+                    >
+                      {syncingServices ? (
+                        <>
+                          <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                          Actualizando...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="mr-1 h-3.5 w-3.5" />
+                          Actualizar
+                        </>
+                      )}
+                    </Button>
+                    <div className="rounded-lg border border-[#00e676]/40 bg-[#00e676]/15 px-3 py-1 text-right">
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-700">
+                        {scheduleV2PendingTotalVisible.toLocaleString("es-PE")} pendientes
+                      </p>
+                    </div>
+                  </div>
                 </div>
-                <p className="text-xs text-slate-500">
-                  Misma visual de franjas, usando `vista.moobiz_services_maestra`.
-                </p>
                 <div className="flex flex-wrap gap-2">
                   {SCHEDULE_TOOLTIP_ORDER.map((key) => {
                     const visible = visibleProductsV2[key];
@@ -2978,12 +3078,9 @@ function DashboardContent() {
                       <button
                         key={`v2-toggle-${key}`}
                         type="button"
-                        onClick={() =>
-                          setVisibleProductsV2((prev) => ({
-                            ...prev,
-                            [key]: !prev[key],
-                          }))
-                        }
+                        onClick={() => onScheduleLegendItemClickV2(key)}
+                        onDoubleClick={(e) => onScheduleLegendItemDoubleClickV2(e, key)}
+                        onKeyDown={(e) => onScheduleLegendItemKeyDownV2(e, key)}
                         className={`inline-flex cursor-pointer items-center rounded-md border border-transparent px-2 py-0.5 text-[10px] font-semibold text-white outline-offset-2 transition hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-400 ${
                           visible ? "" : "opacity-40"
                         }`}

@@ -7,6 +7,7 @@ import {
   writeMoobizTokenToDb,
 } from "@/lib/moobiz-auth";
 import { assertQualityReadAccess } from "@/lib/panel-session";
+import { getSupabaseServerClient } from "@/lib/supabase-server";
 
 export const runtime = "nodejs";
 
@@ -25,6 +26,15 @@ type LiveDriverLocationItem = {
   parked_address: string;
 };
 
+/** Servicios próximos (vista.moobiz_services_maestra) para el mapa GPS. */
+export type NearbyMoobizServiceForMap = {
+  id: string | number;
+  lat: number;
+  lng: number;
+  time: string;
+  user: string;
+};
+
 function asText(v: unknown): string {
   if (v === null || v === undefined) return "";
   return String(v).trim();
@@ -34,6 +44,57 @@ function asNumber(v: unknown): number | null {
   const n = typeof v === "number" ? v : Number(v);
   if (!Number.isFinite(n)) return null;
   return n;
+}
+
+type MaestraNearbyRow = {
+  id?: unknown;
+  org_lat?: unknown;
+  org_lng?: unknown;
+  alt_date?: unknown;
+  Usuario?: unknown;
+  usuario?: unknown;
+};
+
+async function fetchNearbyServicesForMap(): Promise<NearbyMoobizServiceForMap[]> {
+  try {
+    const { client } = getSupabaseServerClient();
+    const { data, error } = await client
+      .schema("vista")
+      .from("moobiz_services_maestra")
+      .select("id, org_lat, org_lng, alt_date, Usuario")
+      .eq("es_proxima_hora", true)
+      .neq("state", "anulado")
+      .neq("state", "finalizado")
+      .limit(500);
+
+    if (error) {
+      console.warn("[live-driver-location] Supabase nearby services:", error.message);
+      return [];
+    }
+
+    const rows = (data ?? []) as MaestraNearbyRow[];
+    const out: NearbyMoobizServiceForMap[] = [];
+    for (const row of rows) {
+      const lat = asNumber(row.org_lat);
+      const lng = asNumber(row.org_lng);
+      if (lat === null || lng === null) continue;
+      const rawId = row.id;
+      if (rawId === null || rawId === undefined) continue;
+      if (typeof rawId !== "string" && typeof rawId !== "number") continue;
+      if (rawId === "") continue;
+      const id = rawId;
+      const user = asText(row.Usuario ?? row.usuario);
+      const time = asText(row.alt_date);
+      out.push({ id, lat, lng, time, user });
+    }
+    return out;
+  } catch (e) {
+    console.warn(
+      "[live-driver-location] fetchNearbyServicesForMap:",
+      e instanceof Error ? e.message : e,
+    );
+    return [];
+  }
 }
 
 function normalizeAvailability(v: unknown): Availability {
@@ -201,20 +262,31 @@ export async function GET(request: NextRequest): Promise<Response> {
   } catch (err) {
     const message = formatApiError(err);
     const status = message.startsWith("AUTH_REQUIRED") ? 401 : 500;
-    return NextResponse.json({ ok: false, msg: message, item: null }, { status });
+    return NextResponse.json(
+      { ok: false, msg: message, item: null, nearbyServices: [] },
+      { status },
+    );
   }
 
   const queryRaw = asText(request.nextUrl.searchParams.get("query"));
   if (!queryRaw) {
-    return NextResponse.json({ ok: false, msg: "missing_query", item: null }, { status: 400 });
+    return NextResponse.json(
+      { ok: false, msg: "missing_query", item: null, nearbyServices: [] },
+      { status: 400 },
+    );
   }
 
   const matchName = queryRaw;
   const normalized = normalizeConductorNameForMoobizQuery(matchName);
   const variants = buildMoobizLiveQueryVariants(normalized);
   if (variants.length === 0) {
-    return NextResponse.json({ ok: false, msg: "missing_query", item: null }, { status: 400 });
+    return NextResponse.json(
+      { ok: false, msg: "missing_query", item: null, nearbyServices: [] },
+      { status: 400 },
+    );
   }
+
+  const nearbyServicesPromise = fetchNearbyServicesForMap();
 
   try {
     let token = await getMoobizBearerForRequest();
@@ -225,7 +297,8 @@ export async function GET(request: NextRequest): Promise<Response> {
     let { item, needFreshToken } = await tryLocateWithToken(token, variants, matchName);
 
     if (item) {
-      return NextResponse.json({ ok: true, item });
+      const nearbyServices = await nearbyServicesPromise;
+      return NextResponse.json({ ok: true, item, nearbyServices });
     }
 
     if (needFreshToken) {
@@ -233,18 +306,30 @@ export async function GET(request: NextRequest): Promise<Response> {
       await writeMoobizTokenToDb(fresh);
       ({ item } = await tryLocateWithToken(fresh, variants, matchName));
       if (item) {
-        return NextResponse.json({ ok: true, item });
+        const nearbyServices = await nearbyServicesPromise;
+        return NextResponse.json({ ok: true, item, nearbyServices });
       }
     }
 
+    const nearbyServices = await nearbyServicesPromise;
     return NextResponse.json({
       ok: false,
       msg: "not_found",
       item: null,
+      nearbyServices,
     });
   } catch (error) {
     const message = formatApiError(error);
     const status = message.startsWith("AUTH_REQUIRED") ? 401 : 500;
-    return NextResponse.json({ ok: false, msg: message, item: null }, { status });
+    let nearbyServices: NearbyMoobizServiceForMap[] = [];
+    try {
+      nearbyServices = await nearbyServicesPromise;
+    } catch {
+      /* ignore */
+    }
+    return NextResponse.json(
+      { ok: false, msg: message, item: null, nearbyServices },
+      { status },
+    );
   }
 }

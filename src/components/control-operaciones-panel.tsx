@@ -35,6 +35,7 @@ import {
 import type { ControlDriverExcelRow } from "@/lib/control-operaciones-map";
 import { semaforoSwatch } from "@/lib/control-operaciones-map";
 import { normalizeConductorName } from "@/lib/gps-filter";
+import type { NearbyServiceMarker } from "@/components/LiveDriverMap";
 
 const ROW_H = 44;
 const CHUNK_NAMES = 55;
@@ -58,6 +59,7 @@ type LiveDriverMapProps = {
   fullName: string;
   plate: string;
   iconUrl?: string;
+  nearbyServices?: NearbyServiceMarker[];
 };
 
 /** Valores internos del multi-filtro de semáforo (cada fila se clasifica a un bucket). */
@@ -90,6 +92,7 @@ type DriverLiveLocationApiResponse = {
   ok: boolean;
   msg?: string;
   item: DriverLiveLocationItem | null;
+  nearbyServices?: NearbyServiceMarker[];
 };
 
 async function fetchLiveDriverLocationByConductorName(
@@ -102,6 +105,7 @@ async function fetchLiveDriverLocationByConductorName(
     ok: Boolean(body?.ok),
     msg: body?.msg,
     item: body?.item ?? null,
+    nearbyServices: Array.isArray(body?.nearbyServices) ? body.nearbyServices : [],
   };
 }
 
@@ -587,7 +591,8 @@ export function ControlOperacionesPanel() {
   const [gpsModalState, setGpsModalState] = useState<{
     status: "idle" | "loading" | "success" | "error";
     item: DriverLiveLocationItem | null;
-  }>({ status: "idle", item: null });
+    nearbyServices: NearbyServiceMarker[];
+  }>({ status: "idle", item: null, nearbyServices: [] });
   const [LiveMapComponent, setLiveMapComponent] = useState<ComponentType<LiveDriverMapProps> | null>(null);
 
   /** Evita que `operatorsReady` recree callbacks y dispare el `useEffect` de carga inicial en bucle. */
@@ -1072,24 +1077,32 @@ export function ControlOperacionesPanel() {
       const cached = liveLocationCacheRef.current.get(id);
       if (cached?.ok && cached.item) {
         rememberGpsAvailability(id, cached);
-        setGpsModalState({ status: "success", item: cached.item });
+        setGpsModalState({
+          status: "success",
+          item: cached.item,
+          nearbyServices: cached.nearbyServices ?? [],
+        });
         loadLiveMapChunk();
         return;
       }
 
-      setGpsModalState({ status: "loading", item: null });
+      setGpsModalState({ status: "loading", item: null, nearbyServices: [] });
       try {
         const normalized = await fetchLiveDriverLocationByConductorName(name);
         rememberGpsAvailability(id, normalized);
         if (!normalized.ok || !normalized.item) {
-          setGpsModalState({ status: "error", item: null });
+          setGpsModalState({ status: "error", item: null, nearbyServices: [] });
           return;
         }
         liveLocationCacheRef.current.set(id, normalized);
-        setGpsModalState({ status: "success", item: normalized.item });
+        setGpsModalState({
+          status: "success",
+          item: normalized.item,
+          nearbyServices: normalized.nearbyServices ?? [],
+        });
         loadLiveMapChunk();
       } catch {
-        setGpsModalState({ status: "error", item: null });
+        setGpsModalState({ status: "error", item: null, nearbyServices: [] });
       }
     },
     [rememberGpsAvailability, loadLiveMapChunk],
@@ -1442,7 +1455,7 @@ export function ControlOperacionesPanel() {
         onOpenChange={(open) => {
           setGpsModalOpen(open);
           if (!open) {
-            setGpsModalState({ status: "idle", item: null });
+            setGpsModalState({ status: "idle", item: null, nearbyServices: [] });
             setGpsModalDriver(null);
             setLiveMapComponent(null);
           }
@@ -1487,6 +1500,7 @@ export function ControlOperacionesPanel() {
                   fullName={gpsModalState.item.full_name}
                   plate={gpsModalState.item.plate}
                   iconUrl={gpsModalState.item.icon || undefined}
+                  nearbyServices={gpsModalState.nearbyServices}
                 />
               ) : (
                 <div className="flex h-[320px] items-center justify-center rounded-lg border border-slate-200 bg-slate-50">

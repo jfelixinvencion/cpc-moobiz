@@ -586,6 +586,9 @@ function DashboardContent() {
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [dashboardError, setDashboardError] = useState<string | null>(null);
   const [dashboardData, setDashboardData] = useState<DashboardResponse | null>(null);
+  const [dashboardV2Loading, setDashboardV2Loading] = useState(false);
+  const [dashboardV2Error, setDashboardV2Error] = useState<string | null>(null);
+  const [dashboardV2Data, setDashboardV2Data] = useState<DashboardResponse | null>(null);
   const [reservasEmpresa, setReservasEmpresa] = useState("Todas");
   const [reservasStartDate, setReservasStartDate] = useState("");
   const [reservasEndDate, setReservasEndDate] = useState("");
@@ -1267,10 +1270,39 @@ function DashboardContent() {
     }
   }, [reservasStartDate, reservasEndDate, reservasEmpresa]);
 
+  const loadDashboardV2 = useCallback(async () => {
+    setDashboardV2Loading(true);
+    setDashboardV2Error(null);
+    try {
+      const params = new URLSearchParams();
+      if (reservasStartDate) params.set("startDate", reservasStartDate);
+      if (reservasEndDate) params.set("endDate", reservasEndDate);
+      if (reservasEmpresa && reservasEmpresa !== "Todas") {
+        params.set("empresa", reservasEmpresa);
+      }
+      const query = params.toString();
+      const res = await fetch(`/api/dashboard-v2/reservas${query ? `?${query}` : ""}`, {
+        cache: "no-store",
+      });
+      const data = (await res.json()) as DashboardResponse & { error?: string };
+      if (!res.ok) throw new Error(data?.error || "No se pudo cargar servicios pendientes.");
+      setDashboardV2Data(data);
+    } catch (err) {
+      setDashboardV2Error(err instanceof Error ? err.message : "Error inesperado en servicios pendientes.");
+    } finally {
+      setDashboardV2Loading(false);
+    }
+  }, [reservasStartDate, reservasEndDate, reservasEmpresa]);
+
   useEffect(() => {
     if (mainTab !== "dashboard" || dashboardSubTab !== "reservas") return;
     void loadDashboard();
   }, [mainTab, dashboardSubTab, loadDashboard, refreshKey]);
+
+  useEffect(() => {
+    if (mainTab !== "dashboard" || dashboardSubTab !== "reservas") return;
+    void loadDashboardV2();
+  }, [mainTab, dashboardSubTab, loadDashboardV2, refreshKey]);
 
   const loadProductividad = useCallback(async () => {
     setProdLoading(true);
@@ -1388,6 +1420,75 @@ function DashboardContent() {
     return baseData;
   }, [dashboardData?.data, scheduleChartData]);
 
+  const scheduleV2ChartData = dashboardV2Data?.charts.pendingBySchedule ?? [];
+  const scheduleV2ChartWidth = Math.max(scheduleV2ChartData.length * SCHEDULE_SLOT_PX, 320);
+  const scheduleV2TimelineData = useMemo<ScheduleTimelineDatum[]>(() => {
+    const grouped = scheduleV2ChartData.reduce<Record<string, Array<{ index: number; time: string }>>>(
+      (acc, item, index) => {
+        const parts = parseScheduleLabelParts(item.etiqueta);
+        const key = parts.dateKey || `fallback-${index}`;
+        if (!acc[key]) acc[key] = [];
+        acc[key].push({ index, time: parts.time });
+        return acc;
+      },
+      {},
+    );
+
+    const centerIndexByDay = new Map<string, number>();
+    Object.entries(grouped).forEach(([dateKey, items]) => {
+      centerIndexByDay.set(dateKey, items[Math.floor((items.length - 1) / 2)]?.index ?? -1);
+    });
+
+    const baseData = scheduleV2ChartData.map((item, index) => {
+      const { time, date, dateKey } = parseScheduleLabelParts(item.etiqueta);
+      const hour24 = extractHour24FromScheduleEtiqueta(item.etiqueta);
+      const prevDateKey =
+        index > 0 ? parseScheduleLabelParts(scheduleV2ChartData[index - 1]?.etiqueta).dateKey : "";
+
+      return {
+        etiqueta: item.etiqueta,
+        total: item.total,
+        hourLabel: hour24 !== null ? String(hour24).padStart(2, "0") : time ? time.slice(0, 2) : "",
+        dateLabel: date,
+        dateKey,
+        showDayLabel: centerIndexByDay.get(dateKey || `fallback-${index}`) === index,
+        dayDividerBefore: index > 0 && Boolean(dateKey) && dateKey !== prevDateKey,
+        OTROS: 0,
+        BUS: 0,
+        FURGON: 0,
+        VAN: 0,
+        SPRINTER: 0,
+        LOGISTICA: 0,
+        "PROVINCIA VIP": 0,
+        "VIP LIMA": 0,
+      };
+    });
+
+    const bySlot = new Map<string, ScheduleTimelineDatum>();
+    for (const item of baseData) {
+      const hour = extractHour24FromScheduleEtiqueta(item.etiqueta);
+      const slotKey = `${item.dateKey}|${hour !== null ? String(hour).padStart(2, "0") : ""}`;
+      bySlot.set(slotKey, item);
+    }
+
+    for (const viaje of dashboardV2Data?.data ?? []) {
+      const d = parseViajeScheduledDate(viaje);
+      if (!d) continue;
+      const slotKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}|${String(d.getHours()).padStart(2, "0")}`;
+      const slot = bySlot.get(slotKey);
+      if (!slot) continue;
+      const bucket = scheduleBucketForProducto(viaje.producto);
+      slot[bucket] += 1;
+    }
+
+    for (const item of baseData) {
+      const sum = SCHEDULE_STACK_ORDER.reduce((acc, key) => acc + item[key], 0);
+      item.total = sum > 0 ? sum : item.total;
+    }
+
+    return baseData;
+  }, [dashboardV2Data?.data, scheduleV2ChartData]);
+
   scheduleTimelineDataRef.current = scheduleTimelineData;
 
   const scheduleSlotCount = scheduleTimelineData.length;
@@ -1415,6 +1516,22 @@ function DashboardContent() {
     }
     return map;
   }, [scheduleTimelineData]);
+
+  const scheduleV2YAxisMax = useMemo(() => {
+    let m = 0;
+    for (const row of scheduleV2TimelineData) {
+      if (row.total > m) m = row.total;
+    }
+    return Math.max(1, m);
+  }, [scheduleV2TimelineData]);
+
+  const scheduleV2DatumByEtiqueta = useMemo(() => {
+    const map = new Map<string, ScheduleTimelineDatum>();
+    for (const row of scheduleV2TimelineData) {
+      map.set(row.etiqueta, row);
+    }
+    return map;
+  }, [scheduleV2TimelineData]);
 
   const syncScheduleViewport = useCallback(() => {
     const el = scheduleTimelineScrollRef.current;
@@ -1645,6 +1762,42 @@ function DashboardContent() {
         );
       },
     [scheduleDatumByEtiqueta],
+  );
+
+  const ScheduleV2XAxisTick = useMemo(
+    () =>
+      function ScheduleV2XAxisTickFn(props: { x?: number; y?: number; payload?: { value: unknown } }) {
+        const { x = 0, y = 0, payload } = props;
+        const entry = scheduleV2DatumByEtiqueta.get(asText(payload?.value));
+        if (!entry) return null;
+        return (
+          <g transform={`translate(${x},${y})`}>
+            {entry.hourLabel ? (
+              <text
+                x={0}
+                y={0}
+                dy={2}
+                textAnchor="middle"
+                style={{ fontSize: 10, fontWeight: 500, fill: CHART_AXIS.fill }}
+              >
+                {entry.hourLabel}
+              </text>
+            ) : null}
+            {entry.showDayLabel && entry.dateLabel ? (
+              <text
+                x={0}
+                y={0}
+                dy={20}
+                textAnchor="middle"
+                style={{ fontSize: 12, fontWeight: 700, fill: "#334155" }}
+              >
+                {entry.dateLabel}
+              </text>
+            ) : null}
+          </g>
+        );
+      },
+    [scheduleV2DatumByEtiqueta],
   );
 
   const scheduleViewportChartWidth = Math.max(
@@ -2747,6 +2900,89 @@ function DashboardContent() {
                         </BarChart>
                       </ResponsiveContainer>
                     </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-slate-200 bg-white shadow-sm">
+              <CardHeader className="space-y-1 py-3">
+                <CardTitle className="text-sm font-semibold text-slate-800">Servicios pendientes</CardTitle>
+                <p className="text-xs text-slate-500">
+                  Misma visual de franjas, usando `vista.moobiz_services_maestra`.
+                </p>
+                {dashboardV2Error ? (
+                  <p className="text-xs text-red-600">{dashboardV2Error}</p>
+                ) : dashboardV2Loading ? (
+                  <p className="text-xs text-slate-500">Cargando servicios pendientes...</p>
+                ) : null}
+              </CardHeader>
+              <CardContent className="pb-4">
+                <div className="overflow-x-auto overflow-y-hidden rounded-lg border border-slate-100 bg-slate-50/50 [-webkit-overflow-scrolling:touch]">
+                  <div className="relative" style={{ width: scheduleV2ChartWidth, height: 350 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={scheduleV2TimelineData}
+                        margin={{ top: 10, right: 12, left: 4, bottom: 28 }}
+                      >
+                        <CartesianGrid stroke={CHART_GRID} vertical={false} />
+                        {scheduleV2TimelineData
+                          .filter((item) => item.dayDividerBefore)
+                          .map((item) => (
+                            <ReferenceLine
+                              key={`v2-divider-${item.etiqueta}`}
+                              x={item.etiqueta}
+                              position="start"
+                              ifOverflow="visible"
+                              stroke="rgba(6, 182, 212, 0.3)"
+                              strokeDasharray="4 4"
+                              strokeWidth={1}
+                            />
+                          ))}
+                        <XAxis
+                          dataKey="etiqueta"
+                          tickLine={false}
+                          axisLine={{ stroke: CHART_GRID }}
+                          tick={<ScheduleV2XAxisTick />}
+                          interval={0}
+                          height={48}
+                        />
+                        <YAxis
+                          tick={CHART_AXIS}
+                          width={40}
+                          tickLine={false}
+                          axisLine={{ stroke: CHART_GRID }}
+                          allowDecimals={false}
+                          domain={[0, scheduleV2YAxisMax]}
+                        />
+                        <Tooltip content={<ScheduleStackBarTooltip />} />
+                        <Legend
+                          wrapperStyle={{ fontSize: 11 }}
+                          formatter={(value) => (
+                            <span className="text-slate-600">
+                              {String(value) === "OTROS" ? "Otros" : String(value)}
+                            </span>
+                          )}
+                        />
+                        {visibleScheduleKeys.map((key, idx) => (
+                          <Bar
+                            key={`v2-${key}`}
+                            dataKey={key}
+                            name={key === "OTROS" ? "Otros" : key}
+                            stackId="productos"
+                            isAnimationActive={false}
+                            barSize={SCHEDULE_SLOT_PX - 8}
+                            maxBarSize={SCHEDULE_SLOT_PX - 6}
+                            fill={SCHEDULE_PRODUCT_COLORS[key]}
+                            radius={
+                              idx === visibleScheduleKeys.length - 1
+                                ? [4, 4, 0, 0]
+                                : [0, 0, 0, 0]
+                            }
+                          />
+                        ))}
+                      </BarChart>
+                    </ResponsiveContainer>
                   </div>
                 </div>
               </CardContent>

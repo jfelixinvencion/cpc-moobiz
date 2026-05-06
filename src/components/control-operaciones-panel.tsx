@@ -2,9 +2,15 @@
 
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { format } from "date-fns";
-import dynamic from "next/dynamic";
 import { ExternalLink, Loader2, MapPin } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+} from "react";
 import { createPortal } from "react-dom";
 
 import { Badge } from "@/components/ui/badge";
@@ -41,7 +47,19 @@ const GPS_ICON_COLOR_ONLINE = "#22c55e";
 const GPS_ICON_COLOR_BUSY = "#f97316";
 const GPS_ICON_COLOR_OFFLINE = "#94a3b8";
 
-const LiveDriverMap = dynamic(() => import("@/components/LiveDriverMap"), { ssr: false });
+/**
+ * Ubicación en vivo Moobiz: SOLO se llama desde el clic del ícono GPS de una fila.
+ * No usar en useEffect, montaje, carga de tabla, ni en bucles sobre conductores.
+ */
+const MOOBIZ_LIVE_DRIVER_LOCATION_API = "/api/moobiz/live-driver-location";
+
+type LiveDriverMapProps = {
+  lat: number;
+  lng: number;
+  fullName: string;
+  plate: string;
+  iconUrl?: string;
+};
 
 /** Valores internos del multi-filtro de semáforo (cada fila se clasifica a un bucket). */
 const SEMAFORO_MULTI_SIN = "__sin__";
@@ -113,6 +131,20 @@ type DriverLiveLocationApiResponse = {
   msg?: string;
   item: DriverLiveLocationItem | null;
 };
+
+/** Una sola petición; solo debe invocarse desde el manejador de clic del ícono GPS. */
+async function fetchLiveDriverLocationByConductorName(
+  conductorName: string,
+): Promise<DriverLiveLocationApiResponse> {
+  const sp = new URLSearchParams({ query: conductorName });
+  const res = await fetch(`${MOOBIZ_LIVE_DRIVER_LOCATION_API}?${sp.toString()}`, { cache: "no-store" });
+  const body = (await res.json()) as DriverLiveLocationApiResponse;
+  return {
+    ok: Boolean(body?.ok),
+    msg: body?.msg,
+    item: body?.item ?? null,
+  };
+}
 
 function SearchableMiniSelect(props: {
   value: string;
@@ -557,6 +589,7 @@ export function ControlOperacionesPanel() {
     status: "idle" | "loading" | "success" | "error";
     item: DriverLiveLocationItem | null;
   }>({ status: "idle", item: null });
+  const [LiveMapComponent, setLiveMapComponent] = useState<ComponentType<LiveDriverMapProps> | null>(null);
 
   /** Evita que `operatorsReady` recree callbacks y dispare el `useEffect` de carga inicial en bucle. */
   const operatorsFetchedRef = useRef(false);
@@ -1020,6 +1053,13 @@ export function ControlOperacionesPanel() {
     });
   }, []);
 
+  /** Carga Leaflet/react-leaflet solo tras éxito y clic de usuario (no en montaje del panel). */
+  const loadLiveMapChunk = useCallback(() => {
+    void import("@/components/LiveDriverMap").then((mod) => {
+      setLiveMapComponent(() => mod.default);
+    });
+  }, []);
+
   const openGpsModalForDriver = useCallback(
     async (driver: MergedDriver) => {
       const id = String(driver.id_conductor).trim();
@@ -1028,12 +1068,14 @@ export function ControlOperacionesPanel() {
 
       setGpsModalDriver({ id, name });
       setGpsModalOpen(true);
+      setLiveMapComponent(null);
 
       const cached = liveLocationCacheRef.current.get(id);
       if (cached) {
         rememberGpsAvailability(id, cached);
         if (cached.ok && cached.item) {
           setGpsModalState({ status: "success", item: cached.item });
+          loadLiveMapChunk();
         } else {
           setGpsModalState({ status: "error", item: null });
         }
@@ -1042,14 +1084,7 @@ export function ControlOperacionesPanel() {
 
       setGpsModalState({ status: "loading", item: null });
       try {
-        const sp = new URLSearchParams({ query: name });
-        const res = await fetch(`/api/moobiz/live-driver-location?${sp.toString()}`, { cache: "no-store" });
-        const body = (await res.json()) as DriverLiveLocationApiResponse;
-        const normalized: DriverLiveLocationApiResponse = {
-          ok: Boolean(body?.ok),
-          msg: body?.msg,
-          item: body?.item ?? null,
-        };
+        const normalized = await fetchLiveDriverLocationByConductorName(name);
         liveLocationCacheRef.current.set(id, normalized);
         rememberGpsAvailability(id, normalized);
         if (!normalized.ok || !normalized.item) {
@@ -1057,12 +1092,13 @@ export function ControlOperacionesPanel() {
           return;
         }
         setGpsModalState({ status: "success", item: normalized.item });
+        loadLiveMapChunk();
       } catch {
         liveLocationCacheRef.current.set(id, { ok: false, msg: "network_error", item: null });
         setGpsModalState({ status: "error", item: null });
       }
     },
-    [rememberGpsAvailability],
+    [rememberGpsAvailability, loadLiveMapChunk],
   );
 
   useEffect(() => {
@@ -1414,6 +1450,7 @@ export function ControlOperacionesPanel() {
           if (!open) {
             setGpsModalState({ status: "idle", item: null });
             setGpsModalDriver(null);
+            setLiveMapComponent(null);
           }
         }}
       >
@@ -1448,14 +1485,20 @@ export function ControlOperacionesPanel() {
             </div>
           ) : gpsModalState.status === "success" && gpsModalState.item && gpsModalOpen ? (
             <div className="space-y-3">
-              <LiveDriverMap
-                key={gpsModalDriver?.id ?? "map"}
-                lat={gpsModalState.item.lat}
-                lng={gpsModalState.item.lng}
-                fullName={gpsModalState.item.full_name}
-                plate={gpsModalState.item.plate}
-                iconUrl={gpsModalState.item.icon || undefined}
-              />
+              {LiveMapComponent ? (
+                <LiveMapComponent
+                  key={gpsModalDriver?.id ?? "map"}
+                  lat={gpsModalState.item.lat}
+                  lng={gpsModalState.item.lng}
+                  fullName={gpsModalState.item.full_name}
+                  plate={gpsModalState.item.plate}
+                  iconUrl={gpsModalState.item.icon || undefined}
+                />
+              ) : (
+                <div className="flex h-[320px] items-center justify-center rounded-lg border border-slate-200 bg-slate-50">
+                  <Loader2 className="h-6 w-6 animate-spin text-slate-500" />
+                </div>
+              )}
               <div className="space-y-1 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
                 <p>🚗 Placa: {gpsModalState.item.plate || "—"}</p>
                 <p>📍 Código: {gpsModalState.item.code || "—"}</p>

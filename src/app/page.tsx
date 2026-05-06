@@ -281,8 +281,6 @@ type ScheduleTimelineDatum = {
   showDayLabel: boolean;
   dayDividerBefore: boolean;
   OTROS: number;
-  "OTROS LIMA": number;
-  "OTROS PROVINCIA": number;
   BUS: number;
   FURGON: number;
   VAN: number;
@@ -290,6 +288,24 @@ type ScheduleTimelineDatum = {
   LOGISTICA: number;
   "PROVINCIA VIP": number;
   "VIP LIMA": number;
+};
+type ScheduleTimelineDatumV2 = {
+  etiqueta: string;
+  total: number;
+  hourLabel: string;
+  dateLabel: string;
+  dateKey: string;
+  showDayLabel: boolean;
+  dayDividerBefore: boolean;
+  BUS: number;
+  FURGON: number;
+  VAN: number;
+  SPRINTER: number;
+  LOGISTICA: number;
+  "PROVINCIA VIP": number;
+  "VIP LIMA": number;
+  "OTROS LIMA": number;
+  "OTROS PROVINCIA": number;
 };
 
 function scheduleVisibilityOnlyOne(key: ScheduleProductKey): Record<ScheduleProductKey, boolean> {
@@ -337,7 +353,7 @@ type ScheduleStackRechartsPayloadEntry = {
   name?: unknown;
   value?: unknown;
   color?: string;
-  payload?: ScheduleTimelineDatum;
+  payload?: ScheduleTimelineDatum | ScheduleTimelineDatumV2;
 };
 
 type ScheduleStackBarTooltipProps = {
@@ -1522,8 +1538,6 @@ function DashboardContent() {
         showDayLabel: centerIndexByDay.get(dateKey || `fallback-${index}`) === index,
         dayDividerBefore: index > 0 && Boolean(dateKey) && dateKey !== prevDateKey,
         OTROS: 0,
-        "OTROS LIMA": 0,
-        "OTROS PROVINCIA": 0,
         BUS: 0,
         FURGON: 0,
         VAN: 0,
@@ -1548,16 +1562,7 @@ function DashboardContent() {
       const slot = bySlot.get(slotKey);
       if (!slot) continue;
       const bucket = scheduleBucketForProducto(viaje.producto);
-      if (bucket === "OTROS") {
-        const zona = asText(viaje.zona).toUpperCase();
-        if (zona === "PROVINCIA") {
-          slot["OTROS PROVINCIA"] += 1;
-        } else {
-          slot["OTROS LIMA"] += 1;
-        }
-      } else {
-        slot[bucket] += 1;
-      }
+      slot[bucket] += 1;
     }
 
     for (const item of baseData) {
@@ -1570,7 +1575,7 @@ function DashboardContent() {
 
   const scheduleV2ChartData = dashboardV2Data?.charts.pendingBySchedule ?? [];
   const scheduleV2ChartWidth = Math.max(scheduleV2ChartData.length * SCHEDULE_SLOT_PX, 320);
-  const scheduleV2TimelineData = useMemo<ScheduleTimelineDatum[]>(() => {
+  const scheduleV2TimelineData = useMemo<ScheduleTimelineDatumV2[]>(() => {
     const grouped = scheduleV2ChartData.reduce<Record<string, Array<{ index: number; time: string }>>>(
       (acc, item, index) => {
         const parts = parseScheduleLabelParts(item.etiqueta);
@@ -1601,7 +1606,6 @@ function DashboardContent() {
         dateKey,
         showDayLabel: centerIndexByDay.get(dateKey || `fallback-${index}`) === index,
         dayDividerBefore: index > 0 && Boolean(dateKey) && dateKey !== prevDateKey,
-        OTROS: 0,
         BUS: 0,
         FURGON: 0,
         VAN: 0,
@@ -1609,10 +1613,12 @@ function DashboardContent() {
         LOGISTICA: 0,
         "PROVINCIA VIP": 0,
         "VIP LIMA": 0,
+        "OTROS LIMA": 0,
+        "OTROS PROVINCIA": 0,
       };
     });
 
-    const bySlot = new Map<string, ScheduleTimelineDatum>();
+    const bySlot = new Map<string, ScheduleTimelineDatumV2>();
     for (const item of baseData) {
       const hour = extractHour24FromScheduleEtiqueta(item.etiqueta);
       const slotKey = `${item.dateKey}|${hour !== null ? String(hour).padStart(2, "0") : ""}`;
@@ -1626,7 +1632,16 @@ function DashboardContent() {
       const slot = bySlot.get(slotKey);
       if (!slot) continue;
       const bucket = scheduleBucketForProducto(viaje.producto);
-      slot[bucket] += 1;
+      if (bucket === "OTROS") {
+        const zona = asText(viaje.zona).toUpperCase();
+        if (zona === "PROVINCIA") {
+          slot["OTROS PROVINCIA"] += 1;
+        } else {
+          slot["OTROS LIMA"] += 1;
+        }
+      } else {
+        slot[bucket] += 1;
+      }
     }
 
     for (const item of baseData) {
@@ -1674,7 +1689,7 @@ function DashboardContent() {
   }, [scheduleV2TimelineData]);
 
   const scheduleV2DatumByEtiqueta = useMemo(() => {
-    const map = new Map<string, ScheduleTimelineDatum>();
+    const map = new Map<string, ScheduleTimelineDatumV2>();
     for (const row of scheduleV2TimelineData) {
       map.set(row.etiqueta, row);
     }

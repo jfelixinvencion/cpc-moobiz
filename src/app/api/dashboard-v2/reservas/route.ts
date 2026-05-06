@@ -154,26 +154,36 @@ export async function GET(request: Request): Promise<Response> {
     const endDate = endDateParam ? new Date(`${endDateParam}T23:59:59`) : null;
 
     const supabase = getSupabaseClient();
-    let query = supabase
-      .schema("vista")
-      .from("moobiz_services_maestra")
-      .select("id, state_color_name, alt_date, pr_name, co_name, zona")
-      .ilike("state_color_name", PENDING_STATUS);
+    const runQuery = async (withZona: boolean) => {
+      let query = supabase
+        .schema("vista")
+        .from("moobiz_services_maestra")
+        .select(
+          withZona
+            ? "id, state_color_name, alt_date, pr_name, co_name, zona"
+            : "id, state_color_name, alt_date, pr_name, co_name",
+        )
+        .ilike("state_color_name", PENDING_STATUS);
 
-    if (startDateParam) {
-      query = query.gte("alt_date", `${startDateParam}T00:00:00`);
-    }
-    if (endDateParam) {
-      query = query.lte("alt_date", `${endDateParam}T23:59:59`);
-    }
-    if (empresaParam && empresaParam !== "Todas") {
-      query = query.eq("co_name", empresaParam);
-    }
+      if (startDateParam) {
+        query = query.gte("alt_date", `${startDateParam}T00:00:00`);
+      }
+      if (endDateParam) {
+        query = query.lte("alt_date", `${endDateParam}T23:59:59`);
+      }
+      if (empresaParam && empresaParam !== "Todas") {
+        query = query.eq("co_name", empresaParam);
+      }
+      return query.order("alt_date", { ascending: true });
+    };
 
-    const { data, error } = await query.order("alt_date", { ascending: true });
-    if (error) return Response.json({ error: error.message }, { status: 500 });
+    let queryResult = await runQuery(true);
+    if (queryResult.error && /zona/i.test(queryResult.error.message)) {
+      queryResult = await runQuery(false);
+    }
+    if (queryResult.error) return Response.json({ error: queryResult.error.message }, { status: 500 });
 
-    const rawRows = (data ?? []) as ServicesMaestraRow[];
+    const rawRows = (queryResult.data ?? []) as ServicesMaestraRow[];
     const pendingRows: PendingChartRow[] = rawRows.map((row, index) => ({
       id: row.id ?? `row-${index}`,
       empresa: toText(row.co_name) || null,

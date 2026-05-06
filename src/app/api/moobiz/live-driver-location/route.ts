@@ -45,11 +45,21 @@ function normalizeAvailability(v: unknown): Availability {
 function normalizeLocationItem(raw: unknown): LiveDriverLocationItem | null {
   if (!raw || typeof raw !== "object") return null;
   const row = raw as Record<string, unknown>;
-  const full_name = asText(row.full_name || row.name || row.label);
-  const plate = asText(row.plate || row.vehicle_plate || row.placa);
+
+  const full_name = asText(
+    row.full_name ??
+      row.name ??
+      (row.us_name || row.us_surname
+        ? `${asText(row.us_name)} ${asText(row.us_surname)}`.trim()
+        : ""),
+  );
+
+  const plate = asText(row.plate ?? row.vehicle_plate ?? row.placa);
   const lat = asNumber(row.lat ?? row.latitude);
   const lng = asNumber(row.lng ?? row.lon ?? row.long ?? row.longitude);
+
   if (!full_name || lat === null || lng === null) return null;
+
   return {
     full_name,
     plate,

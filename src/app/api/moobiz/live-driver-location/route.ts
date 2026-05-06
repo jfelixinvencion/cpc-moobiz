@@ -4,7 +4,6 @@ import { formatApiError } from "@/lib/format-api-error";
 import {
   getMoobizBearerForRequest,
   loginAndGetMoobizToken,
-  moobizFetchWithToken,
   writeMoobizTokenToDb,
 } from "@/lib/moobiz-auth";
 import { assertQualityReadAccess } from "@/lib/panel-session";
@@ -89,12 +88,10 @@ function pickBestItem(items: LiveDriverLocationItem[], query: string): LiveDrive
   return items[0] ?? null;
 }
 
-/** Moobiz a veces responde HTTP 200 y `ok: true` con `items: []` cuando el Bearer está vencido (sin 401). */
-function moobizLiveVehiclesOkButEmptyItems(parsed: unknown): boolean {
+/** `ok: false` en JSON (token vencido u otro error) sin depender del texto de `msg`. */
+function moobizBodyOkFalse(parsed: unknown): boolean {
   if (!parsed || typeof parsed !== "object") return false;
-  const o = parsed as Record<string, unknown>;
-  if (o.ok !== true) return false;
-  return extractItems(parsed).length === 0;
+  return (parsed as Record<string, unknown>).ok === false;
 }
 
 function logLiveLocationBearer(label: string, token: string): void {
@@ -115,18 +112,23 @@ async function fetchLiveVehiclesJson(
   upstreamUrl: string,
   token: string,
 ): Promise<{ ok: boolean; status: number; parsed: unknown }> {
-  const res = await moobizFetchWithToken(
-    upstreamUrl,
-    {
-      method: "GET",
-      headers: { Accept: "application/json" },
-      cache: "no-store",
+  const res = await fetch(upstreamUrl, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${token}`,
+      "X-Auth-Token": token,
     },
-    token,
-  );
+    cache: "no-store",
+  });
   const text = await res.text();
   const parsed = parseJsonResponse(text);
   return { ok: res.ok, status: res.status, parsed };
+}
+
+function resolveItemFromParsed(parsed: unknown, query: string): LiveDriverLocationItem | null {
+  const normalized = extractItems(parsed).map(normalizeLocationItem).filter(Boolean) as LiveDriverLocationItem[];
+  return pickBestItem(normalized, query);
 }
 
 export async function GET(request: NextRequest): Promise<Response> {
@@ -148,46 +150,39 @@ export async function GET(request: NextRequest): Promise<Response> {
       `https://app.moobiz.pe/api/admin/live/vehicles?query=${encodeURIComponent(query)}` +
       `&show_destinations=true`;
 
-    let token = await getMoobizBearerForRequest();
-    logLiveLocationBearer("intento 1", token);
+    const tokenFromDb = await getMoobizBearerForRequest();
+    let token = tokenFromDb;
+    logLiveLocationBearer("intento 1 (sync_state / bootstrap)", token);
 
-    let { ok: httpOk, status: httpStatus, parsed } = await fetchLiveVehiclesJson(upstreamUrl, token);
+    let { parsed } = await fetchLiveVehiclesJson(upstreamUrl, token);
+    let item = resolveItemFromParsed(parsed, query);
 
-    if (!httpOk) {
-      return NextResponse.json(
-        {
-          ok: false,
-          msg: `upstream_${httpStatus}`,
-          item: null,
-        },
-        { status: 502 },
-      );
+    if (item) {
+      return NextResponse.json({ ok: true, item });
     }
 
-    let normalized = extractItems(parsed).map(normalizeLocationItem).filter(Boolean) as LiveDriverLocationItem[];
-    let item = pickBestItem(normalized, query);
+    if (moobizBodyOkFalse(parsed)) {
+      console.warn("[live-driver-location] Intento 1: Moobiz ok:false (p. ej. sesión inválida).");
+    } else {
+      console.warn("[live-driver-location] Intento 1: sin fila/coords para la búsqueda (items vacíos o sin match).");
+    }
 
-    const emptySuccess = moobizLiveVehiclesOkButEmptyItems(parsed);
-    if (emptySuccess) {
+    console.warn(
+      "[live-driver-location] Login, writeMoobizTokenToDb y segundo intento con token distinto…",
+    );
+    const { token: fresh } = await loginAndGetMoobizToken();
+    await writeMoobizTokenToDb(fresh);
+    token = fresh;
+    if (fresh.trim() === tokenFromDb.trim()) {
       console.warn(
-        "[live-driver-location] Moobiz respondió ok:true con items vacíos; se asume token desactualizado — login + persistencia en sync_state y reintento…",
+        "[live-driver-location] El token tras login coincide con el del intento 1; el segundo fetch puede no cambiar el resultado.",
       );
-      const { token: fresh } = await loginAndGetMoobizToken();
-      await writeMoobizTokenToDb(fresh);
-      token = fresh;
-      logLiveLocationBearer("intento 2 (tras renovar y guardar en sync_state)", token);
-
-      const second = await fetchLiveVehiclesJson(upstreamUrl, token);
-      if (!second.ok) {
-        return NextResponse.json(
-          { ok: false, msg: `upstream_${second.status}`, item: null },
-          { status: 502 },
-        );
-      }
-      parsed = second.parsed;
-      normalized = extractItems(parsed).map(normalizeLocationItem).filter(Boolean) as LiveDriverLocationItem[];
-      item = pickBestItem(normalized, query);
     }
+    logLiveLocationBearer("intento 2 (token recién guardado en sync_state)", token);
+
+    const second = await fetchLiveVehiclesJson(upstreamUrl, token);
+    parsed = second.parsed;
+    item = resolveItemFromParsed(parsed, query);
 
     if (!item) {
       return NextResponse.json({ ok: false, msg: "not_found", item: null });

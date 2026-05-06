@@ -6,7 +6,7 @@ export const runtime = "nodejs";
 const PENDING_STATUS = "pendiente";
 
 type ServicesMaestraRow = {
-  id_service?: string | number | null;
+  id?: string | number | null;
   co_name?: string | null;
   state_color_name?: string | null;
   alt_date?: string | null;
@@ -155,7 +155,7 @@ export async function GET(request: Request): Promise<Response> {
     let query = supabase
       .schema("vista")
       .from("moobiz_services_maestra")
-      .select("id_service, co_name, state_color_name, alt_date, pr_name")
+      .select("id, state_color_name, alt_date, pr_name, co_name")
       .ilike("state_color_name", PENDING_STATUS);
 
     if (startDateParam) {
@@ -173,7 +173,7 @@ export async function GET(request: Request): Promise<Response> {
 
     const rawRows = (data ?? []) as ServicesMaestraRow[];
     const pendingRows: PendingChartRow[] = rawRows.map((row, index) => ({
-      id: row.id_service ?? `row-${index}`,
+      id: row.id ?? `row-${index}`,
       empresa: toText(row.co_name) || null,
       estado: toText(row.state_color_name) || null,
       fecha: toText(row.alt_date) || null,

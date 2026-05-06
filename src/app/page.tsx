@@ -589,6 +589,14 @@ function DashboardContent() {
   const [dashboardV2Loading, setDashboardV2Loading] = useState(false);
   const [dashboardV2Error, setDashboardV2Error] = useState<string | null>(null);
   const [dashboardV2Data, setDashboardV2Data] = useState<DashboardResponse | null>(null);
+  const [visibleProductsV2, setVisibleProductsV2] = useState<
+    Record<(typeof SCHEDULE_STACK_ORDER)[number], boolean>
+  >(() =>
+    Object.fromEntries(SCHEDULE_STACK_ORDER.map((key) => [key, true])) as Record<
+      ScheduleProductKey,
+      boolean
+    >,
+  );
   const [reservasEmpresa, setReservasEmpresa] = useState("Todas");
   const [reservasStartDate, setReservasStartDate] = useState("");
   const [reservasEndDate, setReservasEndDate] = useState("");
@@ -1353,6 +1361,10 @@ function DashboardContent() {
     () => SCHEDULE_STACK_ORDER.filter((k) => scheduleProductVisibility[k]),
     [scheduleProductVisibility],
   );
+  const visibleScheduleKeysV2 = useMemo(
+    () => SCHEDULE_STACK_ORDER.filter((k) => visibleProductsV2[k]),
+    [visibleProductsV2],
+  );
   const scheduleTimelineData = useMemo<ScheduleTimelineDatum[]>(() => {
     const grouped = scheduleChartData.reduce<Record<string, Array<{ index: number; time: string }>>>(
       (acc, item, index) => {
@@ -1482,12 +1494,12 @@ function DashboardContent() {
     }
 
     for (const item of baseData) {
-      const sum = SCHEDULE_STACK_ORDER.reduce((acc, key) => acc + item[key], 0);
+      const sum = visibleScheduleKeysV2.reduce((acc, key) => acc + item[key], 0);
       item.total = sum > 0 ? sum : item.total;
     }
 
     return baseData;
-  }, [dashboardV2Data?.data, scheduleV2ChartData]);
+  }, [dashboardV2Data?.data, scheduleV2ChartData, visibleScheduleKeysV2]);
 
   scheduleTimelineDataRef.current = scheduleTimelineData;
 
@@ -2911,6 +2923,35 @@ function DashboardContent() {
                 <p className="text-xs text-slate-500">
                   Misma visual de franjas, usando `vista.moobiz_services_maestra`.
                 </p>
+                <div className="flex flex-wrap gap-2">
+                  {SCHEDULE_TOOLTIP_ORDER.map((key) => {
+                    const visible = visibleProductsV2[key];
+                    return (
+                      <button
+                        key={`v2-toggle-${key}`}
+                        type="button"
+                        onClick={() =>
+                          setVisibleProductsV2((prev) => ({
+                            ...prev,
+                            [key]: !prev[key],
+                          }))
+                        }
+                        className={`inline-flex cursor-pointer items-center rounded-md border border-transparent px-2 py-0.5 text-[10px] font-semibold text-white outline-offset-2 transition hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-400 ${
+                          visible ? "" : "opacity-40"
+                        }`}
+                        style={{ backgroundColor: SCHEDULE_PRODUCT_COLORS[key] }}
+                        aria-pressed={visible}
+                        aria-label={
+                          key === "OTROS"
+                            ? `Otros, ${visible ? "visible" : "oculto"} en la grafica`
+                            : `${key}, ${visible ? "visible" : "oculto"} en la grafica`
+                        }
+                      >
+                        {key === "OTROS" ? "Otros" : key}
+                      </button>
+                    );
+                  })}
+                </div>
                 {dashboardV2Error ? (
                   <p className="text-xs text-red-600">{dashboardV2Error}</p>
                 ) : dashboardV2Loading ? (
@@ -2956,15 +2997,7 @@ function DashboardContent() {
                           domain={[0, scheduleV2YAxisMax]}
                         />
                         <Tooltip content={<ScheduleStackBarTooltip />} />
-                        <Legend
-                          wrapperStyle={{ fontSize: 11 }}
-                          formatter={(value) => (
-                            <span className="text-slate-600">
-                              {String(value) === "OTROS" ? "Otros" : String(value)}
-                            </span>
-                          )}
-                        />
-                        {visibleScheduleKeys.map((key, idx) => (
+                        {visibleScheduleKeysV2.map((key, idx) => (
                           <Bar
                             key={`v2-${key}`}
                             dataKey={key}
@@ -2975,7 +3008,7 @@ function DashboardContent() {
                             maxBarSize={SCHEDULE_SLOT_PX - 6}
                             fill={SCHEDULE_PRODUCT_COLORS[key]}
                             radius={
-                              idx === visibleScheduleKeys.length - 1
+                              idx === visibleScheduleKeysV2.length - 1
                                 ? [4, 4, 0, 0]
                                 : [0, 0, 0, 0]
                             }

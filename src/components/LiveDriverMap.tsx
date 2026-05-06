@@ -86,7 +86,7 @@ export default function LiveDriverMap(props: Props) {
             }}
           >
             <Tooltip direction="top" offset={[0, -4]} opacity={1}>
-              {`${s.time || "—"} - ${s.user || "—"}`}
+              {`${s.time || "—"} - ${s.user || "—"} (Pendiente)`}
             </Tooltip>
           </CircleMarker>
         ))}

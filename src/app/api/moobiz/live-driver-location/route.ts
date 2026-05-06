@@ -63,8 +63,6 @@ async function fetchNearbyServicesForMap(): Promise<NearbyMoobizServiceForMap[]>
       .from("moobiz_services_maestra")
       .select("id, org_lat, org_lng, alt_date, Usuario")
       .eq("es_proxima_hora", true)
-      .neq("state", "anulado")
-      .neq("state", "finalizado")
       .limit(500);
 
     if (error) {

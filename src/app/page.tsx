@@ -93,6 +93,7 @@ type Viaje = {
   origen?: string | null;
   destino?: string | null;
   operador?: string | null;
+  zona?: string | null;
 };
 
 /** Fila de `moobiz_logs_clean`: columnas definidas solo por la vista en Supabase. */
@@ -242,6 +243,26 @@ const CHART_TOOLTIP_STYLE = {
   fontSize: 12,
 };
 
+const SCHEDULE_V2_OTHER_LIMA_KEY = "OTROS LIMA" as const;
+const SCHEDULE_V2_OTHER_PROVINCIA_KEY = "OTROS PROVINCIA" as const;
+const SCHEDULE_V2_STACK_ORDER = [
+  ...SCHEDULE_STACK_ORDER.filter((key) => key !== "OTROS"),
+  SCHEDULE_V2_OTHER_LIMA_KEY,
+  SCHEDULE_V2_OTHER_PROVINCIA_KEY,
+] as const;
+type ScheduleV2ProductKey = (typeof SCHEDULE_V2_STACK_ORDER)[number];
+const SCHEDULE_V2_PRODUCT_COLORS: Record<ScheduleV2ProductKey, string> = {
+  BUS: SCHEDULE_PRODUCT_COLORS.BUS,
+  FURGON: SCHEDULE_PRODUCT_COLORS.FURGON,
+  VAN: SCHEDULE_PRODUCT_COLORS.VAN,
+  SPRINTER: SCHEDULE_PRODUCT_COLORS.SPRINTER,
+  LOGISTICA: SCHEDULE_PRODUCT_COLORS.LOGISTICA,
+  "PROVINCIA VIP": SCHEDULE_PRODUCT_COLORS["PROVINCIA VIP"],
+  "VIP LIMA": SCHEDULE_PRODUCT_COLORS["VIP LIMA"],
+  "OTROS LIMA": "#94a3b8",
+  "OTROS PROVINCIA": "#475569",
+};
+
 function ChartTooltipRow({ label, value }: { label: string; value: string | number }) {
   return (
     <div className="flex justify-between gap-4 text-xs">
@@ -260,6 +281,8 @@ type ScheduleTimelineDatum = {
   showDayLabel: boolean;
   dayDividerBefore: boolean;
   OTROS: number;
+  "OTROS LIMA": number;
+  "OTROS PROVINCIA": number;
   BUS: number;
   FURGON: number;
   VAN: number;
@@ -318,6 +341,10 @@ type ScheduleStackRechartsPayloadEntry = {
 };
 
 type ScheduleStackBarTooltipProps = {
+  active?: boolean;
+  payload?: ReadonlyArray<ScheduleStackRechartsPayloadEntry>;
+};
+type ScheduleStackBarTooltipV2Props = {
   active?: boolean;
   payload?: ReadonlyArray<ScheduleStackRechartsPayloadEntry>;
 };
@@ -384,6 +411,71 @@ const ScheduleStackBarTooltip = memo(function ScheduleStackBarTooltip(props: Sch
 
   if (rows.length === 0) return null;
 
+  const columnTotal = rows.reduce((sum, r) => sum + r.value, 0);
+
+  return (
+    <div className="min-w-[200px] space-y-1 p-2" style={CHART_TOOLTIP_STYLE}>
+      <ChartTooltipRow label="Franja" value={datum.etiqueta} />
+      {rows.map((row) => (
+        <div key={row.key} className="flex items-center justify-between gap-3 text-xs">
+          <span className="inline-flex items-center gap-1.5 text-white/90">
+            <span
+              className="inline-block h-2 w-2 rounded-full"
+              style={{ backgroundColor: row.swatch }}
+            />
+            {row.label}
+          </span>
+          <span className="font-semibold text-white">{row.value}</span>
+        </div>
+      ))}
+      <ChartTooltipRow label="Total columna" value={columnTotal} />
+    </div>
+  );
+});
+const ScheduleStackBarTooltipV2 = memo(function ScheduleStackBarTooltipV2(
+  props: ScheduleStackBarTooltipV2Props,
+) {
+  const { active, payload } = props;
+  if (!active) return null;
+  if (!Array.isArray(payload) || payload.length === 0) return null;
+
+  const datum = payload.find((e) => e?.payload != null)?.payload;
+  if (!datum) return null;
+
+  const isKnownProductKey = (k: string): k is ScheduleV2ProductKey =>
+    (SCHEDULE_V2_STACK_ORDER as readonly string[]).includes(k);
+
+  const rows: { key: ScheduleV2ProductKey; label: string; value: number; swatch: string }[] = [];
+
+  for (const entry of payload) {
+    const keyStr = scheduleStackTooltipDataKeyAsString(entry);
+    if (!keyStr || !isKnownProductKey(keyStr)) continue;
+
+    const n = Number(entry.value);
+    if (!Number.isFinite(n) || n <= 0) continue;
+
+    const swatch =
+      typeof entry.color === "string" && entry.color.length > 0
+        ? entry.color
+        : SCHEDULE_V2_PRODUCT_COLORS[keyStr];
+
+    rows.push({
+      key: keyStr,
+      label:
+        keyStr === SCHEDULE_V2_OTHER_LIMA_KEY
+          ? "Otros Lima"
+          : keyStr === SCHEDULE_V2_OTHER_PROVINCIA_KEY
+            ? "Otros Provincia"
+            : keyStr,
+      value: n,
+      swatch,
+    });
+  }
+
+  rows.sort(
+    (a, b) => SCHEDULE_V2_STACK_ORDER.indexOf(a.key) - SCHEDULE_V2_STACK_ORDER.indexOf(b.key),
+  );
+  if (rows.length === 0) return null;
   const columnTotal = rows.reduce((sum, r) => sum + r.value, 0);
 
   return (
@@ -592,13 +684,12 @@ function DashboardContent() {
   const [dashboardV2Data, setDashboardV2Data] = useState<DashboardResponse | null>(null);
   const [syncingServices, setSyncingServices] = useState(false);
   const [syncingServicesError, setSyncingServicesError] = useState<string | null>(null);
-  const [visibleProductsV2, setVisibleProductsV2] = useState<
-    Record<(typeof SCHEDULE_STACK_ORDER)[number], boolean>
-  >(() =>
-    Object.fromEntries(SCHEDULE_STACK_ORDER.map((key) => [key, true])) as Record<
-      ScheduleProductKey,
-      boolean
-    >,
+  const [visibleProductsV2, setVisibleProductsV2] = useState<Record<ScheduleV2ProductKey, boolean>>(
+    () =>
+      Object.fromEntries(SCHEDULE_V2_STACK_ORDER.map((key) => [key, true])) as Record<
+        ScheduleV2ProductKey,
+        boolean
+      >,
   );
   const [reservasEmpresa, setReservasEmpresa] = useState("Todas");
   const [reservasStartDate, setReservasStartDate] = useState("");
@@ -676,12 +767,12 @@ function DashboardContent() {
     key: ScheduleProductKey;
   } | null>(null);
   const scheduleLegendSessionV2Ref = useRef<{
-    restore: Record<ScheduleProductKey, boolean> | null;
-    isolateFocus: ScheduleProductKey | null;
+    restore: Record<ScheduleV2ProductKey, boolean> | null;
+    isolateFocus: ScheduleV2ProductKey | null;
   }>({ restore: null, isolateFocus: null });
   const scheduleLegendClickTimerV2Ref = useRef<{
     id: ReturnType<typeof setTimeout>;
-    key: ScheduleProductKey;
+    key: ScheduleV2ProductKey;
   } | null>(null);
   const [scheduleLegendUiEpoch, setScheduleLegendUiEpoch] = useState(0);
   const [scheduleLegendHintOpen, setScheduleLegendHintOpen] = useState(() => {
@@ -1396,7 +1487,7 @@ function DashboardContent() {
     [scheduleProductVisibility],
   );
   const visibleScheduleKeysV2 = useMemo(
-    () => SCHEDULE_STACK_ORDER.filter((k) => visibleProductsV2[k]),
+    () => SCHEDULE_V2_STACK_ORDER.filter((k) => visibleProductsV2[k]),
     [visibleProductsV2],
   );
   const scheduleTimelineData = useMemo<ScheduleTimelineDatum[]>(() => {
@@ -1431,6 +1522,8 @@ function DashboardContent() {
         showDayLabel: centerIndexByDay.get(dateKey || `fallback-${index}`) === index,
         dayDividerBefore: index > 0 && Boolean(dateKey) && dateKey !== prevDateKey,
         OTROS: 0,
+        "OTROS LIMA": 0,
+        "OTROS PROVINCIA": 0,
         BUS: 0,
         FURGON: 0,
         VAN: 0,
@@ -1455,7 +1548,16 @@ function DashboardContent() {
       const slot = bySlot.get(slotKey);
       if (!slot) continue;
       const bucket = scheduleBucketForProducto(viaje.producto);
-      slot[bucket] += 1;
+      if (bucket === "OTROS") {
+        const zona = asText(viaje.zona).toUpperCase();
+        if (zona === "PROVINCIA") {
+          slot["OTROS PROVINCIA"] += 1;
+        } else {
+          slot["OTROS LIMA"] += 1;
+        }
+      } else {
+        slot[bucket] += 1;
+      }
     }
 
     for (const item of baseData) {
@@ -1583,7 +1685,7 @@ function DashboardContent() {
       scheduleV2TimelineData.reduce(
         (acc, row) =>
           acc +
-          SCHEDULE_STACK_ORDER.reduce(
+          SCHEDULE_V2_STACK_ORDER.reduce(
             (rowAcc, key) => rowAcc + (visibleProductsV2[key] ? row[key] : 0),
             0,
           ),
@@ -1763,22 +1865,29 @@ function DashboardContent() {
     setScheduleProductVisibility({ ...snap });
     setScheduleLegendUiEpoch((e) => e + 1);
   }, []);
-  const toggleScheduleProductV2 = useCallback((key: ScheduleProductKey) => {
+  const toggleScheduleProductV2 = useCallback((key: ScheduleV2ProductKey) => {
     scheduleLegendSessionV2Ref.current = { restore: null, isolateFocus: null };
     setVisibleProductsV2((prev) => ({
       ...prev,
       [key]: !prev[key],
     }));
   }, []);
-  const handleScheduleLegendIsolateV2 = useCallback((key: ScheduleProductKey) => {
+  const handleScheduleLegendIsolateV2 = useCallback((key: ScheduleV2ProductKey) => {
     setVisibleProductsV2((vis) => {
       const session = scheduleLegendSessionV2Ref.current;
-      if (session.restore && session.isolateFocus === key && scheduleOnlyProductVisible(vis, key)) {
+      const onlyFocused = SCHEDULE_V2_STACK_ORDER.every((k) =>
+        k === key ? vis[k] === true : vis[k] === false,
+      );
+      if (session.restore && session.isolateFocus === key && onlyFocused) {
         scheduleLegendSessionV2Ref.current = { restore: null, isolateFocus: null };
         return { ...session.restore };
       }
       scheduleLegendSessionV2Ref.current = { restore: { ...vis }, isolateFocus: key };
-      return scheduleVisibilityOnlyOne(key);
+      const next = {} as Record<ScheduleV2ProductKey, boolean>;
+      for (const k of SCHEDULE_V2_STACK_ORDER) {
+        next[k] = k === key;
+      }
+      return next;
     });
   }, []);
   const clearScheduleLegendPendingClickV2 = useCallback(() => {
@@ -1789,7 +1898,7 @@ function DashboardContent() {
     }
   }, []);
   const onScheduleLegendItemClickV2 = useCallback(
-    (key: ScheduleProductKey) => {
+    (key: ScheduleV2ProductKey) => {
       const pending = scheduleLegendClickTimerV2Ref.current;
       if (pending && pending.key === key) {
         clearTimeout(pending.id);
@@ -1809,7 +1918,7 @@ function DashboardContent() {
     [toggleScheduleProductV2],
   );
   const onScheduleLegendItemDoubleClickV2 = useCallback(
-    (e: MouseEvent, key: ScheduleProductKey) => {
+    (e: MouseEvent, key: ScheduleV2ProductKey) => {
       e.preventDefault();
       clearScheduleLegendPendingClickV2();
       handleScheduleLegendIsolateV2(key);
@@ -1817,7 +1926,7 @@ function DashboardContent() {
     [clearScheduleLegendPendingClickV2, handleScheduleLegendIsolateV2],
   );
   const onScheduleLegendItemKeyDownV2 = useCallback(
-    (e: KeyboardEvent, key: ScheduleProductKey) => {
+    (e: KeyboardEvent, key: ScheduleV2ProductKey) => {
       if (e.key === "Enter") {
         e.preventDefault();
         if (e.shiftKey) {
@@ -3072,7 +3181,7 @@ function DashboardContent() {
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  {SCHEDULE_TOOLTIP_ORDER.map((key) => {
+                  {SCHEDULE_V2_STACK_ORDER.map((key) => {
                     const visible = visibleProductsV2[key];
                     return (
                       <button
@@ -3084,15 +3193,21 @@ function DashboardContent() {
                         className={`inline-flex cursor-pointer items-center rounded-md border border-transparent px-2 py-0.5 text-[10px] font-semibold text-white outline-offset-2 transition hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-400 ${
                           visible ? "" : "opacity-40"
                         }`}
-                        style={{ backgroundColor: SCHEDULE_PRODUCT_COLORS[key] }}
+                        style={{ backgroundColor: SCHEDULE_V2_PRODUCT_COLORS[key] }}
                         aria-pressed={visible}
                         aria-label={
-                          key === "OTROS"
-                            ? `Otros, ${visible ? "visible" : "oculto"} en la grafica`
+                          key === SCHEDULE_V2_OTHER_LIMA_KEY
+                            ? `Otros Lima, ${visible ? "visible" : "oculto"} en la grafica`
+                            : key === SCHEDULE_V2_OTHER_PROVINCIA_KEY
+                              ? `Otros Provincia, ${visible ? "visible" : "oculto"} en la grafica`
                             : `${key}, ${visible ? "visible" : "oculto"} en la grafica`
                         }
                       >
-                        {key === "OTROS" ? "Otros" : key}
+                        {key === SCHEDULE_V2_OTHER_LIMA_KEY
+                          ? "OTROS LIMA"
+                          : key === SCHEDULE_V2_OTHER_PROVINCIA_KEY
+                            ? "OTROS PROVINCIA"
+                            : key}
                       </button>
                     );
                   })}
@@ -3144,17 +3259,23 @@ function DashboardContent() {
                           allowDecimals={false}
                           domain={[0, scheduleV2YAxisMax]}
                         />
-                        <Tooltip content={<ScheduleStackBarTooltip />} />
+                        <Tooltip content={<ScheduleStackBarTooltipV2 />} />
                         {visibleScheduleKeysV2.map((key, idx) => (
                           <Bar
                             key={`v2-${key}`}
                             dataKey={key}
-                            name={key === "OTROS" ? "Otros" : key}
+                            name={
+                              key === SCHEDULE_V2_OTHER_LIMA_KEY
+                                ? "Otros Lima"
+                                : key === SCHEDULE_V2_OTHER_PROVINCIA_KEY
+                                  ? "Otros Provincia"
+                                  : key
+                            }
                             stackId="productos"
                             isAnimationActive={false}
                             barSize={SCHEDULE_SLOT_PX - 8}
                             maxBarSize={SCHEDULE_SLOT_PX - 6}
-                            fill={SCHEDULE_PRODUCT_COLORS[key]}
+                            fill={SCHEDULE_V2_PRODUCT_COLORS[key]}
                             radius={
                               idx === visibleScheduleKeysV2.length - 1
                                 ? [4, 4, 0, 0]

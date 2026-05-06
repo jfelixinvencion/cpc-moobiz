@@ -11,6 +11,7 @@ type ServicesMaestraRow = {
   state_color_name?: string | null;
   alt_date?: string | null;
   pr_name?: string | null;
+  zona?: string | null;
 };
 
 type PendingChartRow = {
@@ -20,6 +21,7 @@ type PendingChartRow = {
   fecha: string | null;
   fecha_registro: string | null;
   producto: string | null;
+  zona: string | null;
 };
 
 function getEnvTrimmed(keys: string[]): string | null {
@@ -155,7 +157,7 @@ export async function GET(request: Request): Promise<Response> {
     let query = supabase
       .schema("vista")
       .from("moobiz_services_maestra")
-      .select("id, state_color_name, alt_date, pr_name, co_name")
+      .select("id, state_color_name, alt_date, pr_name, co_name, zona")
       .ilike("state_color_name", PENDING_STATUS);
 
     if (startDateParam) {
@@ -179,6 +181,7 @@ export async function GET(request: Request): Promise<Response> {
       fecha: toText(row.alt_date) || null,
       fecha_registro: null,
       producto: toText(row.pr_name) || null,
+      zona: toText(row.zona) || null,
     }));
 
     const filteredPending = pendingRows.filter((row) => {

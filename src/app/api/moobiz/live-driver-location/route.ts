@@ -144,13 +144,22 @@ async function fetchLiveVehiclesParsed(
   return { httpStatus: res.status, parsed };
 }
 
-/** Respuesta que implica token inválido o sesión caducada (re-login). */
+/** Token vencido / sesión inválida (re-login). No confundir con ok:true e items vacíos (conductor offline). */
 function moobizLiveResponseNeedsFreshToken(httpStatus: number, parsed: unknown): boolean {
   if (httpStatus === 401 || httpStatus === 403) return true;
   if (!parsed || typeof parsed !== "object") return false;
   const o = parsed as Record<string, unknown>;
-  if (o.ok === false) return true;
-  return extractItems(parsed).length === 0;
+  if (o.ok === false) {
+    const msg = String(o.msg ?? "").toLowerCase();
+    return (
+      msg.includes("not_log") ||
+      msg.includes("unauthorized") ||
+      msg.includes("invalid") ||
+      msg.includes("session") ||
+      msg.includes("token")
+    );
+  }
+  return false;
 }
 
 async function tryLocateWithToken(
@@ -159,7 +168,11 @@ async function tryLocateWithToken(
   matchName: string,
 ): Promise<{ item: LiveDriverLocationItem | null; needFreshToken: boolean }> {
   for (const q of queryVariants) {
+    console.log(`[live-driver-location] probando query: "${q}"`);
     const { httpStatus, parsed } = await fetchLiveVehiclesParsed(token, q);
+    console.log(
+      `[live-driver-location] respuesta: httpStatus=${httpStatus}, items=${extractItems(parsed).length}`,
+    );
     if (moobizLiveResponseNeedsFreshToken(httpStatus, parsed)) {
       return { item: null, needFreshToken: true };
     }

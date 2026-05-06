@@ -25,6 +25,7 @@ import {
   type MouseEvent,
 } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Loader2, RefreshCw } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -589,6 +590,8 @@ function DashboardContent() {
   const [dashboardV2Loading, setDashboardV2Loading] = useState(false);
   const [dashboardV2Error, setDashboardV2Error] = useState<string | null>(null);
   const [dashboardV2Data, setDashboardV2Data] = useState<DashboardResponse | null>(null);
+  const [syncingServices, setSyncingServices] = useState(false);
+  const [syncingServicesError, setSyncingServicesError] = useState<string | null>(null);
   const [visibleProductsV2, setVisibleProductsV2] = useState<
     Record<(typeof SCHEDULE_STACK_ORDER)[number], boolean>
   >(() =>
@@ -1301,6 +1304,29 @@ function DashboardContent() {
       setDashboardV2Loading(false);
     }
   }, [reservasStartDate, reservasEndDate, reservasEmpresa]);
+
+  const handleSyncServicesV2 = useCallback(async () => {
+    setSyncingServices(true);
+    setSyncingServicesError(null);
+    try {
+      const res = await fetch("/api/moobiz-services/sync", {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+      const body = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok) {
+        throw new Error(body?.error || "No se pudo sincronizar servicios.");
+      }
+      await loadDashboardV2();
+    } catch (err) {
+      setSyncingServicesError(
+        err instanceof Error ? err.message : "Error inesperado al sincronizar servicios.",
+      );
+    } finally {
+      setSyncingServices(false);
+    }
+  }, [loadDashboardV2]);
 
   useEffect(() => {
     if (mainTab !== "dashboard" || dashboardSubTab !== "reservas") return;
@@ -2919,7 +2945,29 @@ function DashboardContent() {
 
             <Card className="border-slate-200 bg-white shadow-sm">
               <CardHeader className="space-y-1 py-3">
-                <CardTitle className="text-sm font-semibold text-slate-800">Servicios pendientes</CardTitle>
+                <div className="flex items-start justify-between gap-2">
+                  <CardTitle className="text-sm font-semibold text-slate-800">Servicios pendientes</CardTitle>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 shrink-0 text-xs"
+                    onClick={() => void handleSyncServicesV2()}
+                    disabled={syncingServices}
+                  >
+                    {syncingServices ? (
+                      <>
+                        <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                        Actualizando...
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="mr-1 h-3.5 w-3.5" />
+                        Actualizar
+                      </>
+                    )}
+                  </Button>
+                </div>
                 <p className="text-xs text-slate-500">
                   Misma visual de franjas, usando `vista.moobiz_services_maestra`.
                 </p>
@@ -2956,6 +3004,9 @@ function DashboardContent() {
                   <p className="text-xs text-red-600">{dashboardV2Error}</p>
                 ) : dashboardV2Loading ? (
                   <p className="text-xs text-slate-500">Cargando servicios pendientes...</p>
+                ) : null}
+                {syncingServicesError ? (
+                  <p className="text-xs text-red-600">{syncingServicesError}</p>
                 ) : null}
               </CardHeader>
               <CardContent className="pb-4">

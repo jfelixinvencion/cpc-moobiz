@@ -2,7 +2,8 @@
 
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { format } from "date-fns";
-import { ExternalLink } from "lucide-react";
+import dynamic from "next/dynamic";
+import { ExternalLink, Loader2, MapPin } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -35,6 +36,12 @@ const GLOBAL_ALL = "__all__";
 const GPS_ALL = "__all__";
 const SOLICITANTE_ALL = "__all__";
 const SOLICITANTE_EMPTY = "__empty__";
+const GPS_ICON_COLOR_NEUTRAL = "#cbd5e1";
+const GPS_ICON_COLOR_ONLINE = "#22c55e";
+const GPS_ICON_COLOR_BUSY = "#f97316";
+const GPS_ICON_COLOR_OFFLINE = "#94a3b8";
+
+const LiveDriverMap = dynamic(() => import("@/components/LiveDriverMap"), { ssr: false });
 
 /** Valores internos del multi-filtro de semáforo (cada fila se clasifica a un bucket). */
 const SEMAFORO_MULTI_SIN = "__sin__";
@@ -85,6 +92,26 @@ type ApiPage = {
   approvedCount?: number;
   semanaLabel: string;
   error?: string;
+};
+
+type DriverLiveAvailability = "online" | "busy" | "offline";
+
+type DriverLiveLocationItem = {
+  full_name: string;
+  plate: string;
+  availability: DriverLiveAvailability;
+  lat: number;
+  lng: number;
+  code: string;
+  date_tracked: string;
+  txt_tracked: string;
+  icon: string;
+};
+
+type DriverLiveLocationApiResponse = {
+  ok: boolean;
+  msg?: string;
+  item: DriverLiveLocationItem | null;
 };
 
 function SearchableMiniSelect(props: {
@@ -451,6 +478,40 @@ function withPendingHeavy(drivers: ControlDriverExcelRow[]): MergedDriver[] {
   }));
 }
 
+function gpsAvailabilityLabel(availability: DriverLiveAvailability): string {
+  if (availability === "online") return "Disponible";
+  if (availability === "busy") return "En Servicio";
+  return "Desconectado";
+}
+
+function gpsAvailabilityClass(availability: DriverLiveAvailability): string {
+  if (availability === "online") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (availability === "busy") return "border-orange-200 bg-orange-50 text-orange-700";
+  return "border-slate-200 bg-slate-100 text-slate-600";
+}
+
+function gpsAvailabilityDot(availability: DriverLiveAvailability): string {
+  if (availability === "online") return "🟢";
+  if (availability === "busy") return "🟠";
+  return "⚫";
+}
+
+function gpsIconColorFromAvailability(availability: DriverLiveAvailability | null): string {
+  if (availability === "online") return GPS_ICON_COLOR_ONLINE;
+  if (availability === "busy") return GPS_ICON_COLOR_BUSY;
+  if (availability === "offline") return GPS_ICON_COLOR_OFFLINE;
+  return GPS_ICON_COLOR_NEUTRAL;
+}
+
+function formatGpsDate(value: string): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "—";
+  const isoCandidate = raw.includes("T") ? raw : raw.replace(" ", "T");
+  const d = new Date(isoCandidate);
+  if (Number.isNaN(d.getTime())) return raw;
+  return format(d, "dd/MM/yyyy HH:mm");
+}
+
 export function ControlOperacionesPanel() {
   const [rows, setRows] = useState<MergedDriver[]>([]);
   const [controlById, setControlById] = useState<Record<string, ControlCell>>({});
@@ -485,6 +546,17 @@ export function ControlOperacionesPanel() {
   const [bulkClearMenuOpen, setBulkClearMenuOpen] = useState(false);
   const bulkClearMenuRef = useRef<HTMLDivElement>(null);
   const [bulkModalPortalContainer, setBulkModalPortalContainer] = useState<HTMLElement | null>(null);
+  const liveLocationCacheRef = useRef<Map<string, DriverLiveLocationApiResponse>>(new Map());
+  /** Colores del ícono MapPin por fila (solo tras consulta exitosa; evita leer refs durante render). */
+  const [gpsAvailByDriverId, setGpsAvailByDriverId] = useState<
+    Record<string, DriverLiveAvailability>
+  >({});
+  const [gpsModalOpen, setGpsModalOpen] = useState(false);
+  const [gpsModalDriver, setGpsModalDriver] = useState<{ id: string; name: string } | null>(null);
+  const [gpsModalState, setGpsModalState] = useState<{
+    status: "idle" | "loading" | "success" | "error";
+    item: DriverLiveLocationItem | null;
+  }>({ status: "idle", item: null });
 
   /** Evita que `operatorsReady` recree callbacks y dispare el `useEffect` de carga inicial en bucle. */
   const operatorsFetchedRef = useRef(false);
@@ -940,6 +1012,59 @@ export function ControlOperacionesPanel() {
     }
   }, [selected, controlById]);
 
+  const rememberGpsAvailability = useCallback((driverId: string, entry: DriverLiveLocationApiResponse) => {
+    if (!entry.ok || !entry.item) return;
+    setGpsAvailByDriverId((prev) => {
+      if (prev[driverId] === entry.item!.availability) return prev;
+      return { ...prev, [driverId]: entry.item!.availability };
+    });
+  }, []);
+
+  const openGpsModalForDriver = useCallback(
+    async (driver: MergedDriver) => {
+      const id = String(driver.id_conductor).trim();
+      const name = String(driver.nombre_conductor || "").trim();
+      if (!id || !name) return;
+
+      setGpsModalDriver({ id, name });
+      setGpsModalOpen(true);
+
+      const cached = liveLocationCacheRef.current.get(id);
+      if (cached) {
+        rememberGpsAvailability(id, cached);
+        if (cached.ok && cached.item) {
+          setGpsModalState({ status: "success", item: cached.item });
+        } else {
+          setGpsModalState({ status: "error", item: null });
+        }
+        return;
+      }
+
+      setGpsModalState({ status: "loading", item: null });
+      try {
+        const sp = new URLSearchParams({ query: name });
+        const res = await fetch(`/api/moobiz/live-driver-location?${sp.toString()}`, { cache: "no-store" });
+        const body = (await res.json()) as DriverLiveLocationApiResponse;
+        const normalized: DriverLiveLocationApiResponse = {
+          ok: Boolean(body?.ok),
+          msg: body?.msg,
+          item: body?.item ?? null,
+        };
+        liveLocationCacheRef.current.set(id, normalized);
+        rememberGpsAvailability(id, normalized);
+        if (!normalized.ok || !normalized.item) {
+          setGpsModalState({ status: "error", item: null });
+          return;
+        }
+        setGpsModalState({ status: "success", item: normalized.item });
+      } catch {
+        liveLocationCacheRef.current.set(id, { ok: false, msg: "network_error", item: null });
+        setGpsModalState({ status: "error", item: null });
+      }
+    },
+    [rememberGpsAvailability],
+  );
+
   useEffect(() => {
     if (!bulkClearMenuOpen) return;
     const onDoc = (e: MouseEvent) => {
@@ -952,7 +1077,7 @@ export function ControlOperacionesPanel() {
   }, [bulkClearMenuOpen]);
 
   const gridTemplate =
-    "40px minmax(72px,0.65fr) minmax(120px,1fr) minmax(88px,0.75fr) minmax(64px,0.5fr) minmax(52px,0.45fr) minmax(100px,0.75fr) minmax(64px,0.45fr) minmax(140px,0.9fr) minmax(140px,1fr) 40px";
+    "40px minmax(72px,0.65fr) minmax(120px,1fr) minmax(88px,0.75fr) minmax(64px,0.5fr) minmax(52px,0.45fr) minmax(100px,0.75fr) minmax(64px,0.45fr) minmax(140px,0.9fr) minmax(140px,1fr) 64px";
 
   const serviciosCell = (r: MergedDriver) =>
     r.servicios_activos === undefined ? "—" : String(r.servicios_activos);
@@ -1163,7 +1288,8 @@ export function ControlOperacionesPanel() {
               <span>GPS</span>
               <span>Solicitante</span>
               <span>Observación</span>
-              <span className="flex items-center justify-center">
+              <span className="flex items-center justify-center gap-2">
+                <MapPin className="h-3.5 w-3.5 text-slate-400" />
                 <ExternalLink className="h-3.5 w-3.5 text-blue-500" />
               </span>
             </div>
@@ -1242,7 +1368,25 @@ export function ControlOperacionesPanel() {
                           onCommit={(text) => void persistRow(r.id_conductor, { observacion: text || null })}
                         />
                       </div>
-                      <div className="flex items-center justify-center" data-no-shift-select>
+                      <div className="flex items-center justify-center gap-2" data-no-shift-select>
+                        <button
+                          type="button"
+                          title="Ver ubicación GPS"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void openGpsModalForDriver(r);
+                          }}
+                          className="inline-flex items-center justify-center transition hover:opacity-85"
+                        >
+                          <MapPin
+                            className="h-4 w-4"
+                            style={{
+                              color: gpsIconColorFromAvailability(
+                                gpsAvailByDriverId[r.id_conductor] ?? null,
+                              ),
+                            }}
+                          />
+                        </button>
                         <a
                           href={`https://app.moobiz.pe/actives?id_driver=${encodeURIComponent(r.id_conductor)}`}
                           target="_blank"
@@ -1262,6 +1406,88 @@ export function ControlOperacionesPanel() {
           </div>
         </CardContent>
       </Card>
+
+      <Dialog
+        open={gpsModalOpen}
+        onOpenChange={(open) => {
+          setGpsModalOpen(open);
+          if (!open) {
+            setGpsModalState({ status: "idle", item: null });
+            setGpsModalDriver(null);
+          }
+        }}
+      >
+        <DialogContent
+          className="sm:max-w-3xl"
+          showCloseButton
+          overlayClassName="fixed inset-0 isolate z-50 bg-black/55 supports-backdrop-filter:backdrop-blur-sm data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0"
+        >
+          <DialogHeader>
+            <DialogTitle className="flex flex-wrap items-center justify-between gap-2">
+              <span className="truncate">{gpsModalDriver?.name ?? "Ubicación GPS"}</span>
+              {gpsModalState.status === "success" && gpsModalState.item ? (
+                <Badge variant="outline" className={gpsAvailabilityClass(gpsModalState.item.availability)}>
+                  {gpsAvailabilityDot(gpsModalState.item.availability)}{" "}
+                  {gpsAvailabilityLabel(gpsModalState.item.availability)}
+                </Badge>
+              ) : null}
+            </DialogTitle>
+          </DialogHeader>
+
+          {gpsModalState.status === "loading" ? (
+            <div className="flex min-h-[260px] flex-col items-center justify-center gap-2">
+              <Loader2 className="h-6 w-6 animate-spin text-slate-500" />
+              <p className="text-sm text-slate-600">Obteniendo ubicación GPS...</p>
+            </div>
+          ) : gpsModalState.status === "error" ? (
+            <div className="flex min-h-[220px] flex-col items-center justify-center gap-3">
+              <p className="text-sm text-slate-700">GPS no disponible para este conductor</p>
+              <Button type="button" variant="outline" onClick={() => setGpsModalOpen(false)}>
+                Cerrar
+              </Button>
+            </div>
+          ) : gpsModalState.status === "success" && gpsModalState.item && gpsModalOpen ? (
+            <div className="space-y-3">
+              <LiveDriverMap
+                key={gpsModalDriver?.id ?? "map"}
+                lat={gpsModalState.item.lat}
+                lng={gpsModalState.item.lng}
+                fullName={gpsModalState.item.full_name}
+                plate={gpsModalState.item.plate}
+                iconUrl={gpsModalState.item.icon || undefined}
+              />
+              <div className="space-y-1 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                <p>🚗 Placa: {gpsModalState.item.plate || "—"}</p>
+                <p>📍 Código: {gpsModalState.item.code || "—"}</p>
+                <p>🕐 Último GPS: {gpsModalState.item.txt_tracked || "—"}</p>
+                <p>📅 Fecha: {formatGpsDate(gpsModalState.item.date_tracked)}</p>
+              </div>
+            </div>
+          ) : null}
+
+          <DialogFooter className="gap-2 sm:justify-end">
+            {gpsModalState.status === "success" && gpsModalState.item ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  const { lat, lng } = gpsModalState.item as DriverLiveLocationItem;
+                  window.open(
+                    `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${lat},${lng}`)}`,
+                    "_blank",
+                    "noopener,noreferrer",
+                  );
+                }}
+              >
+                Abrir en Google Maps
+              </Button>
+            ) : null}
+            <Button type="button" variant="secondary" onClick={() => setGpsModalOpen(false)}>
+              Cerrar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={bulkOpen} onOpenChange={setBulkOpen}>
         <DialogContent className="sm:max-w-md" showCloseButton>

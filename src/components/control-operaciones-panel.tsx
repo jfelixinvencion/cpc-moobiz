@@ -35,6 +35,17 @@ import {
 import type { ControlDriverExcelRow } from "@/lib/control-operaciones-map";
 import { semaforoSwatch } from "@/lib/control-operaciones-map";
 import { normalizeConductorName } from "@/lib/gps-filter";
+import {
+  clearMoobizGpsBearerFromStorage,
+  fetchMoobizLiveDriverLocation,
+  MOOBIZ_GPS_FETCH_NOT_LOGGED,
+  readMoobizGpsBearerFromStorage,
+  sanitizeMoobizBearerFromInput,
+  writeMoobizGpsBearerToStorage,
+  type DriverLiveAvailability,
+  type DriverLiveLocationFetchResult,
+  type DriverLiveLocationItem,
+} from "@/lib/moobiz-live-vehicles-client";
 
 const ROW_H = 44;
 const CHUNK_NAMES = 55;
@@ -48,10 +59,8 @@ const GPS_ICON_COLOR_BUSY = "#f97316";
 const GPS_ICON_COLOR_OFFLINE = "#94a3b8";
 
 /**
- * Ubicación en vivo Moobiz: SOLO se llama desde el clic del ícono GPS de una fila.
- * No usar en useEffect, montaje, carga de tabla, ni en bucles sobre conductores.
+ * Ubicación en vivo Moobiz: SOLO desde el clic del ícono GPS; fetch directo al navegador con token del operador (localStorage).
  */
-const MOOBIZ_LIVE_DRIVER_LOCATION_API = "/api/moobiz/live-driver-location";
 
 type LiveDriverMapProps = {
   lat: number;
@@ -111,40 +120,6 @@ type ApiPage = {
   semanaLabel: string;
   error?: string;
 };
-
-type DriverLiveAvailability = "online" | "busy" | "offline";
-
-type DriverLiveLocationItem = {
-  full_name: string;
-  plate: string;
-  availability: DriverLiveAvailability;
-  lat: number;
-  lng: number;
-  code: string;
-  date_tracked: string;
-  txt_tracked: string;
-  icon: string;
-};
-
-type DriverLiveLocationApiResponse = {
-  ok: boolean;
-  msg?: string;
-  item: DriverLiveLocationItem | null;
-};
-
-/** Una sola petición; solo debe invocarse desde el manejador de clic del ícono GPS. */
-async function fetchLiveDriverLocationByConductorName(
-  conductorName: string,
-): Promise<DriverLiveLocationApiResponse> {
-  const sp = new URLSearchParams({ query: conductorName });
-  const res = await fetch(`${MOOBIZ_LIVE_DRIVER_LOCATION_API}?${sp.toString()}`, { cache: "no-store" });
-  const body = (await res.json()) as DriverLiveLocationApiResponse;
-  return {
-    ok: Boolean(body?.ok),
-    msg: body?.msg,
-    item: body?.item ?? null,
-  };
-}
 
 function SearchableMiniSelect(props: {
   value: string;
@@ -578,7 +553,7 @@ export function ControlOperacionesPanel() {
   const [bulkClearMenuOpen, setBulkClearMenuOpen] = useState(false);
   const bulkClearMenuRef = useRef<HTMLDivElement>(null);
   const [bulkModalPortalContainer, setBulkModalPortalContainer] = useState<HTMLElement | null>(null);
-  const liveLocationCacheRef = useRef<Map<string, DriverLiveLocationApiResponse>>(new Map());
+  const liveLocationCacheRef = useRef<Map<string, DriverLiveLocationFetchResult>>(new Map());
   /** Colores del ícono MapPin por fila (solo tras consulta exitosa; evita leer refs durante render). */
   const [gpsAvailByDriverId, setGpsAvailByDriverId] = useState<
     Record<string, DriverLiveAvailability>
@@ -586,9 +561,11 @@ export function ControlOperacionesPanel() {
   const [gpsModalOpen, setGpsModalOpen] = useState(false);
   const [gpsModalDriver, setGpsModalDriver] = useState<{ id: string; name: string } | null>(null);
   const [gpsModalState, setGpsModalState] = useState<{
-    status: "idle" | "loading" | "success" | "error";
+    status: "idle" | "loading" | "need_token" | "success" | "error";
     item: DriverLiveLocationItem | null;
   }>({ status: "idle", item: null });
+  const [gpsTokenDraft, setGpsTokenDraft] = useState("");
+  const [gpsTokenMessage, setGpsTokenMessage] = useState<string | null>(null);
   const [LiveMapComponent, setLiveMapComponent] = useState<ComponentType<LiveDriverMapProps> | null>(null);
 
   /** Evita que `operatorsReady` recree callbacks y dispare el `useEffect` de carga inicial en bucle. */
@@ -1045,7 +1022,7 @@ export function ControlOperacionesPanel() {
     }
   }, [selected, controlById]);
 
-  const rememberGpsAvailability = useCallback((driverId: string, entry: DriverLiveLocationApiResponse) => {
+  const rememberGpsAvailability = useCallback((driverId: string, entry: DriverLiveLocationFetchResult) => {
     if (!entry.ok || !entry.item) return;
     setGpsAvailByDriverId((prev) => {
       if (prev[driverId] === entry.item!.availability) return prev;
@@ -1060,6 +1037,49 @@ export function ControlOperacionesPanel() {
     });
   }, []);
 
+  const runMoobizLiveFetch = useCallback(
+    async (bearer: string, driverId: string, driverName: string) => {
+      setGpsModalState({ status: "loading", item: null });
+      try {
+        const normalized = await fetchMoobizLiveDriverLocation(bearer, driverName);
+        if (normalized.msg === MOOBIZ_GPS_FETCH_NOT_LOGGED) {
+          clearMoobizGpsBearerFromStorage();
+          liveLocationCacheRef.current.clear();
+          setGpsTokenDraft("");
+          setGpsTokenMessage(
+            "La sesión de Moobiz no es válida o expiró. Pega un token nuevo (F12 → Network → petición vehicles → header authorization).",
+          );
+          setGpsModalState({ status: "need_token", item: null });
+          return;
+        }
+        rememberGpsAvailability(driverId, normalized);
+        if (!normalized.ok || !normalized.item) {
+          setGpsModalState({ status: "error", item: null });
+          return;
+        }
+        liveLocationCacheRef.current.set(driverId, normalized);
+        setGpsModalState({ status: "success", item: normalized.item });
+        loadLiveMapChunk();
+      } catch {
+        setGpsModalState({ status: "error", item: null });
+      }
+    },
+    [rememberGpsAvailability, loadLiveMapChunk],
+  );
+
+  const applyGpsTokenAndFetch = useCallback(async () => {
+    const d = gpsModalDriver;
+    if (!d) return;
+    const sanitized = sanitizeMoobizBearerFromInput(gpsTokenDraft);
+    if (!sanitized) {
+      setGpsTokenMessage("Ingresa el token de Moobiz.");
+      return;
+    }
+    setGpsTokenMessage(null);
+    writeMoobizGpsBearerToStorage(sanitized);
+    await runMoobizLiveFetch(sanitized, d.id, d.name);
+  }, [gpsModalDriver, gpsTokenDraft, runMoobizLiveFetch]);
+
   const openGpsModalForDriver = useCallback(
     async (driver: MergedDriver) => {
       const id = String(driver.id_conductor).trim();
@@ -1069,36 +1089,26 @@ export function ControlOperacionesPanel() {
       setGpsModalDriver({ id, name });
       setGpsModalOpen(true);
       setLiveMapComponent(null);
+      setGpsTokenMessage(null);
+      setGpsTokenDraft("");
 
       const cached = liveLocationCacheRef.current.get(id);
-      if (cached) {
+      if (cached?.ok && cached.item) {
         rememberGpsAvailability(id, cached);
-        if (cached.ok && cached.item) {
-          setGpsModalState({ status: "success", item: cached.item });
-          loadLiveMapChunk();
-        } else {
-          setGpsModalState({ status: "error", item: null });
-        }
+        setGpsModalState({ status: "success", item: cached.item });
+        loadLiveMapChunk();
         return;
       }
 
-      setGpsModalState({ status: "loading", item: null });
-      try {
-        const normalized = await fetchLiveDriverLocationByConductorName(name);
-        liveLocationCacheRef.current.set(id, normalized);
-        rememberGpsAvailability(id, normalized);
-        if (!normalized.ok || !normalized.item) {
-          setGpsModalState({ status: "error", item: null });
-          return;
-        }
-        setGpsModalState({ status: "success", item: normalized.item });
-        loadLiveMapChunk();
-      } catch {
-        liveLocationCacheRef.current.set(id, { ok: false, msg: "network_error", item: null });
-        setGpsModalState({ status: "error", item: null });
+      const token = readMoobizGpsBearerFromStorage();
+      if (!token) {
+        setGpsModalState({ status: "need_token", item: null });
+        return;
       }
+
+      await runMoobizLiveFetch(token, id, name);
     },
-    [rememberGpsAvailability, loadLiveMapChunk],
+    [rememberGpsAvailability, loadLiveMapChunk, runMoobizLiveFetch],
   );
 
   useEffect(() => {
@@ -1451,6 +1461,8 @@ export function ControlOperacionesPanel() {
             setGpsModalState({ status: "idle", item: null });
             setGpsModalDriver(null);
             setLiveMapComponent(null);
+            setGpsTokenDraft("");
+            setGpsTokenMessage(null);
           }
         }}
       >
@@ -1471,7 +1483,33 @@ export function ControlOperacionesPanel() {
             </DialogTitle>
           </DialogHeader>
 
-          {gpsModalState.status === "loading" ? (
+          {gpsModalState.status === "need_token" ? (
+            <div className="space-y-3 py-1">
+              {gpsTokenMessage ? (
+                <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  {gpsTokenMessage}
+                </p>
+              ) : null}
+              <div className="space-y-1.5">
+                <Label htmlFor="moobiz-gps-bearer" className="text-sm text-slate-800">
+                  Bearer token de Moobiz
+                </Label>
+                <Input
+                  id="moobiz-gps-bearer"
+                  type="password"
+                  autoComplete="off"
+                  value={gpsTokenDraft}
+                  onChange={(e) => setGpsTokenDraft(e.target.value)}
+                  placeholder="Pega aquí el token (sin la palabra Bearer)"
+                  className="font-mono text-xs"
+                />
+                <p className="text-xs leading-snug text-slate-500">
+                  Para obtener tu token: Entra a Moobiz &gt; F12 &gt; Network &gt; Busca &apos;vehicles&apos; &gt; Copia el
+                  valor de &apos;authorization&apos; en los Headers.
+                </p>
+              </div>
+            </div>
+          ) : gpsModalState.status === "loading" ? (
             <div className="flex min-h-[260px] flex-col items-center justify-center gap-2">
               <Loader2 className="h-6 w-6 animate-spin text-slate-500" />
               <p className="text-sm text-slate-600">Obteniendo ubicación GPS...</p>
@@ -1509,6 +1547,11 @@ export function ControlOperacionesPanel() {
           ) : null}
 
           <DialogFooter className="gap-2 sm:justify-end">
+            {gpsModalState.status === "need_token" ? (
+              <Button type="button" onClick={() => void applyGpsTokenAndFetch()}>
+                Guardar y buscar ubicación
+              </Button>
+            ) : null}
             {gpsModalState.status === "success" && gpsModalState.item ? (
               <Button
                 type="button"

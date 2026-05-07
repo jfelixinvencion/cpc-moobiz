@@ -3,7 +3,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { formatApiError } from "@/lib/format-api-error";
 import { mapExcelRowToControlDriver, type ControlDriverExcelRow } from "@/lib/control-operaciones-map";
 import { semanaLabelLiquidaciones } from "@/lib/control-operaciones-semana";
-import { normalizeConductorName } from "@/lib/gps-filter";
 import { assertQualityReadAccess, assertQualityWriteAccess } from "@/lib/panel-session";
 import { getSupabaseAdmin } from "@/lib/quality-audit";
 
@@ -24,7 +23,7 @@ const DRIVER_SELECT = [
 ].join(",");
 
 const DRIVERS_INTERNAL_CHUNK = 150;
-const MAX_NAMES_VIAJES = 250;
+const MAX_DRIVER_IDS_SERV = 500;
 const CONTROL_LIMIT = 50_000;
 
 function nowMs(): number {
@@ -106,24 +105,29 @@ async function fetchAllApprovedDrivers(): Promise<{ drivers: ControlDriverExcelR
   return { drivers: all, total };
 }
 
-async function fetchViajesCountsForExactConductorNames(names: string[]): Promise<Record<string, number>> {
+async function fetchServCountsByDriverIds(drIds: string[]): Promise<Record<string, number>> {
   const sb = getSupabaseAdmin();
   const counts = new Map<string, number>();
-  const uniq = [...new Set(names.map((n) => String(n).trim()).filter(Boolean))].slice(0, MAX_NAMES_VIAJES);
+  const uniq = [...new Set(drIds.map((n) => String(n).trim()).filter(Boolean))].slice(0, MAX_DRIVER_IDS_SERV);
   const chunk = 80;
+  console.log(`[control-operaciones][SERV] inicio carga SERV dr_id consultados=${uniq.length}`);
   for (let i = 0; i < uniq.length; i += chunk) {
     const part = uniq.slice(i, i + chunk);
     if (part.length === 0) continue;
-    const { data, error } = await sb.from("viajes_activos").select("conductor").in("conductor", part);
+    const { data, error } = await sb
+      .schema("vista")
+      .from("moobiz_services_maestra")
+      .select("dr_id")
+      .in("dr_id", part);
     if (error) throw error;
     for (const raw of data || []) {
       if (!raw || typeof raw !== "object") continue;
-      const c = String((raw as { conductor?: unknown }).conductor ?? "").trim();
-      if (!c) continue;
-      const k = normalizeConductorName(c);
-      counts.set(k, (counts.get(k) ?? 0) + 1);
+      const driverId = String((raw as { dr_id?: unknown }).dr_id ?? "").trim();
+      if (!driverId) continue;
+      counts.set(driverId, (counts.get(driverId) ?? 0) + 1);
     }
   }
+  console.log(`[control-operaciones][SERV] cantidad de conteos recibidos=${counts.size}`);
   return Object.fromEntries(counts.entries());
 }
 
@@ -264,18 +268,18 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ operatorOptions, timingsMs: { operators: nowMs() - tRequest } });
     }
 
-    if (url.searchParams.get("partial") === "viajes") {
+    if (url.searchParams.get("partial") === "serv") {
       const t0 = nowMs();
-      const names = url.searchParams.getAll("n").map((s) => s.trim()).filter(Boolean);
-      if (names.length === 0) {
+      const drIds = url.searchParams.getAll("d").map((s) => s.trim()).filter(Boolean);
+      if (drIds.length === 0) {
         return NextResponse.json(
-          { error: "Indica al menos un nombre con el query repetido n= (conductores de la página cargada)." },
+          { error: "Indica al menos un dr_id con el query repetido d= (conductores de la página cargada)." },
           { status: 400 },
         );
       }
-      const viajesCounts = await fetchViajesCountsForExactConductorNames(names);
-      logBlock(`partial=viajes n=${names.length}`, t0);
-      return NextResponse.json({ viajesCounts, timingsMs: { viajes: nowMs() - tRequest } });
+      const servCounts = await fetchServCountsByDriverIds(drIds);
+      logBlock(`partial=serv d=${drIds.length}`, t0);
+      return NextResponse.json({ servCounts, timingsMs: { serv: nowMs() - tRequest } });
     }
 
     if (url.searchParams.get("partial") === "semaforo") {

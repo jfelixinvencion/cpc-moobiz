@@ -34,7 +34,6 @@ import {
 } from "@/components/ui/select";
 import type { ControlDriverExcelRow } from "@/lib/control-operaciones-map";
 import { semaforoSwatch } from "@/lib/control-operaciones-map";
-import { normalizeConductorName } from "@/lib/gps-filter";
 import type { NearbyServiceMarker } from "@/components/LiveDriverMap";
 
 const ROW_H = 44;
@@ -460,22 +459,24 @@ async function postUpsert(
   if (!res.ok) throw new Error(j.error || "Error al guardar");
 }
 
-async function fetchViajesCountsChunked(names: string[]): Promise<Record<string, number>> {
-  const uniq = [...new Set(names.map((n) => String(n).trim()).filter(Boolean))];
+async function fetchServCountsByDriverIdsChunked(driverIds: string[]): Promise<Record<string, number>> {
+  const uniq = [...new Set(driverIds.map((n) => String(n).trim()).filter(Boolean))];
+  console.log(`[control-operaciones][SERV] inicio carga SERV dr_id consultados=${uniq.length}`);
   const merged: Record<string, number> = {};
   for (let i = 0; i < uniq.length; i += CHUNK_NAMES) {
     const part = uniq.slice(i, i + CHUNK_NAMES);
-    const sp = new URLSearchParams({ partial: "viajes" });
-    for (const n of part) sp.append("n", n);
+    const sp = new URLSearchParams({ partial: "serv" });
+    for (const d of part) sp.append("d", d);
     const res = await fetch(`/api/control-operaciones?${sp.toString()}`, { cache: "no-store" });
-    const j = (await res.json()) as { viajesCounts?: Record<string, number>; error?: string };
-    if (!res.ok) throw new Error(j.error || "viajes");
-    if (j.viajesCounts && typeof j.viajesCounts === "object") {
-      for (const [k, v] of Object.entries(j.viajesCounts)) {
+    const j = (await res.json()) as { servCounts?: Record<string, number>; error?: string };
+    if (!res.ok) throw new Error(j.error || "serv");
+    if (j.servCounts && typeof j.servCounts === "object") {
+      for (const [k, v] of Object.entries(j.servCounts)) {
         merged[k] = (merged[k] ?? 0) + (typeof v === "number" ? v : 0);
       }
     }
   }
+  console.log(`[control-operaciones][SERV] cantidad de conteos recibidos=${Object.keys(merged).length}`);
   return merged;
 }
 
@@ -698,16 +699,20 @@ export function ControlOperacionesPanel() {
         }
       }
 
-      const names = slice.map((d) => d.nombre_conductor);
-      const viajesCounts = await fetchViajesCountsChunked(names);
+      const ids = slice.map((d) => d.id_conductor);
+      const servCounts = await fetchServCountsByDriverIdsChunked(ids);
       setRows((prev) =>
         prev.map((r) => {
           if (!sliceIds.has(r.id_conductor)) return r;
-          const k = normalizeConductorName(r.nombre_conductor);
-          const v = viajesCounts[k] ?? 0;
+          const v = servCounts[r.id_conductor] ?? 0;
           return { ...r, servicios_activos: v };
         }),
       );
+      const sample = slice.slice(0, 3).map((d) => ({
+        dr_id: d.id_conductor,
+        serv: servCounts[d.id_conductor] ?? 0,
+      }));
+      console.log("[control-operaciones][SERV] ejemplo de 3 conductores", sample);
 
       try {
         const { semaforoById } = await fetchSemaforoMap(semana);
@@ -824,26 +829,31 @@ export function ControlOperacionesPanel() {
     return () => window.clearInterval(id);
   }, [loading, asignacionesBusy, rows.length, refreshAsignacionesOnly]);
 
-  /** Solo recalcula conteos SERV. desde `viajes_activos` (sin sync Moobiz). */
-  const refreshViajes = useCallback(async () => {
+  /** Recalcula conteos SERV. desde `vista.moobiz_services_maestra` por dr_id. */
+  const refreshServ = useCallback(async () => {
     if (rows.length === 0) return;
-    const viajesCounts = await fetchViajesCountsChunked(rows.map((d) => d.nombre_conductor));
+    const servCounts = await fetchServCountsByDriverIdsChunked(rows.map((d) => d.id_conductor));
     setRows((prev) =>
       prev.map((r) => {
-        const k = normalizeConductorName(r.nombre_conductor);
-        const v = viajesCounts[k] ?? 0;
+        const v = servCounts[r.id_conductor] ?? 0;
         return { ...r, servicios_activos: v };
       }),
     );
+    const sample = rows.slice(0, 3).map((d) => ({
+      dr_id: d.id_conductor,
+      serv: servCounts[d.id_conductor] ?? 0,
+    }));
+    console.log("[control-operaciones][SERV] ejemplo de 3 conductores", sample);
   }, [rows]);
 
-  /** GET /api/extract (viajes_activos) y luego refresco de conteos en la tabla. */
+  /** POST /api/moobiz-services/sync y luego refresh de SERV desde vista.moobiz_services_maestra. */
   const syncServiciosYConteos = useCallback(async () => {
     if (rows.length === 0) return;
     setViajesBusy(true);
     setError(null);
     try {
-      const res = await fetch("/api/extract", { cache: "no-store" });
+      console.log("[control-operaciones][SERV] refresh después del botón Servicios (inicio)");
+      const res = await fetch("/api/moobiz-services/sync", { method: "POST", cache: "no-store" });
       const data = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) {
         const msg =
@@ -852,13 +862,14 @@ export function ControlOperacionesPanel() {
             : `No se pudo sincronizar servicios desde Moobiz (HTTP ${res.status}).`;
         throw new Error(msg);
       }
-      await refreshViajes();
+      await refreshServ();
+      console.log("[control-operaciones][SERV] refresh después del botón Servicios (ok)");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al sincronizar servicios o actualizar conteos");
     } finally {
       setViajesBusy(false);
     }
-  }, [rows, refreshViajes]);
+  }, [rows, refreshServ]);
 
   const syncConductores = useCallback(async () => {
     setSyncConductoresBusy(true);
@@ -1075,26 +1086,30 @@ export function ControlOperacionesPanel() {
       setLiveMapComponent(null);
 
       const cached = liveLocationCacheRef.current.get(id);
+      const hasCachedItem = Boolean(cached?.ok && cached.item);
       if (cached?.ok && cached.item) {
         rememberGpsAvailability(id, cached);
         setGpsModalState({
           status: "success",
           item: cached.item,
-          nearbyServices: cached.nearbyServices ?? [],
+          nearbyServices: [],
         });
         loadLiveMapChunk();
-        return;
+      } else {
+        setGpsModalState({ status: "loading", item: null, nearbyServices: [] });
       }
 
-      setGpsModalState({ status: "loading", item: null, nearbyServices: [] });
       try {
         const normalized = await fetchLiveDriverLocationByConductorName(name);
         rememberGpsAvailability(id, normalized);
         if (!normalized.ok || !normalized.item) {
-          setGpsModalState({ status: "error", item: null, nearbyServices: [] });
+          if (!hasCachedItem) {
+            setGpsModalState({ status: "error", item: null, nearbyServices: [] });
+          }
           return;
         }
         liveLocationCacheRef.current.set(id, normalized);
+        console.log(`[map] fetched nearbyServices count: ${(normalized.nearbyServices ?? []).length}`);
         setGpsModalState({
           status: "success",
           item: normalized.item,
@@ -1102,7 +1117,9 @@ export function ControlOperacionesPanel() {
         });
         loadLiveMapChunk();
       } catch {
-        setGpsModalState({ status: "error", item: null, nearbyServices: [] });
+        if (!hasCachedItem) {
+          setGpsModalState({ status: "error", item: null, nearbyServices: [] });
+        }
       }
     },
     [rememberGpsAvailability, loadLiveMapChunk],
@@ -1288,7 +1305,7 @@ export function ControlOperacionesPanel() {
               disabled={viajesBusy || loading || rows.length === 0}
               onClick={() => void syncServiciosYConteos()}
               className="h-8 max-w-[200px] truncate px-2 text-xs"
-              title={viajesBusy ? undefined : "Sincronizar viajes activos en Supabase y actualizar conteos SERV."}
+              title={viajesBusy ? undefined : "Sincronizar public.moobiz_services y refrescar SERV desde vista.moobiz_services_maestra."}
             >
               {viajesBusy ? "Actualizando servicios..." : "🚗 Servicios"}
             </Button>

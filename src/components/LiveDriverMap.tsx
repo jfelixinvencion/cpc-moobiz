@@ -9,8 +9,10 @@ export type NearbyServiceMarker = {
   id: string | number;
   lat: number;
   lng: number;
-  time: string;
-  user: string;
+  alt_date: string;
+  pr_name: string;
+  dst_zone: string;
+  prioridad_mapa: 1 | 2 | 3;
 };
 
 type Props = {
@@ -43,6 +45,25 @@ function openMoobizActiveService(id: string | number): void {
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
+function markerColorByPriority(prioridad: 1 | 2 | 3): { stroke: string; fill: string } {
+  if (prioridad === 1) return { stroke: "#DC2626", fill: "#EF4444" };
+  if (prioridad === 2) return { stroke: "#D97706", fill: "#F59E0B" };
+  return { stroke: "#1D4ED8", fill: "#3B82F6" };
+}
+
+function formatAltDate(value: string): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "—";
+  const isoCandidate = raw.includes("T") ? raw : raw.replace(" ", "T");
+  const d = new Date(isoCandidate);
+  if (Number.isNaN(d.getTime())) return raw;
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  return `${dd}/${mm} ${hh}:${min}`;
+}
+
 export default function LiveDriverMap(props: Props) {
   const { lat, lng, fullName, plate, iconUrl, nearbyServices = [] } = props;
 
@@ -71,8 +92,8 @@ export default function LiveDriverMap(props: Props) {
             center={[s.lat, s.lng]}
             radius={7}
             pathOptions={{
-              color: "#1d4ed8",
-              fillColor: "#2563eb",
+              color: markerColorByPriority(s.prioridad_mapa).stroke,
+              fillColor: markerColorByPriority(s.prioridad_mapa).fill,
               fillOpacity: 0.9,
               weight: 1,
             }}
@@ -86,7 +107,7 @@ export default function LiveDriverMap(props: Props) {
             }}
           >
             <Tooltip direction="top" offset={[0, -4]} opacity={1}>
-              {`${s.time || "—"} - ${s.user || "—"} (Pendiente)`}
+              {`${formatAltDate(s.alt_date)} - ${s.pr_name || "—"} - ${s.dst_zone || "—"}`}
             </Tooltip>
           </CircleMarker>
         ))}

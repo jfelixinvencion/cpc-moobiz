@@ -205,11 +205,15 @@ export async function runMoobizServicesSync(): Promise<MoobizServicesSyncResult>
   let pagesQueried = 0;
 
   try {
+    console.log("[services-sync][AUDIT] inicio runMoobizServicesSync destino=public.moobiz_services");
     const { token } = await getTokenForServicesSync();
 
     const body1 = await fetchDispatcherPage({ token, offset: 0 });
     const totalReported = extractTotal(body1);
     const items1 = extractItems(body1) as Record<string, unknown>[];
+    console.log(
+      `[services-sync][AUDIT] moobiz dispatcher page1 items=${items1.length} totalReported=${totalReported ?? "null"}`,
+    );
     pagesQueried = 1;
 
     const byId = new Map<string, { id: string; state: string; raw: Record<string, unknown> }>();
@@ -222,6 +226,7 @@ export async function runMoobizServicesSync(): Promise<MoobizServicesSyncResult>
       const body2 = await fetchDispatcherPage({ token, offset: PAGE_LIMIT });
       pagesQueried = 2;
       const items2 = extractItems(body2) as Record<string, unknown>[];
+      console.log(`[services-sync][AUDIT] moobiz dispatcher page2 items=${items2.length}`);
       for (const item of items2) {
         const row = mapServiceRow(item);
         if (row) byId.set(row.id, row);
@@ -229,6 +234,7 @@ export async function runMoobizServicesSync(): Promise<MoobizServicesSyncResult>
     }
 
     const rows = [...byId.values()];
+    console.log(`[services-sync][AUDIT] registros validos recibidos=${rows.length}`);
 
     if (rows.length === 0) {
       throw new Error("MOOBIZ_SERVICES_SYNC: la API no devolvió ningún servicio válido (id requerido).");
@@ -236,6 +242,9 @@ export async function runMoobizServicesSync(): Promise<MoobizServicesSyncResult>
 
     const { deleted, inserted } = await replaceAllServices(supabase, rows);
     const finalDbCount = await countServicesInDb(supabase);
+    console.log(
+      `[services-sync][AUDIT] escritura destino=public.moobiz_services deleted=${deleted} inserted=${inserted} finalCount=${finalDbCount}`,
+    );
 
     const validationErrors: string[] = [];
     if (totalReported !== null && totalReported !== rows.length) {

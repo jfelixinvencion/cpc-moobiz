@@ -31,8 +31,10 @@ export type NearbyMoobizServiceForMap = {
   id: string | number;
   lat: number;
   lng: number;
-  time: string;
-  user: string;
+  alt_date: string;
+  pr_name: string;
+  dst_zone: string;
+  prioridad_mapa: 1 | 2 | 3;
 };
 
 function asText(v: unknown): string {
@@ -51,8 +53,9 @@ type MaestraNearbyRow = {
   org_lat?: unknown;
   org_lng?: unknown;
   alt_date?: unknown;
-  Usuario?: unknown;
-  usuario?: unknown;
+  pr_name?: unknown;
+  dst_zone?: unknown;
+  prioridad_mapa?: unknown;
 };
 
 async function fetchNearbyServicesForMap(): Promise<NearbyMoobizServiceForMap[]> {
@@ -61,8 +64,8 @@ async function fetchNearbyServicesForMap(): Promise<NearbyMoobizServiceForMap[]>
     const { data, error } = await client
       .schema("vista")
       .from("moobiz_services_maestra")
-      .select("id, org_lat, org_lng, alt_date, Usuario")
-      .eq("es_proxima_hora", true)
+      .select("id, org_lat, org_lng, alt_date, pr_name, dst_zone, prioridad_mapa")
+      .gt("prioridad_mapa", 0)
       .limit(500);
 
     if (error) {
@@ -80,10 +83,18 @@ async function fetchNearbyServicesForMap(): Promise<NearbyMoobizServiceForMap[]>
       if (rawId === null || rawId === undefined) continue;
       if (typeof rawId !== "string" && typeof rawId !== "number") continue;
       if (rawId === "") continue;
+      const priority = asNumber(row.prioridad_mapa);
+      if (priority !== 1 && priority !== 2 && priority !== 3) continue;
       const id = rawId;
-      const user = asText(row.Usuario ?? row.usuario);
-      const time = asText(row.alt_date);
-      out.push({ id, lat, lng, time, user });
+      out.push({
+        id,
+        lat,
+        lng,
+        alt_date: asText(row.alt_date),
+        pr_name: asText(row.pr_name),
+        dst_zone: asText(row.dst_zone),
+        prioridad_mapa: priority,
+      });
     }
     return out;
   } catch (e) {

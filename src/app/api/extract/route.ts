@@ -389,6 +389,7 @@ async function resolveMoobizXlsxBuffer(): Promise<ArrayBuffer> {
 
 export async function GET(): Promise<Response> {
   try {
+    console.log(`[extract][AUDIT] GET /api/extract iniciado destino=public.${TARGET_TABLE}`);
     const supabaseUrl = getEnvTrimmed(["SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_URL"]);
     const supabaseServiceKey = getEnvTrimmed(["SUPABASE_SERVICE_ROLE_KEY"]);
 
@@ -431,6 +432,7 @@ export async function GET(): Promise<Response> {
       console.log(Object.keys(firstRow));
     }
     const mappedRows = rawRows.map(mapExcelRow);
+    console.log(`[extract][AUDIT] registros mapeados para insertar=${mappedRows.length}`);
 
     if (mappedRows.length === 0) {
       return Response.json(
@@ -449,6 +451,9 @@ export async function GET(): Promise<Response> {
     });
 
     const syncResult = await replaceAllRows(supabase, mappedRows);
+    console.log(
+      `[extract][AUDIT] escritura destino=public.${TARGET_TABLE} deleted=${syncResult.deleted} inserted=${syncResult.inserted}`,
+    );
 
     return Response.json({
       deleted: syncResult.deleted,

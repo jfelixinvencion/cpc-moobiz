@@ -63,6 +63,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ConductorTimelineMatrix } from "@/components/conductor-timeline-matrix";
+import { SeguimientoOperaciones } from "@/components/seguimiento-operaciones";
 import {
   LogsSyncHealthBanner,
   type SyncMonitorRow,
@@ -218,6 +219,7 @@ const DATOS_SUB_REGISTRO_ACTIVIDADES = "registro-actividades" as const;
 const DATOS_SUB_DATOS_PENDIENTES = "datos-pendientes" as const;
 const OPERACIONES_SUB_CONTROL = "control" as const;
 const OPERACIONES_SUB_CONDUCTORES_TIEMPO = "conductores-tiempo" as const;
+const OPERACIONES_SUB_SEGUIMIENTO = "seguimiento" as const;
 const LOGS_CLEAN_PAGE_SIZE = 50;
 const HISTORY_PAGE_SIZE = 50;
 const DRIVERS_PAGE_SIZE = 50;
@@ -894,7 +896,12 @@ function DashboardContent() {
   );
 
   const operacionesSubAllowed = useMemo(
-    () => new Set<string>([OPERACIONES_SUB_CONTROL, OPERACIONES_SUB_CONDUCTORES_TIEMPO]),
+    () =>
+      new Set<string>([
+        OPERACIONES_SUB_CONTROL,
+        OPERACIONES_SUB_CONDUCTORES_TIEMPO,
+        OPERACIONES_SUB_SEGUIMIENTO,
+      ]),
     [],
   );
 
@@ -910,7 +917,11 @@ function DashboardContent() {
   useEffect(() => {
     if (mainTab !== "operaciones") return;
     const raw = searchParams.get("operacionesSub");
-    if (raw === OPERACIONES_SUB_CONTROL || raw === OPERACIONES_SUB_CONDUCTORES_TIEMPO) {
+    if (
+      raw === OPERACIONES_SUB_CONTROL ||
+      raw === OPERACIONES_SUB_CONDUCTORES_TIEMPO ||
+      raw === OPERACIONES_SUB_SEGUIMIENTO
+    ) {
       setOperacionesSubTab(raw);
       return;
     }
@@ -2758,7 +2769,7 @@ function DashboardContent() {
 
           <TabsContent value="operaciones" className="mt-0 outline-none">
             <Tabs value={operacionesSubTab} onValueChange={handleOperacionesSubTabChange} className="w-full">
-              <TabsList className="mb-3 grid h-auto min-h-10 w-full max-w-2xl grid-cols-1 gap-1 bg-slate-200/90 p-1 sm:grid-cols-2 sm:gap-0">
+              <TabsList className="mb-3 grid h-auto min-h-10 w-full max-w-2xl grid-cols-1 gap-1 bg-slate-200/90 p-1 sm:grid-cols-3 sm:gap-0">
                 <TabsTrigger
                   value={OPERACIONES_SUB_CONTROL}
                   className="text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm sm:flex-1"
@@ -2770,6 +2781,12 @@ function DashboardContent() {
                   className="text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm sm:flex-1"
                 >
                   Conductores en el tiempo
+                </TabsTrigger>
+                <TabsTrigger
+                  value={OPERACIONES_SUB_SEGUIMIENTO}
+                  className="text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm sm:flex-1"
+                >
+                  Seguimiento
                 </TabsTrigger>
               </TabsList>
               <div className="mt-0">
@@ -2786,6 +2803,14 @@ function DashboardContent() {
                   aria-hidden={operacionesSubTab !== OPERACIONES_SUB_CONDUCTORES_TIEMPO}
                 >
                   <ConductorTimelineMatrix dataRevision={refreshKey} />
+                </div>
+                <div
+                  className={
+                    operacionesSubTab === OPERACIONES_SUB_SEGUIMIENTO ? "block" : "hidden"
+                  }
+                  aria-hidden={operacionesSubTab !== OPERACIONES_SUB_SEGUIMIENTO}
+                >
+                  <SeguimientoOperaciones dataRevision={refreshKey} />
                 </div>
               </div>
             </Tabs>

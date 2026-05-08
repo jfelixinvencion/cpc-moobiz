@@ -560,6 +560,7 @@ export function ControlOperacionesPanel() {
   const [saving, setSaving] = useState(false);
   const [syncConductoresBusy, setSyncConductoresBusy] = useState(false);
   const [viajesBusy, setViajesBusy] = useState(false);
+  const [viajesPhase, setViajesPhase] = useState<"sync" | "gps" | null>(null);
   const [asignacionesBusy, setAsignacionesBusy] = useState(false);
 
   const [total, setTotal] = useState(0);
@@ -850,6 +851,7 @@ export function ControlOperacionesPanel() {
   const syncServiciosYConteos = useCallback(async () => {
     if (rows.length === 0) return;
     setViajesBusy(true);
+    setViajesPhase("sync");
     setError(null);
     try {
       console.log("[control-operaciones][SERV] refresh después del botón Servicios (inicio)");
@@ -864,12 +866,48 @@ export function ControlOperacionesPanel() {
       }
       await refreshServ();
       console.log("[control-operaciones][SERV] refresh después del botón Servicios (ok)");
+
+      // Fase 2: refrescar disponibilidad GPS solo de conductores visibles con gps_label === "Encendido".
+      // Se ejecuta DESPUÉS de que la columna SERV ya está actualizada en pantalla.
+      setViajesPhase("gps");
+      const candidates = filtered.filter((r) => r.gps_label === "Encendido");
+      console.log(
+        `[control-operaciones][GPS] fase 2 — refrescando disponibilidad para ${candidates.length} conductor(es) con GPS Encendido`,
+      );
+      const CHUNK = 10;
+      for (let i = 0; i < candidates.length; i += CHUNK) {
+        const slice = candidates.slice(i, i + CHUNK);
+        await Promise.all(
+          slice.map(async (r) => {
+            const id = String(r.id_conductor || "").trim();
+            const name = String(r.nombre_conductor || "").trim();
+            if (!id || !name) return;
+            try {
+              const resp = await fetchLiveDriverLocationByConductorName(name);
+              if (resp.ok && resp.item) {
+                liveLocationCacheRef.current.set(id, resp);
+                const availability = resp.item.availability;
+                setGpsAvailByDriverId((prev) =>
+                  prev[id] === availability ? prev : { ...prev, [id]: availability },
+                );
+              }
+            } catch (err) {
+              console.warn(
+                `[control-operaciones][GPS] fetch falló para "${name}" (id ${id})`,
+                err,
+              );
+            }
+          }),
+        );
+      }
+      console.log("[control-operaciones][GPS] fase 2 — completada");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al sincronizar servicios o actualizar conteos");
     } finally {
+      setViajesPhase(null);
       setViajesBusy(false);
     }
-  }, [rows, refreshServ]);
+  }, [rows, refreshServ, filtered]);
 
   const syncConductores = useCallback(async () => {
     setSyncConductoresBusy(true);
@@ -1307,7 +1345,11 @@ export function ControlOperacionesPanel() {
               className="h-8 max-w-[200px] truncate px-2 text-xs"
               title={viajesBusy ? undefined : "Sincronizar public.moobiz_services y refrescar SERV desde vista.moobiz_services_maestra."}
             >
-              {viajesBusy ? "Actualizando servicios..." : "🚗 Servicios"}
+              {viajesBusy
+                ? viajesPhase === "gps"
+                  ? "Actualizando GPS..."
+                  : "Actualizando servicios..."
+                : "🚗 Servicios"}
             </Button>
             <Button
               type="button"

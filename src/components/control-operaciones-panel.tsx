@@ -32,14 +32,23 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import type { NearbyServiceMarker } from "@/components/LiveDriverMap";
+import {
+  GPS_MULTI_OPTIONS,
+  type DriverLiveAvailability,
+  gpsTableLabelFromAvailability,
+  rowMatchesGpsMultiFilter,
+} from "@/lib/control-operaciones-gps-filter";
 import type { ControlDriverExcelRow } from "@/lib/control-operaciones-map";
 import { semaforoSwatch } from "@/lib/control-operaciones-map";
-import type { NearbyServiceMarker } from "@/components/LiveDriverMap";
+import {
+  formatRefreshGpsToastSuccess,
+  runRefreshGpsRawAndRefetch,
+} from "@/lib/control-operaciones-refresh-gps";
 
 const ROW_H = 44;
 const CHUNK_NAMES = 55;
 const GLOBAL_ALL = "__all__";
-const GPS_ALL = "__all__";
 const SOLICITANTE_ALL = "__all__";
 const SOLICITANTE_EMPTY = "__empty__";
 const GPS_ICON_COLOR_NEUTRAL = "#cbd5e1";
@@ -71,8 +80,6 @@ const SEMAFORO_MULTI_OPTIONS: { value: string; label: string }[] = [
   { value: "naranja", label: "Naranja" },
   { value: "rojo", label: "Rojo" },
 ];
-
-type DriverLiveAvailability = "online" | "busy" | "offline";
 
 type DriverLiveLocationItem = {
   full_name: string;
@@ -141,6 +148,7 @@ type ControlCell = { solicitante: string | null; observacion: string | null };
 
 type ApiPage = {
   drivers: ControlDriverExcelRow[];
+  gpsAvailabilityById?: Record<string, DriverLiveAvailability>;
   controlById: Record<string, ControlCell>;
   total: number;
   approvedCount?: number;
@@ -562,11 +570,14 @@ export function ControlOperacionesPanel() {
   const [viajesBusy, setViajesBusy] = useState(false);
   const [viajesPhase, setViajesPhase] = useState<"sync" | "gps" | null>(null);
   const [asignacionesBusy, setAsignacionesBusy] = useState(false);
+  const [refreshGpsBusy, setRefreshGpsBusy] = useState(false);
+  const [gpsActionToast, setGpsActionToast] = useState<string | null>(null);
 
   const [total, setTotal] = useState(0);
 
   const [region, setRegion] = useState(GLOBAL_ALL);
-  const [gps, setGps] = useState(GPS_ALL);
+  /** Vacío = todos (equivalente a "Todos"). */
+  const [gpsFilter, setGpsFilter] = useState<string[]>([]);
   const [semaforoFilter, setSemaforoFilter] = useState<string[]>([]);
   const [distritoFilter, setDistritoFilter] = useState<string[]>([]);
   const [conductorQ, setConductorQ] = useState("");
@@ -637,7 +648,8 @@ export function ControlOperacionesPanel() {
     const cq = conductorQ.trim().toLowerCase();
     return rows.filter((r) => {
       if (region !== GLOBAL_ALL && String(r.global).trim().toUpperCase() !== region) return false;
-      if (gps !== GPS_ALL && r.gps_label !== gps) return false;
+      const gpsLabel = gpsTableLabelFromAvailability(gpsAvailByDriverId[r.id_conductor]);
+      if (!rowMatchesGpsMultiFilter(gpsFilter, gpsLabel)) return false;
       if (!rowMatchesSemaforoMultiFilter(r, semaforoFilter)) return false;
       if (cq) {
         const idm = r.id_conductor.toLowerCase();
@@ -652,7 +664,17 @@ export function ControlOperacionesPanel() {
       }
       return true;
     });
-  }, [rows, region, gps, semaforoFilter, conductorQ, solicitanteFilter, controlById, solicitanteLabel]);
+  }, [
+    rows,
+    region,
+    gpsFilter,
+    semaforoFilter,
+    conductorQ,
+    solicitanteFilter,
+    controlById,
+    solicitanteLabel,
+    gpsAvailByDriverId,
+  ]);
 
   const distritosDisponibles = useMemo(() => {
     const s = new Set<string>();
@@ -676,6 +698,12 @@ export function ControlOperacionesPanel() {
       return next.length === prev.length ? prev : next;
     });
   }, [distritosDisponibles]);
+
+  useEffect(() => {
+    if (!gpsActionToast) return;
+    const id = window.setTimeout(() => setGpsActionToast(null), 6500);
+    return () => window.clearTimeout(id);
+  }, [gpsActionToast]);
 
   const filtered = useMemo(() => {
     if (distritoFilter.length === 0) return rowsBeforeDistritoFilter;
@@ -740,6 +768,8 @@ export function ControlOperacionesPanel() {
       if (!res.ok) throw new Error(j.error || "Error al cargar control");
 
       const drivers = Array.isArray(j.drivers) ? j.drivers : [];
+      const gpsAvailabilityById =
+        j.gpsAvailabilityById && typeof j.gpsAvailabilityById === "object" ? j.gpsAvailabilityById : {};
       const control = j.controlById && typeof j.controlById === "object" ? j.controlById : {};
       const tot = typeof j.total === "number" ? j.total : drivers.length;
       const sl = typeof j.semanaLabel === "string" ? j.semanaLabel : "";
@@ -747,6 +777,7 @@ export function ControlOperacionesPanel() {
       setTotal(tot);
       setSemanaLabel(sl);
       setControlById(control);
+      setGpsAvailByDriverId(gpsAvailabilityById);
 
       const merged = withPendingHeavy(drivers);
       setRows(merged);
@@ -908,6 +939,30 @@ export function ControlOperacionesPanel() {
       setViajesBusy(false);
     }
   }, [rows, refreshServ, filtered]);
+
+  const refreshGpsRawFromMoobiz = useCallback(async () => {
+    if (rows.length === 0) return;
+    setRefreshGpsBusy(true);
+    setError(null);
+    try {
+      console.debug("[control-operaciones] POST /api/moobiz/refresh-gps-raw");
+      const result = await runRefreshGpsRawAndRefetch({
+        onSuccess: loadApprovedDriversBase,
+      });
+      if (!result.ok) {
+        console.error("[control-operaciones] refresh-gps-raw:", result.error);
+        setGpsActionToast(`Error al actualizar GPS: ${result.error}`);
+        return;
+      }
+      setGpsActionToast(formatRefreshGpsToastSuccess(result));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("[control-operaciones] refresh-gps-raw", e);
+      setGpsActionToast(`Error al actualizar GPS: ${msg}`);
+    } finally {
+      setRefreshGpsBusy(false);
+    }
+  }, [rows.length, loadApprovedDriversBase]);
 
   const syncConductores = useCallback(async () => {
     setSyncConductoresBusy(true);
@@ -1222,17 +1277,14 @@ export function ControlOperacionesPanel() {
               </Select>
             </div>
             <div className="space-y-0.5">
-              <Label className="text-[9px] uppercase leading-none text-slate-500">GPS (Online)</Label>
-              <Select value={gps} onValueChange={setGps}>
-                <SelectTrigger className="h-8 text-[11px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={GPS_ALL}>Todos</SelectItem>
-                  <SelectItem value="Encendido">Encendido</SelectItem>
-                  <SelectItem value="Apagado">Apagado</SelectItem>
-                </SelectContent>
-              </Select>
+              <Label className="text-[9px] uppercase leading-none text-slate-500">GPS</Label>
+              <SearchableMultiMiniSelect
+                values={gpsFilter}
+                onChange={setGpsFilter}
+                options={GPS_MULTI_OPTIONS}
+                placeholder="Buscar estado GPS…"
+                widthClass="w-full"
+              />
             </div>
             <div className="space-y-0.5">
               <Label className="text-[9px] uppercase leading-none text-slate-500">Semáforo</Label>
@@ -1354,6 +1406,24 @@ export function ControlOperacionesPanel() {
             <Button
               type="button"
               size="sm"
+              variant="outline"
+              disabled={refreshGpsBusy || loading || rows.length === 0}
+              onClick={() => void refreshGpsRawFromMoobiz()}
+              className="h-8 max-w-[160px] truncate px-2 text-xs"
+              title="Volcar live/vehicles a public.driver_live_raw (requiere permiso de escritura)."
+            >
+              {refreshGpsBusy ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                  Actualizando…
+                </span>
+              ) : (
+                "Actualizar GPS"
+              )}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
               variant="secondary"
               disabled={loading || asignacionesBusy}
               onClick={() => void refreshAsignacionesOnly()}
@@ -1403,6 +1473,13 @@ export function ControlOperacionesPanel() {
                   const c = controlById[r.id_conductor] ?? { solicitante: null, observacion: null };
                   const sem = semaforoCell(r);
                   const checked = selected.has(r.id_conductor);
+                  const gpsLabel = gpsTableLabelFromAvailability(gpsAvailByDriverId[r.id_conductor]);
+                  const gpsBadgeClass =
+                    gpsLabel === "En linea"
+                      ? "h-6 justify-self-start border-emerald-200 bg-emerald-50 text-[10px] text-emerald-900"
+                      : gpsLabel === "Ocupado"
+                        ? "h-6 justify-self-start border-orange-200 bg-orange-50 text-[10px] text-orange-900"
+                        : "h-6 justify-self-start border-slate-200 bg-slate-100 text-[10px] text-slate-700";
                   return (
                     <div
                       key={r.id_conductor}
@@ -1446,13 +1523,9 @@ export function ControlOperacionesPanel() {
                       </div>
                       <Badge
                         variant="outline"
-                        className={
-                          r.gps_label === "Apagado"
-                            ? "h-6 justify-self-start border-amber-200 bg-amber-50 text-[10px] text-amber-900"
-                            : "h-6 justify-self-start border-emerald-200 bg-emerald-50 text-[10px] text-emerald-900"
-                        }
+                        className={gpsBadgeClass}
                       >
-                        {r.gps_label}
+                        {gpsLabel}
                       </Badge>
                       <div data-no-shift-select>
                         <SearchableMiniSelect
@@ -1606,6 +1679,19 @@ export function ControlOperacionesPanel() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {gpsActionToast ? (
+        <div className="fixed right-4 bottom-4 z-[200] max-w-sm rounded-md border border-slate-200 bg-[#0b1131] px-3 py-2 text-sm text-white shadow-lg">
+          <span className="break-words">{gpsActionToast}</span>
+          <button
+            type="button"
+            className="ml-3 text-[#7dd3fc] hover:underline"
+            onClick={() => setGpsActionToast(null)}
+          >
+            Cerrar
+          </button>
+        </div>
+      ) : null}
 
       <Dialog open={bulkOpen} onOpenChange={setBulkOpen}>
         <DialogContent className="sm:max-w-md" showCloseButton>

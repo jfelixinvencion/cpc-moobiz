@@ -97,8 +97,6 @@ type Viaje = {
   zona?: string | null;
 };
 
-/** Fila de `moobiz_logs_clean`: columnas definidas solo por la vista en Supabase. */
-type MoobizLogCleanRow = Record<string, unknown>;
 type MoobizHistoryRow = {
   id: string | number;
   service_id?: string | null;
@@ -108,22 +106,6 @@ type MoobizHistoryRow = {
   user_name?: string | null;
   amount?: number | string | null;
   raw_data?: unknown;
-};
-
-type MoobizDriverRow = {
-  estado?: string | null;
-  sucursal?: string | null;
-  distrito_vive?: string | null;
-  turno?: string | null;
-  id_conductor?: string | null;
-  nombre_conductor?: string | null;
-  telefono?: string | null;
-  calificacion?: string | null;
-  gps?: string | null;
-  motivo_deshabilitado?: string | null;
-  tp_vehiculo?: string | null;
-  permiso_placa?: string | null;
-  categoria_brevete?: string | null;
 };
 
 type ProductividadSeriesRow = { us_name: string; count: number };
@@ -210,20 +192,12 @@ type DashboardResponse = {
   filters: { empresas: string[] };
 };
 
-const PAGE_SIZE = 50;
-
-/** Query `datosSub` y valores de sub-pestañas dentro de Datos. */
-const DATOS_SUB_VIAJES_ACTIVOS = "viajes-activos" as const;
-const DATOS_SUB_CONDUCTORES = "conductores" as const;
-const DATOS_SUB_REGISTRO_ACTIVIDADES = "registro-actividades" as const;
+/** Query `datosSub` para la vista en Flota (tab principal `value="datos"`). */
 const DATOS_SUB_DATOS_PENDIENTES = "datos-pendientes" as const;
 const OPERACIONES_SUB_CONTROL = "control" as const;
 const OPERACIONES_SUB_CONDUCTORES_TIEMPO = "conductores-tiempo" as const;
 const OPERACIONES_SUB_SEGUIMIENTO = "seguimiento" as const;
-const LOGS_CLEAN_PAGE_SIZE = 50;
 const HISTORY_PAGE_SIZE = 50;
-const DRIVERS_PAGE_SIZE = 50;
-const DRIVERS_FETCH_BATCH_SIZE = 1000;
 const PIE_COLORS = [
   "#00e676",
   "#1e88e5",
@@ -588,72 +562,6 @@ function asText(value: unknown): string {
   return String(value).trim();
 }
 
-/** Todas las claves presentes en el lote (orden de primera aparición en esas filas). */
-function mergeLogCleanColumnKeys(rows: ReadonlyArray<MoobizLogCleanRow>): string[] {
-  const order: string[] = [];
-  const seen = new Set<string>();
-  for (const row of rows) {
-    if (!row || typeof row !== "object") continue;
-    for (const k of Object.keys(row)) {
-      if (seen.has(k)) continue;
-      seen.add(k);
-      order.push(k);
-    }
-  }
-  return order;
-}
-
-/** Prioriza el orden del lote actual; conserva columnas ya vistas en páginas anteriores al final. */
-function mergeColumnKeysPreferBatch(previous: string[], batchRows: ReadonlyArray<MoobizLogCleanRow>): string[] {
-  const batchKeys = mergeLogCleanColumnKeys(batchRows);
-  if (batchKeys.length === 0) return previous.length > 0 ? previous : [];
-  const seen = new Set(batchKeys);
-  const out = [...batchKeys];
-  for (const k of previous) {
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push(k);
-  }
-  return out;
-}
-
-function isLikelyTimestampColumn(name: string): boolean {
-  const n = name.toLowerCase();
-  return (
-    n === "date_created" ||
-    n === "created_at" ||
-    n === "updated_at" ||
-    n.endsWith("_at") ||
-    n.includes("fecha") ||
-    n.includes("date")
-  );
-}
-
-function formatLogCleanCell(column: string, value: unknown): { text: string; title?: string } {
-  if (value === null || value === undefined) return { text: "—" };
-  if (typeof value === "object") {
-    try {
-      const raw = JSON.stringify(value);
-      return raw.length > 240
-        ? { text: `${raw.slice(0, 240)}…`, title: raw }
-        : { text: raw, title: raw.length > 80 ? raw : undefined };
-    } catch {
-      return { text: String(value) };
-    }
-  }
-  const s = String(value);
-  if (isLikelyTimestampColumn(column)) {
-    const d = new Date(s);
-    if (!Number.isNaN(d.getTime())) {
-      return {
-        text: d.toLocaleString("es-PE", { dateStyle: "short", timeStyle: "short" }),
-      };
-    }
-  }
-  if (s.length > 240) return { text: `${s.slice(0, 240)}…`, title: s };
-  return { text: s };
-}
-
 function formatMoney(value: unknown): string {
   const num = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(num)) return asText(value) || "0";
@@ -681,19 +589,8 @@ function DashboardContent() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { refreshKey, triggerRefresh } = useRefreshData();
-  const [viajes, setViajes] = useState<Viaje[]>([]);
-  const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
-
-  const [empresaFilter, setEmpresaFilter] = useState("TODAS");
-  const [estadoFilter, setEstadoFilter] = useState("TODOS");
-  const [conductorFilter, setConductorFilter] = useState("TODOS");
-  const [search, setSearch] = useState("");
-  const [page, setPage] = useState(1);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [dashboardError, setDashboardError] = useState<string | null>(null);
   const [dashboardData, setDashboardData] = useState<DashboardResponse | null>(null);
@@ -713,37 +610,7 @@ function DashboardContent() {
   const [reservasStartDate, setReservasStartDate] = useState("");
   const [reservasEndDate, setReservasEndDate] = useState("");
   const [mainTab, setMainTab] = useState("dashboard");
-  const [datosSubTab, setDatosSubTab] = useState<string>(DATOS_SUB_VIAJES_ACTIVOS);
   const [operacionesSubTab, setOperacionesSubTab] = useState<string>(OPERACIONES_SUB_CONTROL);
-  const [logsCleanSearch, setLogsCleanSearch] = useState("");
-  const [logsCleanSearchDebounced, setLogsCleanSearchDebounced] = useState("");
-  const [logsCleanDateFrom, setLogsCleanDateFrom] = useState("");
-  const [logsCleanDateTo, setLogsCleanDateTo] = useState("");
-  const [logsCleanPage, setLogsCleanPage] = useState(1);
-  const [logsCleanRows, setLogsCleanRows] = useState<MoobizLogCleanRow[]>([]);
-  const [logsCleanTotal, setLogsCleanTotal] = useState(0);
-  const [logsCleanLoading, setLogsCleanLoading] = useState(false);
-  const [logsCleanError, setLogsCleanError] = useState<string | null>(null);
-  const [logsCleanColumnKeys, setLogsCleanColumnKeys] = useState<string[]>([]);
-  const [driversPage, setDriversPage] = useState(1);
-  const [driversRows, setDriversRows] = useState<MoobizDriverRow[]>([]);
-  const [driversTotal, setDriversTotal] = useState(0);
-  const [driversLoading, setDriversLoading] = useState(false);
-  const [driversError, setDriversError] = useState<string | null>(null);
-  const [driversEstadoFilter, setDriversEstadoFilter] = useState("__all__");
-  const [driversSucursalFilter, setDriversSucursalFilter] = useState("__all__");
-  const [driversGpsFilter, setDriversGpsFilter] = useState("__all__");
-  const [driversIdFilter, setDriversIdFilter] = useState("");
-  const [conductoresSyncPhase, setConductoresSyncPhase] = useState<
-    | "idle"
-    | "descargando"
-    | "reemplazando_tabla"
-    | "finalizado"
-    | "finalizado_con_advertencias"
-    | "error"
-  >("idle");
-  const [conductoresSyncDetail, setConductoresSyncDetail] = useState<string | null>(null);
-  const [conductoresSyncing, setConductoresSyncing] = useState(false);
   const [historyUserSearch, setHistoryUserSearch] = useState("");
   const [historyDateFrom, setHistoryDateFrom] = useState("");
   const [historyDateTo, setHistoryDateTo] = useState("");
@@ -806,29 +673,6 @@ function DashboardContent() {
   const [dashboardRefreshedAt, setDashboardRefreshedAt] = useState<Date | null>(null);
   const [dashboardAgeTick, setDashboardAgeTick] = useState(0);
 
-  const loadViajes = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/viajes?scope=all", { cache: "no-store" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || "No se pudieron cargar los viajes.");
-      const records = Array.isArray(data?.data) ? data.data : [];
-      setViajes(records);
-      setLastUpdate(new Date());
-      setSelectedIds([]);
-      setPage(1);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Error inesperado al cargar viajes.");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadViajes();
-  }, [loadViajes]);
-
   const setDatosSubInUrl = useCallback(
     (value: string) => {
       const p = new URLSearchParams(searchParams.toString());
@@ -874,27 +718,6 @@ function DashboardContent() {
     [pathname, router, searchParams],
   );
 
-  const datosSubAllowed = useMemo(
-    () =>
-      new Set<string>([
-        DATOS_SUB_VIAJES_ACTIVOS,
-        DATOS_SUB_CONDUCTORES,
-        DATOS_SUB_REGISTRO_ACTIVIDADES,
-        DATOS_SUB_DATOS_PENDIENTES,
-      ]),
-    [],
-  );
-
-  const handleDatosSubTabChange = useCallback(
-    (value: string) => {
-      if (!datosSubAllowed.has(value)) return;
-      setDatosSubTab(value);
-      setDatosSubInUrl(value);
-      if (value === DATOS_SUB_CONDUCTORES) setDriversPage(1);
-    },
-    [datosSubAllowed, setDatosSubInUrl],
-  );
-
   const operacionesSubAllowed = useMemo(
     () =>
       new Set<string>([
@@ -932,37 +755,13 @@ function DashboardContent() {
   useEffect(() => {
     if (mainTab !== "datos") return;
     const raw = searchParams.get("datosSub");
-    if (
-      raw === DATOS_SUB_VIAJES_ACTIVOS ||
-      raw === DATOS_SUB_CONDUCTORES ||
-      raw === DATOS_SUB_REGISTRO_ACTIVIDADES ||
-      raw === DATOS_SUB_DATOS_PENDIENTES
-    ) {
-      setDatosSubTab(raw);
-      if (raw === DATOS_SUB_CONDUCTORES) setDriversPage(1);
-      return;
-    }
-    setDatosSubTab(DATOS_SUB_VIAJES_ACTIVOS);
-    setDatosSubInUrl(DATOS_SUB_VIAJES_ACTIVOS);
+    if (raw === DATOS_SUB_DATOS_PENDIENTES) return;
+    setDatosSubInUrl(DATOS_SUB_DATOS_PENDIENTES);
   }, [mainTab, searchParams, setDatosSubInUrl]);
-
-  useEffect(() => {
-    const id = window.setTimeout(() => setLogsCleanSearchDebounced(logsCleanSearch), 400);
-    return () => window.clearTimeout(id);
-  }, [logsCleanSearch]);
-
-  useEffect(() => {
-    setLogsCleanPage(1);
-  }, [logsCleanDateFrom, logsCleanDateTo, logsCleanSearchDebounced]);
 
   useEffect(() => {
     setHistoryPage(1);
   }, [historyUserSearch, historyDateFrom, historyDateTo]);
-
-  useEffect(() => {
-    if (datosSubTab !== DATOS_SUB_REGISTRO_ACTIVIDADES) return;
-    setLogsCleanPage(1);
-  }, [datosSubTab]);
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
@@ -993,90 +792,6 @@ function DashboardContent() {
       setHistoryLoading(false);
     }
   }, [historyPage, historyUserSearch, historyDateFrom, historyDateTo]);
-
-  const loadLogsClean = useCallback(async () => {
-    setLogsCleanLoading(true);
-    setLogsCleanError(null);
-    try {
-      const p = new URLSearchParams();
-      p.set("page", String(logsCleanPage));
-      p.set("pageSize", String(LOGS_CLEAN_PAGE_SIZE));
-      const q = logsCleanSearchDebounced.trim();
-      if (q) p.set("q", q);
-      if (logsCleanDateFrom) p.set("dateFrom", logsCleanDateFrom);
-      if (logsCleanDateTo) p.set("dateTo", logsCleanDateTo);
-      const res = await fetch(`/api/moobiz-logs-clean?${p.toString()}`, { cache: "no-store" });
-      const body = (await res.json()) as {
-        data?: unknown[];
-        total?: number;
-        error?: string;
-      };
-      if (!res.ok) throw new Error(body?.error || "No se pudieron cargar los registros.");
-      const rows = Array.isArray(body.data)
-        ? (body.data.filter((r) => r && typeof r === "object") as MoobizLogCleanRow[])
-        : [];
-      setLogsCleanRows(rows);
-      setLogsCleanTotal(typeof body.total === "number" ? body.total : 0);
-      setLogsCleanColumnKeys((prev) => mergeColumnKeysPreferBatch(prev, rows));
-    } catch (e) {
-      setLogsCleanError(e instanceof Error ? e.message : String(e));
-      setLogsCleanRows([]);
-      setLogsCleanTotal(0);
-    } finally {
-      setLogsCleanLoading(false);
-    }
-  }, [logsCleanPage, logsCleanSearchDebounced, logsCleanDateFrom, logsCleanDateTo]);
-
-  const loadConductores = useCallback(async () => {
-    setDriversLoading(true);
-    setDriversError(null);
-    try {
-      let page = 1;
-      let totalFromApi = 0;
-      const allRows: MoobizDriverRow[] = [];
-
-      while (true) {
-        const p = new URLSearchParams();
-        p.set("page", String(page));
-        p.set("pageSize", String(DRIVERS_FETCH_BATCH_SIZE));
-        const res = await fetch(`/api/moobiz-drivers?${p.toString()}`, { cache: "no-store" });
-        const body = (await res.json()) as {
-          data?: MoobizDriverRow[];
-          total?: number;
-          error?: string;
-        };
-        if (!res.ok) throw new Error(body?.error || "No se pudieron cargar los conductores.");
-
-        const batch = Array.isArray(body.data) ? body.data : [];
-        const declaredTotal = typeof body.total === "number" ? body.total : 0;
-        allRows.push(...batch);
-        totalFromApi = Math.max(totalFromApi, declaredTotal);
-
-        if (batch.length < DRIVERS_FETCH_BATCH_SIZE) break;
-        if (totalFromApi > 0 && allRows.length >= totalFromApi) break;
-        page += 1;
-      }
-
-      setDriversRows(allRows);
-      setDriversTotal(totalFromApi > 0 ? totalFromApi : allRows.length);
-    } catch (e) {
-      setDriversError(e instanceof Error ? e.message : String(e));
-      setDriversRows([]);
-      setDriversTotal(0);
-    } finally {
-      setDriversLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (mainTab !== "datos" || datosSubTab !== DATOS_SUB_CONDUCTORES) return;
-    void loadConductores();
-  }, [mainTab, datosSubTab, loadConductores]);
-
-  useEffect(() => {
-    if (mainTab !== "datos" || datosSubTab !== DATOS_SUB_REGISTRO_ACTIVIDADES) return;
-    void loadLogsClean();
-  }, [mainTab, datosSubTab, loadLogsClean]);
 
   useEffect(() => {
     if (mainTab !== "historial") return;
@@ -1125,171 +840,11 @@ function DashboardContent() {
     return () => window.clearInterval(id);
   }, [dashboardRefreshedAt]);
 
-  const empresas = useMemo(() => {
-    return Array.from(new Set(viajes.map((v) => asText(v.empresa)).filter(Boolean))).sort();
-  }, [viajes]);
-
-  const estados = useMemo(() => {
-    return Array.from(new Set(viajes.map((v) => asText(v.estado)).filter(Boolean))).sort();
-  }, [viajes]);
-
-  const conductores = useMemo(() => {
-    return Array.from(new Set(viajes.map((v) => asText(v.conductor)).filter(Boolean))).sort();
-  }, [viajes]);
-
-  const logsCleanTotalPages = useMemo(
-    () => Math.max(1, Math.ceil(logsCleanTotal / LOGS_CLEAN_PAGE_SIZE)),
-    [logsCleanTotal],
-  );
-  const logsCleanPageClamped = Math.min(logsCleanPage, logsCleanTotalPages);
   const historyTotalPages = useMemo(
     () => Math.max(1, Math.ceil(historyTotal / HISTORY_PAGE_SIZE)),
     [historyTotal],
   );
   const historyPageClamped = Math.min(historyPage, historyTotalPages);
-
-  useEffect(() => {
-    if (datosSubTab !== DATOS_SUB_REGISTRO_ACTIVIDADES) {
-      setLogsCleanColumnKeys([]);
-    }
-  }, [datosSubTab]);
-
-  const filteredViajes = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return viajes.filter((v) => {
-      const empresaOk = empresaFilter === "TODAS" || asText(v.empresa) === empresaFilter;
-      const estadoOk = estadoFilter === "TODOS" || asText(v.estado) === estadoFilter;
-      const conductorOk =
-        conductorFilter === "TODOS" || asText(v.conductor) === conductorFilter;
-      const textOk =
-        !query ||
-        [
-          v.id,
-          v.empresa,
-          v.usuario,
-          v.conductor,
-          v.estado,
-          v.pasajero,
-          v.fecha,
-          v.producto,
-          v.monto,
-          v.origen,
-          v.destino,
-          v.operador,
-        ]
-          .map((x) => asText(x).toLowerCase())
-          .some((value) => value.includes(query));
-
-      return empresaOk && estadoOk && conductorOk && textOk;
-    });
-  }, [conductorFilter, empresaFilter, estadoFilter, search, viajes]);
-
-  const totalPages = Math.max(1, Math.ceil(filteredViajes.length / PAGE_SIZE));
-  const currentPage = Math.min(page, totalPages);
-
-  const pageItems = useMemo(() => {
-    const start = (currentPage - 1) * PAGE_SIZE;
-    return filteredViajes.slice(start, start + PAGE_SIZE);
-  }, [currentPage, filteredViajes]);
-
-  const driversEstadoOptions = useMemo(
-    () =>
-      Array.from(new Set(driversRows.map((row) => asText(row.estado).trim()).filter(Boolean))).sort(
-        (a, b) => a.localeCompare(b, "es"),
-      ),
-    [driversRows],
-  );
-  const driversSucursalOptions = useMemo(
-    () =>
-      Array.from(
-        new Set(driversRows.map((row) => asText(row.sucursal).trim()).filter(Boolean)),
-      ).sort((a, b) => a.localeCompare(b, "es")),
-    [driversRows],
-  );
-  const driversGpsOptions = useMemo(
-    () =>
-      Array.from(new Set(driversRows.map((row) => asText(row.gps).trim()).filter(Boolean))).sort(
-        (a, b) => a.localeCompare(b, "es"),
-      ),
-    [driversRows],
-  );
-  const filteredDriversRows = useMemo(() => {
-    const idQuery = driversIdFilter.trim().toLowerCase();
-    return driversRows.filter((row) => {
-      const estado = asText(row.estado).trim();
-      const sucursal = asText(row.sucursal).trim();
-      const gps = asText(row.gps).trim();
-      const idConductor = asText(row.id_conductor).trim();
-
-      const estadoOk = driversEstadoFilter === "__all__" || estado === driversEstadoFilter;
-      const sucursalOk = driversSucursalFilter === "__all__" || sucursal === driversSucursalFilter;
-      const gpsOk = driversGpsFilter === "__all__" || gps === driversGpsFilter;
-      const idOk = !idQuery || idConductor.toLowerCase().includes(idQuery);
-      return estadoOk && sucursalOk && gpsOk && idOk;
-    });
-  }, [
-    driversRows,
-    driversEstadoFilter,
-    driversSucursalFilter,
-    driversGpsFilter,
-    driversIdFilter,
-  ]);
-  const driversFilteredTotal = filteredDriversRows.length;
-  const driversTotalPages = Math.max(1, Math.ceil(driversFilteredTotal / DRIVERS_PAGE_SIZE));
-  const driversCurrentPage = Math.min(driversPage, driversTotalPages);
-  const driversPageRows = useMemo(() => {
-    const start = (driversCurrentPage - 1) * DRIVERS_PAGE_SIZE;
-    return filteredDriversRows.slice(start, start + DRIVERS_PAGE_SIZE);
-  }, [driversCurrentPage, filteredDriversRows]);
-
-  useEffect(() => {
-    setPage(1);
-  }, [empresaFilter, estadoFilter, conductorFilter, search]);
-  useEffect(() => {
-    setDriversPage(1);
-  }, [driversEstadoFilter, driversSucursalFilter, driversGpsFilter, driversIdFilter]);
-
-  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
-  const pageIds = pageItems.map((v) => asText(v.id)).filter(Boolean);
-  const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selectedSet.has(id));
-
-  const toggleRow = (id: string) => {
-    setSelectedIds((prev) =>
-      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id],
-    );
-  };
-
-  const togglePage = () => {
-    setSelectedIds((prev) => {
-      const prevSet = new Set(prev);
-      if (allPageSelected) {
-        return prev.filter((id) => !pageIds.includes(id));
-      }
-      pageIds.forEach((id) => prevSet.add(id));
-      return Array.from(prevSet);
-    });
-  };
-
-  const handleDelete = async (ids: string[]) => {
-    if (ids.length === 0) return;
-    setDeleting(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/viajes", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || "No se pudieron eliminar los viajes.");
-      await loadViajes();
-      triggerRefresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Error inesperado al eliminar.");
-    } finally {
-      setDeleting(false);
-    }
-  };
 
   const handleLogout = async () => {
     try {
@@ -1304,83 +859,17 @@ function DashboardContent() {
 
   const handleSync = async () => {
     setSyncing(true);
-    setError(null);
     try {
       const res = await fetch("/api/extract", { cache: "no-store" });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Fallo al actualizar desde Moobiz.");
-      await loadViajes();
+      setLastUpdate(new Date());
       triggerRefresh();
       setSyncNotice("Datos actualizados. El dashboard se sincronizo automaticamente.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Error inesperado al actualizar.");
+      setSyncNotice(err instanceof Error ? err.message : "Error inesperado al actualizar.");
     } finally {
       setSyncing(false);
-    }
-  };
-
-  const handleSyncConductores = async () => {
-    setConductoresSyncing(true);
-    setConductoresSyncPhase("descargando");
-    setConductoresSyncDetail("Descargando todos los conductores desde Moobiz…");
-    try {
-      const res = await fetch("/api/moobiz-drivers/sync", {
-        method: "POST",
-        credentials: "same-origin",
-        cache: "no-store",
-      });
-      const data = (await res.json()) as {
-        ok?: boolean;
-        error?: string;
-        fetched?: number;
-        upserted?: number;
-        finalDbCount?: number;
-        uniqueAfterDedupe?: number;
-        apiTotalDeclared?: number | null;
-        countMismatchWithApiTotal?: boolean;
-        validationErrors?: string[];
-      };
-
-      if (!res.ok && res.status !== 422) {
-        throw new Error(data?.error || "Fallo al sincronizar conductores.");
-      }
-
-      setConductoresSyncPhase("reemplazando_tabla");
-      setConductoresSyncDetail("Reemplazando tabla moobiz_drivers (transacción en base de datos)…");
-      await new Promise((r) => window.setTimeout(r, 400));
-
-      if (res.status === 422 || data?.ok === false) {
-        setConductoresSyncPhase("finalizado_con_advertencias");
-        const parts =
-          Array.isArray(data.validationErrors) && data.validationErrors.length > 0
-            ? data.validationErrors
-            : [data?.error || "La validación del sync no pasó; revisa el mensaje del servidor."];
-        const u = typeof data.uniqueAfterDedupe === "number" ? data.uniqueAfterDedupe : data.fetched;
-        const f = typeof data.finalDbCount === "number" ? data.finalDbCount : data.upserted;
-        setConductoresSyncDetail(
-          `${parts.join(" ")} Descargados (únicos): ${u ?? "?"}. Filas en tabla: ${f ?? "?"}.`,
-        );
-        await loadConductores();
-        return;
-      }
-
-      setConductoresSyncPhase("finalizado");
-      const u = typeof data.uniqueAfterDedupe === "number" ? data.uniqueAfterDedupe : data.fetched;
-      const f = typeof data.finalDbCount === "number" ? data.finalDbCount : data.upserted;
-      const apiT = data.apiTotalDeclared;
-      const tail =
-        apiT != null && typeof u === "number" && apiT !== u
-          ? ` (API declaró total=${apiT}; coincide la tabla con los ítems descargados: ${u}).`
-          : "";
-      setConductoresSyncDetail(
-        `Listo: ${u ?? "?"} conductores únicos descargados; ${f ?? "?"} filas en Supabase.${tail}`,
-      );
-      await loadConductores();
-    } catch (err) {
-      setConductoresSyncPhase("error");
-      setConductoresSyncDetail(err instanceof Error ? err.message : "Error inesperado.");
-    } finally {
-      setConductoresSyncing(false);
     }
   };
 
@@ -2096,7 +1585,7 @@ function DashboardContent() {
                 <Button
                   size="sm"
                   onClick={() => void handleSync()}
-                  disabled={syncing || loading}
+                  disabled={syncing}
                   className="h-8 shrink-0 bg-[#00e676] px-3 text-xs font-semibold text-[#0b1131] hover:bg-[#00c765] md:h-9 md:text-sm"
                 >
                   {syncing ? "Actualizando..." : "Actualizar"}
@@ -2129,7 +1618,7 @@ function DashboardContent() {
                 value="datos"
                 className="flex-1 text-xs data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
               >
-                Datos
+                Flota
               </TabsTrigger>
               <TabsTrigger
                 value="logs"
@@ -2156,615 +1645,8 @@ function DashboardContent() {
           }
         >
         <div className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-6 md:px-6">
-          <TabsContent value="datos" className="mt-0 outline-none">
-            <Tabs value={datosSubTab} onValueChange={handleDatosSubTabChange} className="w-full">
-              <TabsList className="mb-3 h-10 w-full max-w-4xl bg-slate-200/90 p-1">
-                <TabsTrigger
-                  value={DATOS_SUB_VIAJES_ACTIVOS}
-                  className="flex-1 text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm"
-                >
-                  Viajes Activos
-                </TabsTrigger>
-                <TabsTrigger
-                  value={DATOS_SUB_CONDUCTORES}
-                  className="flex-1 text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm"
-                >
-                  Conductores
-                </TabsTrigger>
-                <TabsTrigger
-                  value={DATOS_SUB_REGISTRO_ACTIVIDADES}
-                  className="flex-1 text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm"
-                >
-                  Registro logs
-                </TabsTrigger>
-                <TabsTrigger
-                  value={DATOS_SUB_DATOS_PENDIENTES}
-                  className="flex-1 text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm"
-                >
-                  Datos Pendientes
-                </TabsTrigger>
-              </TabsList>
-
-              <TabsContent value={DATOS_SUB_VIAJES_ACTIVOS} className="mt-0 space-y-4 outline-none">
-                <div className="rounded-lg border border-white/10 bg-[#0b1131] text-white shadow-sm">
-                  <div className="flex flex-col gap-2 border-t border-white/10 px-3 pt-2 pb-1 md:px-4">
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
-                    <Select value={empresaFilter} onValueChange={setEmpresaFilter}>
-                      <SelectTrigger className="h-9 w-full border-white/20 bg-white/10 text-xs text-white md:text-sm">
-                        <SelectValue placeholder="Empresa" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="TODAS">Todas las empresas</SelectItem>
-                        {empresas.map((empresa) => (
-                          <SelectItem key={empresa} value={empresa}>
-                            {empresa}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Select value={estadoFilter} onValueChange={setEstadoFilter}>
-                      <SelectTrigger className="h-9 w-full border-white/20 bg-white/10 text-xs text-white md:text-sm">
-                        <SelectValue placeholder="Estado" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="TODOS">Todos los estados</SelectItem>
-                        {estados.map((estado) => (
-                          <SelectItem key={estado} value={estado}>
-                            {estado}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Select value={conductorFilter} onValueChange={setConductorFilter}>
-                      <SelectTrigger className="h-9 w-full border-white/20 bg-white/10 text-xs text-white md:text-sm">
-                        <SelectValue placeholder="Conductor" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="TODOS">Todos los conductores</SelectItem>
-                        {conductores.map((conductor) => (
-                          <SelectItem key={conductor} value={conductor}>
-                            {conductor}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Input
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                      placeholder="Buscar..."
-                      className="h-9 border-white/20 bg-white/10 text-xs text-white placeholder:text-white/50 md:text-sm lg:col-span-2"
-                    />
-                    <div className="flex flex-wrap gap-2 sm:col-span-2 lg:col-span-2 xl:col-span-1 xl:justify-end">
-                      {selectedIds.length > 0 && (
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          onClick={() => void handleDelete(selectedIds)}
-                          disabled={deleting}
-                        >
-                          {deleting ? "..." : `Eliminar (${selectedIds.length})`}
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                  </div>
-                </div>
-
-                <Card className="border-slate-200 bg-white text-slate-900 shadow-sm">
-              <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 border-b border-slate-100 py-3">
-                <CardTitle className="text-base font-semibold">Viajes activos</CardTitle>
-                <Badge variant="secondary" className="bg-slate-100 text-slate-700">
-                  Mostrando {pageItems.length} de {filteredViajes.length}
-                </Badge>
-              </CardHeader>
-              <CardContent className="space-y-4 pt-4">
-                {error && (
-                  <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
-                    {error}
-                  </p>
-                )}
-                <div className="overflow-hidden rounded-lg border border-slate-200">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="border-slate-200 bg-slate-50 hover:bg-slate-50">
-                        <TableHead className="w-10 text-slate-700">
-                          <input
-                            type="checkbox"
-                            checked={allPageSelected}
-                            onChange={togglePage}
-                            aria-label="Seleccionar pagina"
-                          />
-                        </TableHead>
-                        <TableHead className="text-xs font-semibold text-slate-700">ID</TableHead>
-                        <TableHead className="text-xs font-semibold text-slate-700">Empresa</TableHead>
-                        <TableHead className="text-xs font-semibold text-slate-700">Usuario</TableHead>
-                        <TableHead className="text-xs font-semibold text-slate-700">Conductor</TableHead>
-                        <TableHead className="text-xs font-semibold text-slate-700">Estado</TableHead>
-                        <TableHead className="text-xs font-semibold text-slate-700">Pasajero</TableHead>
-                        <TableHead className="text-xs font-semibold text-slate-700">Fecha</TableHead>
-                        <TableHead className="text-xs font-semibold text-slate-700">Producto</TableHead>
-                        <TableHead className="text-xs font-semibold text-slate-700">Monto</TableHead>
-                        <TableHead className="text-xs font-semibold text-slate-700">Origen</TableHead>
-                        <TableHead className="text-xs font-semibold text-slate-700">Destino</TableHead>
-                        <TableHead className="text-xs font-semibold text-slate-700">Operador</TableHead>
-                        <TableHead className="text-xs font-semibold text-slate-700">Acciones</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {loading ? (
-                        <TableRow>
-                          <TableCell colSpan={14} className="py-10 text-center text-sm text-slate-500">
-                            Cargando datos...
-                          </TableCell>
-                        </TableRow>
-                      ) : pageItems.length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={14} className="py-10 text-center text-sm text-slate-500">
-                            No hay viajes para los filtros seleccionados.
-                          </TableCell>
-                        </TableRow>
-                      ) : (
-                        pageItems.map((viaje) => {
-                          const id = asText(viaje.id);
-                          return (
-                            <TableRow key={id} className="border-slate-100 text-sm hover:bg-slate-50/80">
-                              <TableCell>
-                                <input
-                                  type="checkbox"
-                                  checked={selectedSet.has(id)}
-                                  onChange={() => toggleRow(id)}
-                                  aria-label={`Seleccionar viaje ${id}`}
-                                />
-                              </TableCell>
-                              <TableCell className="font-mono text-xs">{id}</TableCell>
-                              <TableCell className="max-w-[140px] truncate text-xs">
-                                {asText(viaje.empresa)}
-                              </TableCell>
-                              <TableCell className="max-w-[120px] truncate text-xs">
-                                {asText(viaje.usuario)}
-                              </TableCell>
-                              <TableCell className="max-w-[120px] truncate text-xs">
-                                {asText(viaje.conductor)}
-                              </TableCell>
-                              <TableCell className="text-xs">{asText(viaje.estado)}</TableCell>
-                              <TableCell className="max-w-[100px] truncate text-xs">
-                                {asText(viaje.pasajero)}
-                              </TableCell>
-                              <TableCell className="whitespace-normal text-xs">
-                                {asText(viaje.fecha)}
-                              </TableCell>
-                              <TableCell className="max-w-[100px] truncate text-xs">
-                                {asText(viaje.producto)}
-                              </TableCell>
-                              <TableCell className="text-xs">{formatMoney(viaje.monto)}</TableCell>
-                              <TableCell className="max-w-[140px] truncate text-xs">
-                                {asText(viaje.origen)}
-                              </TableCell>
-                              <TableCell className="max-w-[140px] truncate text-xs">
-                                {asText(viaje.destino)}
-                              </TableCell>
-                              <TableCell className="max-w-[100px] truncate text-xs">
-                                {asText(viaje.operador)}
-                              </TableCell>
-                              <TableCell>
-                                <Button
-                                  variant="destructive"
-                                  size="xs"
-                                  onClick={() => void handleDelete([id])}
-                                  disabled={deleting}
-                                >
-                                  Eliminar
-                                </Button>
-                              </TableCell>
-                            </TableRow>
-                          );
-                        })
-                      )}
-                    </TableBody>
-                  </Table>
-                </div>
-                <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
-                  <p className="text-xs text-slate-600">
-                    Pagina {currentPage} de {totalPages}
-                  </p>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setPage((prev) => Math.max(1, prev - 1))}
-                      disabled={currentPage === 1}
-                    >
-                      Anterior
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))}
-                      disabled={currentPage >= totalPages}
-                    >
-                      Siguiente
-                    </Button>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-              </TabsContent>
-
-              <TabsContent value={DATOS_SUB_CONDUCTORES} className="mt-0 space-y-4 outline-none">
-                <Card className="border-slate-200 bg-white text-slate-900 shadow-sm">
-                  <CardHeader className="flex flex-col gap-3 border-b border-slate-100 py-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
-                    <div className="space-y-1">
-                      <CardTitle className="text-base font-semibold">Conductores (Moobiz)</CardTitle>
-                      <p className="text-xs text-slate-600">
-                        Datos desde Supabase; la sincronización con Moobiz se ejecuta en el servidor.
-                      </p>
-                    </div>
-                    <div className="flex flex-col items-stretch gap-2 sm:items-end">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="default"
-                        className="bg-[#00e676] font-semibold text-[#0b1131] hover:bg-[#00c765]"
-                        disabled={conductoresSyncing || driversLoading}
-                        onClick={() => void handleSyncConductores()}
-                      >
-                        {conductoresSyncing
-                          ? conductoresSyncPhase === "descargando"
-                            ? "Descargando…"
-                            : conductoresSyncPhase === "reemplazando_tabla"
-                              ? "Reemplazando tabla…"
-                              : "Sincronizando…"
-                          : "Actualizar conductores"}
-                      </Button>
-                      {conductoresSyncPhase !== "idle" ? (
-                        <p
-                          className={`max-w-md text-right text-xs ${
-                            conductoresSyncPhase === "finalizado_con_advertencias"
-                              ? "text-amber-900"
-                              : conductoresSyncPhase === "error"
-                                ? "text-red-800"
-                                : "text-slate-600"
-                          }`}
-                        >
-                          <span className="font-medium capitalize text-slate-800">
-                            {conductoresSyncPhase === "descargando"
-                              ? "Descargando"
-                              : conductoresSyncPhase === "reemplazando_tabla"
-                                ? "Reemplazando tabla"
-                                : conductoresSyncPhase === "finalizado"
-                                  ? "Finalizado"
-                                  : conductoresSyncPhase === "finalizado_con_advertencias"
-                                    ? "Finalizado con advertencias"
-                                    : conductoresSyncPhase === "error"
-                                      ? "Error"
-                                      : conductoresSyncPhase}
-                            </span>
-                          {conductoresSyncDetail ? (
-                            <>
-                              {": "}
-                              {conductoresSyncDetail}
-                            </>
-                          ) : null}
-                        </p>
-                      ) : null}
-                    </div>
-                  </CardHeader>
-                  <CardContent className="space-y-4 pt-4">
-                    {driversError ? (
-                      <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
-                        {driversError}
-                      </p>
-                    ) : null}
-                    <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
-                      <div className="space-y-1">
-                        <Label className="text-[11px] font-medium text-slate-700">Estado</Label>
-                        <Select value={driversEstadoFilter} onValueChange={setDriversEstadoFilter}>
-                          <SelectTrigger className="h-8 text-xs">
-                            <SelectValue placeholder="Todos" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="__all__">Todos</SelectItem>
-                            {driversEstadoOptions.map((value) => (
-                              <SelectItem key={value} value={value}>
-                                {value}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-[11px] font-medium text-slate-700">Sucursal</Label>
-                        <Select value={driversSucursalFilter} onValueChange={setDriversSucursalFilter}>
-                          <SelectTrigger className="h-8 text-xs">
-                            <SelectValue placeholder="Todas" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="__all__">Todas</SelectItem>
-                            {driversSucursalOptions.map((value) => (
-                              <SelectItem key={value} value={value}>
-                                {value}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-[11px] font-medium text-slate-700">GPS</Label>
-                        <Select value={driversGpsFilter} onValueChange={setDriversGpsFilter}>
-                          <SelectTrigger className="h-8 text-xs">
-                            <SelectValue placeholder="Todos" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="__all__">Todos</SelectItem>
-                            {driversGpsOptions.map((value) => (
-                              <SelectItem key={value} value={value}>
-                                {value}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-1">
-                        <Label htmlFor="drivers-id-filter" className="text-[11px] font-medium text-slate-700">
-                          ID Conductor
-                        </Label>
-                        <Input
-                          id="drivers-id-filter"
-                          value={driversIdFilter}
-                          onChange={(e) => setDriversIdFilter(e.target.value)}
-                          placeholder="Buscar por ID..."
-                          className="h-8 text-xs"
-                          autoComplete="off"
-                        />
-                      </div>
-                    </div>
-                    <div className="overflow-x-auto rounded-lg border border-slate-200">
-                      <Table>
-                        <TableHeader>
-                          <TableRow className="border-slate-200 bg-slate-50 hover:bg-slate-50">
-                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">Estado</TableHead>
-                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">Sucursal</TableHead>
-                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">En que distrito vive</TableHead>
-                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">Turno</TableHead>
-                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">ID Conductor</TableHead>
-                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">Nombre Conductor</TableHead>
-                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">Telefono</TableHead>
-                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">Calificacion</TableHead>
-                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">GPS</TableHead>
-                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">TP. Vehiculo</TableHead>
-                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">PERMISO PLACA</TableHead>
-                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">Categoría Brevete</TableHead>
-                            <TableHead className="px-2 py-2 text-[11px] font-semibold text-slate-700">Motivo Deshabilitado</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {driversLoading ? (
-                            <TableRow>
-                              <TableCell colSpan={13} className="py-10 text-center text-sm text-slate-500">
-                                Cargando conductores…
-                              </TableCell>
-                            </TableRow>
-                          ) : driversPageRows.length === 0 ? (
-                            <TableRow>
-                              <TableCell colSpan={13} className="py-10 text-center text-sm text-slate-500">
-                                No hay registros para los filtros aplicados.
-                              </TableCell>
-                            </TableRow>
-                          ) : (
-                            driversPageRows.map((row, idx) => (
-                              <TableRow
-                                key={`${asText(row.id_conductor)}-${idx}`}
-                                className="border-slate-100 text-sm hover:bg-slate-50/80"
-                              >
-                                <TableCell className="px-2 py-2 text-[11px]">{asText(row.estado)}</TableCell>
-                                <TableCell className="px-2 py-2 text-[11px]">{asText(row.sucursal)}</TableCell>
-                                <TableCell className="px-2 py-2 text-[11px]">{asText(row.distrito_vive)}</TableCell>
-                                <TableCell className="px-2 py-2 text-[11px]">{asText(row.turno)}</TableCell>
-                                <TableCell className="px-2 py-2 font-mono text-[11px]">{asText(row.id_conductor)}</TableCell>
-                                <TableCell className="px-2 py-2 text-[11px]">{asText(row.nombre_conductor)}</TableCell>
-                                <TableCell className="px-2 py-2 text-[11px]">{asText(row.telefono)}</TableCell>
-                                <TableCell className="px-2 py-2 text-[11px]">{asText(row.calificacion)}</TableCell>
-                                <TableCell className="px-2 py-2 text-[11px]">{asText(row.gps)}</TableCell>
-                                <TableCell className="px-2 py-2 text-[11px]">{asText(row.tp_vehiculo)}</TableCell>
-                                <TableCell className="px-2 py-2 text-[11px]">{asText(row.permiso_placa)}</TableCell>
-                                <TableCell className="px-2 py-2 text-[11px]">{asText(row.categoria_brevete)}</TableCell>
-                                <TableCell className="px-2 py-2 text-[11px]">{asText(row.motivo_deshabilitado)}</TableCell>
-                              </TableRow>
-                            ))
-                          )}
-                        </TableBody>
-                      </Table>
-                    </div>
-                    <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
-                      <p className="text-xs text-slate-600">
-                        Página {driversCurrentPage} de {driversTotalPages} · {driversTotal} conductor
-                        {driversTotal === 1 ? "" : "es"} cargado{driversTotal === 1 ? "" : "s"} ·{" "}
-                        {driversFilteredTotal} visible{driversFilteredTotal === 1 ? "" : "s"} con filtros
-                      </p>
-                      <div className="flex gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setDriversPage((prev) => Math.max(1, prev - 1))}
-                          disabled={driversCurrentPage <= 1 || driversLoading}
-                        >
-                          Anterior
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setDriversPage((prev) => Math.min(driversTotalPages, prev + 1))}
-                          disabled={driversCurrentPage >= driversTotalPages || driversLoading}
-                        >
-                          Siguiente
-                        </Button>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </TabsContent>
-
-              <TabsContent value={DATOS_SUB_REGISTRO_ACTIVIDADES} className="mt-0 space-y-4 outline-none">
-                <div className="rounded-lg border border-white/10 bg-[#0b1131] text-white shadow-sm">
-                  <div className="flex flex-col gap-3 border-t border-white/10 px-3 pt-2 pb-1 md:px-4">
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-12 lg:items-end">
-                      <div className="flex flex-col gap-1 lg:col-span-5">
-                        <Label htmlFor="logs-clean-search" className="text-[10px] font-medium uppercase tracking-wide text-white/70">
-                          Buscar (session o target)
-                        </Label>
-                        <Input
-                          id="logs-clean-search"
-                          value={logsCleanSearch}
-                          onChange={(e) => setLogsCleanSearch(e.target.value)}
-                          placeholder="id_session o id_target…"
-                          className="h-9 border-white/20 bg-white/10 text-xs text-white placeholder:text-white/50 md:text-sm"
-                          autoComplete="off"
-                        />
-                      </div>
-                      <div className="flex flex-col gap-1 sm:col-span-1 lg:col-span-3">
-                        <Label htmlFor="logs-clean-from" className="text-[10px] font-medium uppercase tracking-wide text-white/70">
-                          Desde (date_created)
-                        </Label>
-                        <Input
-                          id="logs-clean-from"
-                          type="date"
-                          value={logsCleanDateFrom}
-                          onChange={(e) => setLogsCleanDateFrom(e.target.value)}
-                          className="h-9 border-white/20 bg-white/10 text-xs text-white md:text-sm [color-scheme:dark]"
-                        />
-                      </div>
-                      <div className="flex flex-col gap-1 sm:col-span-1 lg:col-span-3">
-                        <Label htmlFor="logs-clean-to" className="text-[10px] font-medium uppercase tracking-wide text-white/70">
-                          Hasta (date_created)
-                        </Label>
-                        <Input
-                          id="logs-clean-to"
-                          type="date"
-                          value={logsCleanDateTo}
-                          onChange={(e) => setLogsCleanDateTo(e.target.value)}
-                          className="h-9 border-white/20 bg-white/10 text-xs text-white md:text-sm [color-scheme:dark]"
-                        />
-                      </div>
-                    </div>
-                    <p className="text-[10px] text-white/55">
-                      Solo lectura: datos sincronizados desde Moobiz; no se pueden editar ni eliminar aquí.
-                    </p>
-                  </div>
-                </div>
-
-                <Card className="border-slate-200 bg-white text-slate-900 shadow-sm">
-                  <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 border-b border-slate-100 py-3">
-                    <CardTitle className="text-base font-semibold">Registro de logs (Moobiz)</CardTitle>
-                    <Badge variant="secondary" className="bg-slate-100 text-slate-700">
-                      {logsCleanTotal} registro{logsCleanTotal === 1 ? "" : "s"}
-                    </Badge>
-                  </CardHeader>
-                  <CardContent className="space-y-4 pt-4">
-                    {logsCleanError && (
-                      <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
-                        {logsCleanError}
-                      </p>
-                    )}
-                    <div className="overflow-x-auto rounded-lg border border-slate-200">
-                      <Table>
-                        <TableHeader>
-                          <TableRow className="border-slate-200 bg-slate-50 hover:bg-slate-50">
-                            {logsCleanColumnKeys.length > 0 ? (
-                              logsCleanColumnKeys.map((col) => (
-                                <TableHead
-                                  key={col}
-                                  className="max-w-[220px] whitespace-nowrap text-xs font-semibold text-slate-700"
-                                  title={col}
-                                >
-                                  {col}
-                                </TableHead>
-                              ))
-                            ) : (
-                              <TableHead className="text-xs font-semibold text-slate-700">—</TableHead>
-                            )}
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {logsCleanLoading ? (
-                            <TableRow>
-                              <TableCell
-                                colSpan={Math.max(1, logsCleanColumnKeys.length)}
-                                className="py-10 text-center text-sm text-slate-500"
-                              >
-                                Cargando registros…
-                              </TableCell>
-                            </TableRow>
-                          ) : logsCleanRows.length === 0 ? (
-                            <TableRow>
-                              <TableCell
-                                colSpan={Math.max(1, logsCleanColumnKeys.length)}
-                                className="py-10 text-center text-sm text-slate-500"
-                              >
-                                No hay registros para los filtros seleccionados.
-                              </TableCell>
-                            </TableRow>
-                          ) : (
-                            logsCleanRows.map((row, rowIdx) => {
-                              const rk =
-                                row.id != null && String(row.id).length > 0
-                                  ? String(row.id)
-                                  : `p${logsCleanPage}-r${rowIdx}`;
-                              return (
-                                <TableRow
-                                  key={rk}
-                                  className="border-slate-100 text-sm hover:bg-slate-50/80"
-                                >
-                                  {logsCleanColumnKeys.map((col) => {
-                                    const { text, title } = formatLogCleanCell(col, row[col]);
-                                    return (
-                                      <TableCell
-                                        key={`${rk}-${col}`}
-                                        className="max-w-[220px] truncate align-top font-mono text-xs text-slate-800"
-                                        title={title ?? (text.length > 60 ? text : undefined)}
-                                      >
-                                        {text}
-                                      </TableCell>
-                                    );
-                                  })}
-                                </TableRow>
-                              );
-                            })
-                          )}
-                        </TableBody>
-                      </Table>
-                    </div>
-                    <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
-                      <p className="text-xs text-slate-600">
-                        Página {logsCleanPageClamped} de {logsCleanTotalPages} · {LOGS_CLEAN_PAGE_SIZE} por página
-                      </p>
-                      <div className="flex gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setLogsCleanPage((prev) => Math.max(1, prev - 1))}
-                          disabled={logsCleanPageClamped <= 1 || logsCleanLoading}
-                        >
-                          Anterior
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() =>
-                            setLogsCleanPage((prev) => Math.min(logsCleanTotalPages, prev + 1))
-                          }
-                          disabled={logsCleanPageClamped >= logsCleanTotalPages || logsCleanLoading}
-                        >
-                          Siguiente
-                        </Button>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </TabsContent>
-              <TabsContent value={DATOS_SUB_DATOS_PENDIENTES} className="mt-0 space-y-4 outline-none">
-                <DatosPendientesTable />
-              </TabsContent>
-            </Tabs>
+          <TabsContent value="datos" className="mt-0 space-y-4 outline-none">
+            <DatosPendientesTable />
           </TabsContent>
 
           <TabsContent value="operaciones" className="mt-0 outline-none">

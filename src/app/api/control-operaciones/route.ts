@@ -25,6 +25,9 @@ const DRIVER_SELECT = [
 const DRIVERS_INTERNAL_CHUNK = 150;
 const MAX_DRIVER_IDS_SERV = 500;
 const CONTROL_LIMIT = 50_000;
+const DRIVER_LIVE_AVAILABILITY_CHUNK = 200;
+
+type DriverLiveAvailability = "online" | "busy" | "offline";
 
 function nowMs(): number {
   return Date.now();
@@ -103,6 +106,41 @@ async function fetchAllApprovedDrivers(): Promise<{ drivers: ControlDriverExcelR
     page += 1;
   }
   return { drivers: all, total };
+}
+
+function normalizeDriverLiveAvailability(value: unknown): DriverLiveAvailability {
+  const raw = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  if (raw === "online") return "online";
+  if (raw === "busy") return "busy";
+  return "offline";
+}
+
+async function fetchDriverLiveAvailabilityByIds(
+  driverIds: string[],
+): Promise<Record<string, DriverLiveAvailability>> {
+  const sb = getSupabaseAdmin();
+  const out: Record<string, DriverLiveAvailability> = {};
+  const uniq = [...new Set(driverIds.map((id) => String(id).trim()).filter(Boolean))];
+  for (let i = 0; i < uniq.length; i += DRIVER_LIVE_AVAILABILITY_CHUNK) {
+    const part = uniq.slice(i, i + DRIVER_LIVE_AVAILABILITY_CHUNK);
+    if (part.length === 0) continue;
+    const { data, error } = await sb
+      .schema("vista")
+      .from("vw_driver_live_raw_flat")
+      .select("id_user,availability")
+      .in("id_user", part);
+    if (error) throw error;
+    for (const raw of data || []) {
+      if (!raw || typeof raw !== "object") continue;
+      const row = raw as Record<string, unknown>;
+      const idUser = String(row.id_user ?? "").trim();
+      if (!idUser) continue;
+      out[idUser] = normalizeDriverLiveAvailability(row.availability);
+    }
+  }
+  return out;
 }
 
 async function fetchServCountsByDriverIds(drIds: string[]): Promise<Record<string, number>> {
@@ -307,6 +345,12 @@ export async function GET(request: NextRequest) {
     const { drivers, total } = await fetchAllApprovedDrivers();
     const msDrivers = logBlock(`drivers approved total=${drivers.length}`, tDrivers);
 
+    const tGps = nowMs();
+    const gpsAvailabilityById = await fetchDriverLiveAvailabilityByIds(
+      drivers.map((driver) => driver.id_conductor),
+    );
+    const msGps = logBlock("gps availability from vw_driver_live_raw_flat", tGps);
+
     const tControl = nowMs();
     const controlRows = await fetchControlRows();
     const msControl = logBlock(`control_operaciones rows=${controlRows.length}`, tControl);
@@ -318,6 +362,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       drivers,
+      gpsAvailabilityById,
       controlById,
       total,
       approvedCount: drivers.length,
@@ -328,6 +373,7 @@ export async function GET(request: NextRequest) {
           "Antes: mezcla de datasets pesados en un solo request. Ahora: solo universo aprobado + control en carga base; enriquecimiento pesado sigue en parciales separados y acotados.",
         timingsMs: {
           drivers: msDrivers,
+          gps: msGps,
           control: msControl,
           total: nowMs() - tRequest,
         },

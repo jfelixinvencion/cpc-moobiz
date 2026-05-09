@@ -75,7 +75,9 @@ export function semaforoSwatch(semaforo: string | null | undefined): { className
     return { className: "bg-emerald-500", label: s };
   if (lower.includes("rojo") || lower === "r" || lower === "3")
     return { className: "bg-red-500", label: s };
+  if (lower.includes("naranj"))
+    return { className: "bg-orange-500", label: s };
   if (lower.includes("amar") || lower === "a" || lower === "2")
-    return { className: "bg-amber-400", label: s };
+    return { className: "bg-yellow-400", label: s };
   return { className: "bg-slate-400", label: s };
 }

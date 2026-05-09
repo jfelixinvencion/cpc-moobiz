@@ -28,6 +28,7 @@ type LiveDriverMapProps = {
   plate: string;
   iconUrl?: string;
   nearbyServices?: NearbyServiceMarker[];
+  serviceDestination?: import("@/lib/moobiz-live-driver-location-client").DriverLiveServiceDestination | null;
 };
 
 export type LiveDriverGpsDialogState = {

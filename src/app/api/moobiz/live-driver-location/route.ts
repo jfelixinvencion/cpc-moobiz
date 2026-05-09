@@ -58,6 +58,56 @@ type MaestraNearbyRow = {
   prioridad_mapa?: unknown;
 };
 
+/**
+ * Destino del servicio desde `vista.vw_driver_live_raw_flat` (solo lectura).
+ * Requiere fila con `id_user` = ID conductor, `availability = busy` y coordenadas de destino válidas.
+ */
+async function fetchServiceDestinationFromFlat(idUserRaw: string): Promise<{
+  lat: number;
+  lng: number;
+  se_id: string;
+  name: string;
+  se_dst_address: string;
+} | null> {
+  const idUser = idUserRaw.trim();
+  if (!idUser) return null;
+  try {
+    const { client } = getSupabaseServerClient();
+    const { data, error } = await client
+      .schema("vista")
+      .from("vw_driver_live_raw_flat")
+      .select("id_user, availability, se_dst_lat, se_dst_lng, se_id, name, se_dst_address")
+      .eq("id_user", idUser)
+      .limit(1);
+    if (error) {
+      console.warn("[live-driver-location] vw_driver_live_raw_flat:", error.message);
+      return null;
+    }
+    const row = Array.isArray(data) && data[0] && typeof data[0] === "object" ? (data[0] as Record<string, unknown>) : null;
+    if (!row) return null;
+    const rowUser = asText(row.id_user);
+    if (rowUser !== idUser) return null;
+    const av = asText(row.availability).toLowerCase();
+    if (av !== "busy") return null;
+    const lat = asNumber(row.se_dst_lat);
+    const lng = asNumber(row.se_dst_lng);
+    if (lat === null || lng === null) return null;
+    return {
+      lat,
+      lng,
+      se_id: asText(row.se_id),
+      name: asText(row.name),
+      se_dst_address: asText(row.se_dst_address),
+    };
+  } catch (e) {
+    console.warn(
+      "[live-driver-location] fetchServiceDestinationFromFlat:",
+      e instanceof Error ? e.message : e,
+    );
+    return null;
+  }
+}
+
 async function fetchNearbyServicesForMap(): Promise<NearbyMoobizServiceForMap[]> {
   try {
     const { client } = getSupabaseServerClient();
@@ -296,6 +346,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
 
   const nearbyServicesPromise = fetchNearbyServicesForMap();
+  const idUserParam = asText(request.nextUrl.searchParams.get("id_user"));
 
   try {
     let token = await getMoobizBearerForRequest();
@@ -307,7 +358,13 @@ export async function GET(request: NextRequest): Promise<Response> {
 
     if (item) {
       const nearbyServices = await nearbyServicesPromise;
-      return NextResponse.json({ ok: true, item, nearbyServices });
+      const serviceDestination = idUserParam ? await fetchServiceDestinationFromFlat(idUserParam) : null;
+      return NextResponse.json({
+        ok: true,
+        item,
+        nearbyServices,
+        ...(idUserParam ? { serviceDestination } : {}),
+      });
     }
 
     if (needFreshToken) {
@@ -316,7 +373,13 @@ export async function GET(request: NextRequest): Promise<Response> {
       ({ item } = await tryLocateWithToken(fresh, variants, matchName));
       if (item) {
         const nearbyServices = await nearbyServicesPromise;
-        return NextResponse.json({ ok: true, item, nearbyServices });
+        const serviceDestination = idUserParam ? await fetchServiceDestinationFromFlat(idUserParam) : null;
+        return NextResponse.json({
+          ok: true,
+          item,
+          nearbyServices,
+          ...(idUserParam ? { serviceDestination } : {}),
+        });
       }
     }
 

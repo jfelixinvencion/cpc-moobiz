@@ -5,9 +5,6 @@
  * IMPORTANTE: el match es ESTRICTAMENTE case-sensitive contra los strings
  * que devuelve el SQL. Respetar capitalización tal cual:
  *   "Aceptado", "Iniciado", "Esperando", "En camino" (c minúscula), "Llegado".
- *
- * Independiente de `conductor-estado.ts`, que sigue alimentando
- * "Conductores en el tiempo" sobre `viajes_activos`.
  */
 
 /**

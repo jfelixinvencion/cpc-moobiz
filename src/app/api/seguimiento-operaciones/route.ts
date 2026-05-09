@@ -193,7 +193,7 @@ export async function GET(request: Request): Promise<Response> {
       prioridad_mapa: asNumber(row.prioridad_mapa),
     }));
 
-    /** Mismas reglas que `scope=matrixRows` excepto: NO filtra por empresa ni producto. */
+    /** Filas con conductor y fecha dentro del rango (sin filtro por empresa ni producto). */
     const matrixRows = mappedRows.filter((row) => {
       if (!row.conductor) return false;
       const date = parseDateFromMapped(row);

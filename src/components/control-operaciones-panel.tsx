@@ -2,7 +2,15 @@
 
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { format } from "date-fns";
-import { ExternalLink, Loader2, MapPin, ParkingSquare } from "lucide-react";
+import {
+  Car,
+  ExternalLink,
+  Loader2,
+  MapPin,
+  ParkingSquare,
+  Radar,
+  RefreshCw,
+} from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -32,25 +40,44 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import type { NearbyServiceMarker } from "@/components/LiveDriverMap";
+import {
+  GPS_MULTI_OPTIONS,
+  type DriverLiveAvailability,
+  gpsTableLabelFromAvailability,
+  rowMatchesGpsMultiFilter,
+} from "@/lib/control-operaciones-gps-filter";
 import type { ControlDriverExcelRow } from "@/lib/control-operaciones-map";
 import { semaforoSwatch } from "@/lib/control-operaciones-map";
-import type { NearbyServiceMarker } from "@/components/LiveDriverMap";
+import {
+  formatRefreshGpsToastSuccess,
+  runRefreshGpsRawAndRefetch,
+} from "@/lib/control-operaciones-refresh-gps";
+import {
+  fetchLiveDriverLocationByConductorName,
+  type DriverLiveLocationApiResponse,
+  type DriverLiveLocationItem,
+  type DriverLiveServiceDestination,
+} from "@/lib/moobiz-live-driver-location-client";
 
 const ROW_H = 44;
 const CHUNK_NAMES = 55;
 const GLOBAL_ALL = "__all__";
-const GPS_ALL = "__all__";
+
+/** Barra de acciones Control de operaciones: estilos unificados (solo apariencia). */
+const TOOLBAR_BTN_PRIMARY =
+  "h-8 min-h-8 px-2.5 text-xs font-medium shadow-sm border border-slate-700 bg-slate-800 text-white hover:bg-slate-700 hover:border-slate-600";
+const TOOLBAR_BTN_SECONDARY =
+  "h-8 min-h-8 gap-1.5 px-2.5 text-xs font-medium shadow-sm border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:border-slate-300 hover:text-slate-900";
+/** Destacado respecto a secundarios, sin gradientes ni colores saturados. */
+const TOOLBAR_BTN_GPS =
+  "h-8 min-h-8 gap-1.5 px-2.5 text-xs font-medium shadow-sm border-indigo-200 bg-indigo-50/90 text-indigo-950 hover:bg-indigo-100 hover:border-indigo-300 hover:text-indigo-950";
 const SOLICITANTE_ALL = "__all__";
 const SOLICITANTE_EMPTY = "__empty__";
 const GPS_ICON_COLOR_NEUTRAL = "#cbd5e1";
 const GPS_ICON_COLOR_ONLINE = "#22c55e";
 const GPS_ICON_COLOR_BUSY = "#f97316";
 const GPS_ICON_COLOR_OFFLINE = "#94a3b8";
-
-/**
- * Ubicación en vivo Moobiz: solo desde el clic del ícono GPS; proxy servidor con token en BD.
- */
-const MOOBIZ_LIVE_DRIVER_LOCATION_API = "/api/moobiz/live-driver-location";
 
 type LiveDriverMapProps = {
   lat: number;
@@ -59,6 +86,7 @@ type LiveDriverMapProps = {
   plate: string;
   iconUrl?: string;
   nearbyServices?: NearbyServiceMarker[];
+  serviceDestination?: DriverLiveServiceDestination | null;
 };
 
 /** Valores internos del multi-filtro de semáforo (cada fila se clasifica a un bucket). */
@@ -71,42 +99,6 @@ const SEMAFORO_MULTI_OPTIONS: { value: string; label: string }[] = [
   { value: "naranja", label: "Naranja" },
   { value: "rojo", label: "Rojo" },
 ];
-
-type DriverLiveAvailability = "online" | "busy" | "offline";
-
-type DriverLiveLocationItem = {
-  full_name: string;
-  plate: string;
-  availability: DriverLiveAvailability;
-  lat: number;
-  lng: number;
-  code: string;
-  date_tracked: string;
-  txt_tracked: string;
-  icon: string;
-  parked_address?: string | null;
-};
-
-type DriverLiveLocationApiResponse = {
-  ok: boolean;
-  msg?: string;
-  item: DriverLiveLocationItem | null;
-  nearbyServices?: NearbyServiceMarker[];
-};
-
-async function fetchLiveDriverLocationByConductorName(
-  conductorName: string,
-): Promise<DriverLiveLocationApiResponse> {
-  const sp = new URLSearchParams({ query: conductorName });
-  const res = await fetch(`${MOOBIZ_LIVE_DRIVER_LOCATION_API}?${sp.toString()}`, { cache: "no-store" });
-  const body = (await res.json()) as DriverLiveLocationApiResponse;
-  return {
-    ok: Boolean(body?.ok),
-    msg: body?.msg,
-    item: body?.item ?? null,
-    nearbyServices: Array.isArray(body?.nearbyServices) ? body.nearbyServices : [],
-  };
-}
 
 function rowSemaforoBucket(raw: string | null | undefined): string {
   if (raw === undefined) return SEMAFORO_MULTI_SIN;
@@ -141,6 +133,7 @@ type ControlCell = { solicitante: string | null; observacion: string | null };
 
 type ApiPage = {
   drivers: ControlDriverExcelRow[];
+  gpsAvailabilityById?: Record<string, DriverLiveAvailability>;
   controlById: Record<string, ControlCell>;
   total: number;
   approvedCount?: number;
@@ -560,13 +553,15 @@ export function ControlOperacionesPanel() {
   const [saving, setSaving] = useState(false);
   const [syncConductoresBusy, setSyncConductoresBusy] = useState(false);
   const [viajesBusy, setViajesBusy] = useState(false);
-  const [viajesPhase, setViajesPhase] = useState<"sync" | "gps" | null>(null);
   const [asignacionesBusy, setAsignacionesBusy] = useState(false);
+  const [refreshGpsBusy, setRefreshGpsBusy] = useState(false);
+  const [gpsActionToast, setGpsActionToast] = useState<string | null>(null);
 
   const [total, setTotal] = useState(0);
 
   const [region, setRegion] = useState(GLOBAL_ALL);
-  const [gps, setGps] = useState(GPS_ALL);
+  /** Vacío = todos (equivalente a "Todos"). */
+  const [gpsFilter, setGpsFilter] = useState<string[]>([]);
   const [semaforoFilter, setSemaforoFilter] = useState<string[]>([]);
   const [distritoFilter, setDistritoFilter] = useState<string[]>([]);
   const [conductorQ, setConductorQ] = useState("");
@@ -594,7 +589,8 @@ export function ControlOperacionesPanel() {
     status: "idle" | "loading" | "success" | "error";
     item: DriverLiveLocationItem | null;
     nearbyServices: NearbyServiceMarker[];
-  }>({ status: "idle", item: null, nearbyServices: [] });
+    serviceDestination: DriverLiveServiceDestination | null;
+  }>({ status: "idle", item: null, nearbyServices: [], serviceDestination: null });
   const [LiveMapComponent, setLiveMapComponent] = useState<ComponentType<LiveDriverMapProps> | null>(null);
 
   /** Evita que `operatorsReady` recree callbacks y dispare el `useEffect` de carga inicial en bucle. */
@@ -637,7 +633,8 @@ export function ControlOperacionesPanel() {
     const cq = conductorQ.trim().toLowerCase();
     return rows.filter((r) => {
       if (region !== GLOBAL_ALL && String(r.global).trim().toUpperCase() !== region) return false;
-      if (gps !== GPS_ALL && r.gps_label !== gps) return false;
+      const gpsLabel = gpsTableLabelFromAvailability(gpsAvailByDriverId[r.id_conductor]);
+      if (!rowMatchesGpsMultiFilter(gpsFilter, gpsLabel)) return false;
       if (!rowMatchesSemaforoMultiFilter(r, semaforoFilter)) return false;
       if (cq) {
         const idm = r.id_conductor.toLowerCase();
@@ -652,7 +649,17 @@ export function ControlOperacionesPanel() {
       }
       return true;
     });
-  }, [rows, region, gps, semaforoFilter, conductorQ, solicitanteFilter, controlById, solicitanteLabel]);
+  }, [
+    rows,
+    region,
+    gpsFilter,
+    semaforoFilter,
+    conductorQ,
+    solicitanteFilter,
+    controlById,
+    solicitanteLabel,
+    gpsAvailByDriverId,
+  ]);
 
   const distritosDisponibles = useMemo(() => {
     const s = new Set<string>();
@@ -676,6 +683,12 @@ export function ControlOperacionesPanel() {
       return next.length === prev.length ? prev : next;
     });
   }, [distritosDisponibles]);
+
+  useEffect(() => {
+    if (!gpsActionToast) return;
+    const id = window.setTimeout(() => setGpsActionToast(null), 6500);
+    return () => window.clearTimeout(id);
+  }, [gpsActionToast]);
 
   const filtered = useMemo(() => {
     if (distritoFilter.length === 0) return rowsBeforeDistritoFilter;
@@ -740,6 +753,8 @@ export function ControlOperacionesPanel() {
       if (!res.ok) throw new Error(j.error || "Error al cargar control");
 
       const drivers = Array.isArray(j.drivers) ? j.drivers : [];
+      const gpsAvailabilityById =
+        j.gpsAvailabilityById && typeof j.gpsAvailabilityById === "object" ? j.gpsAvailabilityById : {};
       const control = j.controlById && typeof j.controlById === "object" ? j.controlById : {};
       const tot = typeof j.total === "number" ? j.total : drivers.length;
       const sl = typeof j.semanaLabel === "string" ? j.semanaLabel : "";
@@ -747,6 +762,7 @@ export function ControlOperacionesPanel() {
       setTotal(tot);
       setSemanaLabel(sl);
       setControlById(control);
+      setGpsAvailByDriverId(gpsAvailabilityById);
 
       const merged = withPendingHeavy(drivers);
       setRows(merged);
@@ -851,7 +867,6 @@ export function ControlOperacionesPanel() {
   const syncServiciosYConteos = useCallback(async () => {
     if (rows.length === 0) return;
     setViajesBusy(true);
-    setViajesPhase("sync");
     setError(null);
     try {
       console.log("[control-operaciones][SERV] refresh después del botón Servicios (inicio)");
@@ -866,48 +881,36 @@ export function ControlOperacionesPanel() {
       }
       await refreshServ();
       console.log("[control-operaciones][SERV] refresh después del botón Servicios (ok)");
-
-      // Fase 2: refrescar disponibilidad GPS solo de conductores visibles con gps_label === "Encendido".
-      // Se ejecuta DESPUÉS de que la columna SERV ya está actualizada en pantalla.
-      setViajesPhase("gps");
-      const candidates = filtered.filter((r) => r.gps_label === "Encendido");
-      console.log(
-        `[control-operaciones][GPS] fase 2 — refrescando disponibilidad para ${candidates.length} conductor(es) con GPS Encendido`,
-      );
-      const CHUNK = 10;
-      for (let i = 0; i < candidates.length; i += CHUNK) {
-        const slice = candidates.slice(i, i + CHUNK);
-        await Promise.all(
-          slice.map(async (r) => {
-            const id = String(r.id_conductor || "").trim();
-            const name = String(r.nombre_conductor || "").trim();
-            if (!id || !name) return;
-            try {
-              const resp = await fetchLiveDriverLocationByConductorName(name);
-              if (resp.ok && resp.item) {
-                liveLocationCacheRef.current.set(id, resp);
-                const availability = resp.item.availability;
-                setGpsAvailByDriverId((prev) =>
-                  prev[id] === availability ? prev : { ...prev, [id]: availability },
-                );
-              }
-            } catch (err) {
-              console.warn(
-                `[control-operaciones][GPS] fetch falló para "${name}" (id ${id})`,
-                err,
-              );
-            }
-          }),
-        );
-      }
-      console.log("[control-operaciones][GPS] fase 2 — completada");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al sincronizar servicios o actualizar conteos");
     } finally {
-      setViajesPhase(null);
       setViajesBusy(false);
     }
-  }, [rows, refreshServ, filtered]);
+  }, [rows, refreshServ]);
+
+  const refreshGpsRawFromMoobiz = useCallback(async () => {
+    if (rows.length === 0) return;
+    setRefreshGpsBusy(true);
+    setError(null);
+    try {
+      console.debug("[control-operaciones] POST /api/moobiz/refresh-gps-raw");
+      const result = await runRefreshGpsRawAndRefetch({
+        onSuccess: loadApprovedDriversBase,
+      });
+      if (!result.ok) {
+        console.error("[control-operaciones] refresh-gps-raw:", result.error);
+        setGpsActionToast(`Error al actualizar GPS: ${result.error}`);
+        return;
+      }
+      setGpsActionToast(formatRefreshGpsToastSuccess(result));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("[control-operaciones] refresh-gps-raw", e);
+      setGpsActionToast(`Error al actualizar GPS: ${msg}`);
+    } finally {
+      setRefreshGpsBusy(false);
+    }
+  }, [rows.length, loadApprovedDriversBase]);
 
   const syncConductores = useCallback(async () => {
     setSyncConductoresBusy(true);
@@ -1130,19 +1133,30 @@ export function ControlOperacionesPanel() {
         setGpsModalState({
           status: "success",
           item: cached.item,
-          nearbyServices: [],
+          nearbyServices: cached.nearbyServices ?? [],
+          serviceDestination: cached.serviceDestination ?? null,
         });
         loadLiveMapChunk();
       } else {
-        setGpsModalState({ status: "loading", item: null, nearbyServices: [] });
+        setGpsModalState({
+          status: "loading",
+          item: null,
+          nearbyServices: [],
+          serviceDestination: null,
+        });
       }
 
       try {
-        const normalized = await fetchLiveDriverLocationByConductorName(name);
+        const normalized = await fetchLiveDriverLocationByConductorName(name, id);
         rememberGpsAvailability(id, normalized);
         if (!normalized.ok || !normalized.item) {
           if (!hasCachedItem) {
-            setGpsModalState({ status: "error", item: null, nearbyServices: [] });
+            setGpsModalState({
+              status: "error",
+              item: null,
+              nearbyServices: [],
+              serviceDestination: null,
+            });
           }
           return;
         }
@@ -1152,11 +1166,17 @@ export function ControlOperacionesPanel() {
           status: "success",
           item: normalized.item,
           nearbyServices: normalized.nearbyServices ?? [],
+          serviceDestination: normalized.serviceDestination ?? null,
         });
         loadLiveMapChunk();
       } catch {
         if (!hasCachedItem) {
-          setGpsModalState({ status: "error", item: null, nearbyServices: [] });
+          setGpsModalState({
+            status: "error",
+            item: null,
+            nearbyServices: [],
+            serviceDestination: null,
+          });
         }
       }
     },
@@ -1222,17 +1242,14 @@ export function ControlOperacionesPanel() {
               </Select>
             </div>
             <div className="space-y-0.5">
-              <Label className="text-[9px] uppercase leading-none text-slate-500">GPS (Online)</Label>
-              <Select value={gps} onValueChange={setGps}>
-                <SelectTrigger className="h-8 text-[11px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={GPS_ALL}>Todos</SelectItem>
-                  <SelectItem value="Encendido">Encendido</SelectItem>
-                  <SelectItem value="Apagado">Apagado</SelectItem>
-                </SelectContent>
-              </Select>
+              <Label className="text-[9px] uppercase leading-none text-slate-500">GPS</Label>
+              <SearchableMultiMiniSelect
+                values={gpsFilter}
+                onChange={setGpsFilter}
+                options={GPS_MULTI_OPTIONS}
+                placeholder="Buscar estado GPS…"
+                widthClass="w-full"
+              />
             </div>
             <div className="space-y-0.5">
               <Label className="text-[9px] uppercase leading-none text-slate-500">Semáforo</Label>
@@ -1284,7 +1301,7 @@ export function ControlOperacionesPanel() {
               type="button"
               size="sm"
               variant="default"
-              className="h-8 bg-[#0b1131] px-2 text-xs text-white hover:bg-[#0b1131]/90"
+              className={TOOLBAR_BTN_PRIMARY}
               disabled={selected.size === 0}
               onClick={() => setBulkOpen(true)}
             >
@@ -1295,7 +1312,7 @@ export function ControlOperacionesPanel() {
                 type="button"
                 size="sm"
                 variant="outline"
-                className="h-8 px-2 text-xs"
+                className={TOOLBAR_BTN_SECONDARY}
                 disabled={selected.size === 0}
                 onClick={() => setBulkClearMenuOpen((v) => !v)}
               >
@@ -1332,9 +1349,14 @@ export function ControlOperacionesPanel() {
               variant="outline"
               disabled={syncConductoresBusy || loading}
               onClick={() => void syncConductores()}
-              className="h-8 px-2 text-xs"
+              className={`${TOOLBAR_BTN_SECONDARY} max-w-[200px]`}
             >
-              {syncConductoresBusy ? "…" : "🔄 Conductores"}
+              {syncConductoresBusy ? (
+                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-slate-500" aria-hidden />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden />
+              )}
+              <span className="truncate">Conductores</span>
             </Button>
             <Button
               type="button"
@@ -1342,24 +1364,53 @@ export function ControlOperacionesPanel() {
               variant="outline"
               disabled={viajesBusy || loading || rows.length === 0}
               onClick={() => void syncServiciosYConteos()}
-              className="h-8 max-w-[200px] truncate px-2 text-xs"
+              className={`${TOOLBAR_BTN_SECONDARY} max-w-[220px]`}
               title={viajesBusy ? undefined : "Sincronizar public.moobiz_services y refrescar SERV desde vista.moobiz_services_maestra."}
             >
-              {viajesBusy
-                ? viajesPhase === "gps"
-                  ? "Actualizando GPS..."
-                  : "Actualizando servicios..."
-                : "🚗 Servicios"}
+              {viajesBusy ? (
+                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-slate-500" aria-hidden />
+              ) : (
+                <Car className="h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden />
+              )}
+              <span className="truncate">{viajesBusy ? "Actualizando servicios..." : "Servicios"}</span>
             </Button>
             <Button
               type="button"
               size="sm"
-              variant="secondary"
+              variant="outline"
+              disabled={refreshGpsBusy || loading || rows.length === 0}
+              onClick={() => void refreshGpsRawFromMoobiz()}
+              className={TOOLBAR_BTN_GPS}
+              title="Volcar live/vehicles a public.driver_live_raw (requiere permiso de escritura)."
+            >
+              {refreshGpsBusy ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-indigo-600/90" aria-hidden />
+                  <span className="tabular-nums">GPS</span>
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5">
+                  <Radar className="h-3.5 w-3.5 shrink-0 text-indigo-600/85" strokeWidth={2} aria-hidden />
+                  GPS
+                </span>
+              )}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
               disabled={loading || asignacionesBusy}
               onClick={() => void refreshAsignacionesOnly()}
-              className="h-8 px-2 text-xs"
+              className={TOOLBAR_BTN_SECONDARY}
             >
-              {asignacionesBusy ? "Actualizando…" : "Actualizar asignaciones"}
+              {asignacionesBusy ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-slate-500" aria-hidden />
+                  <span>Actualizando…</span>
+                </>
+              ) : (
+                "Actualizar asignaciones"
+              )}
             </Button>
             <span className="text-[10px] leading-none text-slate-500">
               {loading ? "Cargando…" : `${filtered.length} visibles · ${rows.length} en memoria`}
@@ -1392,7 +1443,7 @@ export function ControlOperacionesPanel() {
               <span>Observación</span>
               <span className="flex items-center justify-center gap-2">
                 <MapPin className="h-3.5 w-3.5 text-slate-400" />
-                <ExternalLink className="h-3.5 w-3.5 text-blue-500" />
+                <ExternalLink className="h-3.5 w-3.5 text-slate-500" />
               </span>
             </div>
             <div ref={parentRef} className="max-h-[min(680px,calc(100vh-260px))] overflow-auto">
@@ -1403,6 +1454,13 @@ export function ControlOperacionesPanel() {
                   const c = controlById[r.id_conductor] ?? { solicitante: null, observacion: null };
                   const sem = semaforoCell(r);
                   const checked = selected.has(r.id_conductor);
+                  const gpsLabel = gpsTableLabelFromAvailability(gpsAvailByDriverId[r.id_conductor]);
+                  const gpsBadgeClass =
+                    gpsLabel === "En linea"
+                      ? "h-6 justify-self-start border-emerald-200 bg-emerald-50 text-[10px] text-emerald-900"
+                      : gpsLabel === "Ocupado"
+                        ? "h-6 justify-self-start border-orange-200 bg-orange-50 text-[10px] text-orange-900"
+                        : "h-6 justify-self-start border-slate-200 bg-slate-100 text-[10px] text-slate-700";
                   return (
                     <div
                       key={r.id_conductor}
@@ -1446,13 +1504,9 @@ export function ControlOperacionesPanel() {
                       </div>
                       <Badge
                         variant="outline"
-                        className={
-                          r.gps_label === "Apagado"
-                            ? "h-6 justify-self-start border-amber-200 bg-amber-50 text-[10px] text-amber-900"
-                            : "h-6 justify-self-start border-emerald-200 bg-emerald-50 text-[10px] text-emerald-900"
-                        }
+                        className={gpsBadgeClass}
                       >
-                        {r.gps_label}
+                        {gpsLabel}
                       </Badge>
                       <div data-no-shift-select>
                         <SearchableMiniSelect
@@ -1495,7 +1549,7 @@ export function ControlOperacionesPanel() {
                           rel="noopener noreferrer"
                           title="Ver servicios en Moobiz"
                           onClick={(e) => e.stopPropagation()}
-                          className="inline-flex items-center justify-center text-blue-500 hover:text-blue-600"
+                          className="inline-flex items-center justify-center text-slate-600 hover:text-slate-800"
                         >
                           <ExternalLink className="h-4 w-4" />
                         </a>
@@ -1514,7 +1568,12 @@ export function ControlOperacionesPanel() {
         onOpenChange={(open) => {
           setGpsModalOpen(open);
           if (!open) {
-            setGpsModalState({ status: "idle", item: null, nearbyServices: [] });
+            setGpsModalState({
+              status: "idle",
+              item: null,
+              nearbyServices: [],
+              serviceDestination: null,
+            });
             setGpsModalDriver(null);
             setLiveMapComponent(null);
           }
@@ -1560,6 +1619,7 @@ export function ControlOperacionesPanel() {
                   plate={gpsModalState.item.plate}
                   iconUrl={gpsModalState.item.icon || undefined}
                   nearbyServices={gpsModalState.nearbyServices}
+                  serviceDestination={gpsModalState.serviceDestination}
                 />
               ) : (
                 <div className="flex h-[320px] items-center justify-center rounded-lg border border-slate-200 bg-slate-50">
@@ -1606,6 +1666,19 @@ export function ControlOperacionesPanel() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {gpsActionToast ? (
+        <div className="fixed right-4 bottom-4 z-[200] max-w-sm rounded-md border border-slate-200 bg-[#0b1131] px-3 py-2 text-sm text-white shadow-lg">
+          <span className="break-words">{gpsActionToast}</span>
+          <button
+            type="button"
+            className="ml-3 text-[#7dd3fc] hover:underline"
+            onClick={() => setGpsActionToast(null)}
+          >
+            Cerrar
+          </button>
+        </div>
+      ) : null}
 
       <Dialog open={bulkOpen} onOpenChange={setBulkOpen}>
         <DialogContent className="sm:max-w-md" showCloseButton>

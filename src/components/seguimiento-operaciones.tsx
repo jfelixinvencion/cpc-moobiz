@@ -68,6 +68,8 @@ type LiveDriverMapProps = {
   plate: string;
   iconUrl?: string;
   nearbyServices?: NearbyServiceMarker[];
+  /** Opcional: destino desde `vw_driver_live_raw_flat` (Control operaciones). */
+  serviceDestination?: import("@/lib/moobiz-live-driver-location-client").DriverLiveServiceDestination | null;
 };
 
 const HOUR_MS = 60 * 60 * 1000;

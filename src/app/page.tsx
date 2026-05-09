@@ -3,7 +3,6 @@
 import {
   endOfISOWeek,
   format,
-  formatDistanceToNow,
   getISOWeek,
   getISOWeeksInYear,
   getISOWeekYear,
@@ -11,13 +10,11 @@ import {
   setISOWeekYear,
   startOfISOWeek,
 } from "date-fns";
-import { es } from "date-fns/locale";
 import {
   memo,
   Suspense,
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -30,10 +27,6 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  Cell,
-  Legend,
-  Pie,
-  PieChart,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -62,7 +55,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ConductorTimelineMatrix } from "@/components/conductor-timeline-matrix";
 import { SeguimientoOperaciones } from "@/components/seguimiento-operaciones";
 import {
   LogsSyncHealthBanner,
@@ -71,10 +63,8 @@ import {
 import { DatosPendientesTable } from "@/components/DatosPendientesTable";
 import { ControlOperacionesPanel } from "@/components/control-operaciones-panel";
 import {
-  type ScheduleProductKey,
   SCHEDULE_PRODUCT_COLORS,
   SCHEDULE_STACK_ORDER,
-  SCHEDULE_TOOLTIP_ORDER,
   scheduleBucketForProducto,
 } from "@/lib/product-categories";
 import { MouseRevealHeaderLayout } from "@/components/mouse-reveal-header-layout";
@@ -218,23 +208,11 @@ const DATOS_SUB_CONDUCTORES = "conductores" as const;
 const DATOS_SUB_REGISTRO_ACTIVIDADES = "registro-actividades" as const;
 const DATOS_SUB_DATOS_PENDIENTES = "datos-pendientes" as const;
 const OPERACIONES_SUB_CONTROL = "control" as const;
-const OPERACIONES_SUB_CONDUCTORES_TIEMPO = "conductores-tiempo" as const;
 const OPERACIONES_SUB_SEGUIMIENTO = "seguimiento" as const;
 const LOGS_CLEAN_PAGE_SIZE = 50;
 const HISTORY_PAGE_SIZE = 50;
 const DRIVERS_PAGE_SIZE = 50;
 const DRIVERS_FETCH_BATCH_SIZE = 1000;
-const PIE_COLORS = [
-  "#00e676",
-  "#1e88e5",
-  "#5ad8a6",
-  "#90caf9",
-  "#66bb6a",
-  "#42a5f5",
-  "#26a69a",
-  "#9ccc65",
-];
-
 const CHART_AXIS = { fill: "#64748b", fontSize: 11 };
 const CHART_GRID = "#e2e8f0";
 const CHART_TOOLTIP_STYLE = {
@@ -274,23 +252,6 @@ function ChartTooltipRow({ label, value }: { label: string; value: string | numb
   );
 }
 
-type ScheduleTimelineDatum = {
-  etiqueta: string;
-  total: number;
-  hourLabel: string;
-  dateLabel: string;
-  dateKey: string;
-  showDayLabel: boolean;
-  dayDividerBefore: boolean;
-  OTROS: number;
-  BUS: number;
-  FURGON: number;
-  VAN: number;
-  SPRINTER: number;
-  LOGISTICA: number;
-  "PROVINCIA VIP": number;
-  "VIP LIMA": number;
-};
 type ScheduleTimelineDatumV2 = {
   etiqueta: string;
   total: number;
@@ -310,44 +271,8 @@ type ScheduleTimelineDatumV2 = {
   "OTROS PROVINCIA": number;
 };
 
-function scheduleVisibilityOnlyOne(key: ScheduleProductKey): Record<ScheduleProductKey, boolean> {
-  const o = {} as Record<ScheduleProductKey, boolean>;
-  for (const k of SCHEDULE_STACK_ORDER) {
-    o[k] = k === key;
-  }
-  return o;
-}
-
-function scheduleOnlyProductVisible(
-  vis: Record<ScheduleProductKey, boolean>,
-  key: ScheduleProductKey,
-): boolean {
-  return SCHEDULE_STACK_ORDER.every((k) => (k === key ? vis[k] === true : vis[k] === false));
-}
-
-/** Ancho lógico por columna de franja (px): scroll, ventana visible y grosor de barras. */
+/** Ancho lógico por columna de franja (px): grosor de barras. */
 const SCHEDULE_SLOT_PX = 28;
-/** Columnas extra a cada lado del viewport para scroll suave. */
-const SCHEDULE_VIEW_BUFFER_COLUMNS = 16;
-
-function buildScheduleWindowSlice(
-  full: ScheduleTimelineDatum[],
-  start: number,
-  end: number,
-): ScheduleTimelineDatum[] {
-  const n = full.length;
-  if (n === 0 || end <= start) return [];
-  const s = Math.max(0, Math.min(start, n - 1));
-  const e = Math.max(s + 1, Math.min(end, n));
-  const prevDateKey = s > 0 ? (full[s - 1]?.dateKey ?? "") : "";
-  return full.slice(s, e).map((row, i) => {
-    if (i > 0) return row;
-    return {
-      ...row,
-      dayDividerBefore: s > 0 && Boolean(row.dateKey) && row.dateKey !== prevDateKey,
-    };
-  });
-}
 
 /** Entrada típica de Tooltip en BarChart apilado (Recharts). */
 type ScheduleStackRechartsPayloadEntry = {
@@ -355,13 +280,9 @@ type ScheduleStackRechartsPayloadEntry = {
   name?: unknown;
   value?: unknown;
   color?: string;
-  payload?: ScheduleTimelineDatum | ScheduleTimelineDatumV2;
+  payload?: ScheduleTimelineDatumV2;
 };
 
-type ScheduleStackBarTooltipProps = {
-  active?: boolean;
-  payload?: ReadonlyArray<ScheduleStackRechartsPayloadEntry>;
-};
 type ScheduleStackBarTooltipV2Props = {
   active?: boolean;
   payload?: ReadonlyArray<ScheduleStackRechartsPayloadEntry>;
@@ -373,83 +294,6 @@ function scheduleStackTooltipDataKeyAsString(entry: ScheduleStackRechartsPayload
   return String(raw).trim();
 }
 
-function scheduleTooltipOrderIndexForSort(dataKey: string): number {
-  const order = SCHEDULE_TOOLTIP_ORDER as readonly string[];
-  const i = order.indexOf(dataKey);
-  return i === -1 ? 999 : i;
-}
-
-/**
- * Tooltip custom del gráfico de franjas: filtra por `Number(value) > 0`.
- * Recharts a veces entrega `value` como string; se coacciona antes de comparar.
- */
-const ScheduleStackBarTooltip = memo(function ScheduleStackBarTooltip(props: ScheduleStackBarTooltipProps) {
-  const { active, payload } = props;
-  if (!active) return null;
-  if (!Array.isArray(payload) || payload.length === 0) return null;
-
-  const datum = payload.find((e) => e?.payload != null)?.payload;
-  if (!datum) return null;
-
-  const isKnownProductKey = (k: string): k is ScheduleProductKey =>
-    (SCHEDULE_STACK_ORDER as readonly string[]).includes(k);
-
-  const rows: { key: ScheduleProductKey; label: string; value: number; swatch: string }[] = [];
-
-  for (const entry of payload) {
-    const keyStr = scheduleStackTooltipDataKeyAsString(entry);
-    if (!keyStr || !isKnownProductKey(keyStr)) continue;
-
-    const n = Number(entry.value);
-    if (!Number.isFinite(n)) {
-      if (process.env.NODE_ENV === "development" && entry.value != null && `${entry.value}`.trim() !== "") {
-        console.debug(
-          "[ScheduleStackBarTooltip] Valor no numérico en serie; se omite:",
-          { dataKey: keyStr, value: entry.value },
-        );
-      }
-      continue;
-    }
-    if (n <= 0) continue;
-
-    const swatch =
-      typeof entry.color === "string" && entry.color.length > 0
-        ? entry.color
-        : SCHEDULE_PRODUCT_COLORS[keyStr];
-
-    rows.push({
-      key: keyStr,
-      label: keyStr === "OTROS" ? "Otros" : keyStr,
-      value: n,
-      swatch,
-    });
-  }
-
-  rows.sort((a, b) => scheduleTooltipOrderIndexForSort(a.key) - scheduleTooltipOrderIndexForSort(b.key));
-
-  if (rows.length === 0) return null;
-
-  const columnTotal = rows.reduce((sum, r) => sum + r.value, 0);
-
-  return (
-    <div className="min-w-[200px] space-y-1 p-2" style={CHART_TOOLTIP_STYLE}>
-      <ChartTooltipRow label="Franja" value={datum.etiqueta} />
-      {rows.map((row) => (
-        <div key={row.key} className="flex items-center justify-between gap-3 text-xs">
-          <span className="inline-flex items-center gap-1.5 text-white/90">
-            <span
-              className="inline-block h-2 w-2 rounded-full"
-              style={{ backgroundColor: row.swatch }}
-            />
-            {row.label}
-          </span>
-          <span className="font-semibold text-white">{row.value}</span>
-        </div>
-      ))}
-      <ChartTooltipRow label="Total columna" value={columnTotal} />
-    </div>
-  );
-});
 const ScheduleStackBarTooltipV2 = memo(function ScheduleStackBarTooltipV2(
   props: ScheduleStackBarTooltipV2Props,
 ) {
@@ -694,9 +538,6 @@ function DashboardContent() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [dashboardLoading, setDashboardLoading] = useState(false);
-  const [dashboardError, setDashboardError] = useState<string | null>(null);
-  const [dashboardData, setDashboardData] = useState<DashboardResponse | null>(null);
   const [dashboardV2Loading, setDashboardV2Loading] = useState(false);
   const [dashboardV2Error, setDashboardV2Error] = useState<string | null>(null);
   const [dashboardV2Data, setDashboardV2Data] = useState<DashboardResponse | null>(null);
@@ -709,9 +550,6 @@ function DashboardContent() {
         boolean
       >,
   );
-  const [reservasEmpresa, setReservasEmpresa] = useState("Todas");
-  const [reservasStartDate, setReservasStartDate] = useState("");
-  const [reservasEndDate, setReservasEndDate] = useState("");
   const [mainTab, setMainTab] = useState("dashboard");
   const [datosSubTab, setDatosSubTab] = useState<string>(DATOS_SUB_VIAJES_ACTIVOS);
   const [operacionesSubTab, setOperacionesSubTab] = useState<string>(OPERACIONES_SUB_CONTROL);
@@ -764,26 +602,6 @@ function DashboardContent() {
   const [prodMeta, setProdMeta] = useState<ProductividadApiResponse["meta"]>(null);
   const [prodLoading, setProdLoading] = useState(false);
   const [prodError, setProdError] = useState<string | null>(null);
-  const [scheduleProductVisibility, setScheduleProductVisibility] = useState<
-    Record<(typeof SCHEDULE_STACK_ORDER)[number], boolean>
-  >(() =>
-    Object.fromEntries(SCHEDULE_STACK_ORDER.map((key) => [key, true])) as Record<
-      ScheduleProductKey,
-      boolean
-    >,
-  );
-  const scheduleTimelineScrollRef = useRef<HTMLDivElement | null>(null);
-  const scheduleTimelineDataRef = useRef<ScheduleTimelineDatum[]>([]);
-  const scheduleScrollRafRef = useRef<number | null>(null);
-  /** Doble click en leyenda: snapshot para restaurar; foco del producto aislado. */
-  const scheduleLegendSessionRef = useRef<{
-    restore: Record<ScheduleProductKey, boolean> | null;
-    isolateFocus: ScheduleProductKey | null;
-  }>({ restore: null, isolateFocus: null });
-  const scheduleLegendClickTimerRef = useRef<{
-    id: ReturnType<typeof setTimeout>;
-    key: ScheduleProductKey;
-  } | null>(null);
   const scheduleLegendSessionV2Ref = useRef<{
     restore: Record<ScheduleV2ProductKey, boolean> | null;
     isolateFocus: ScheduleV2ProductKey | null;
@@ -792,19 +610,7 @@ function DashboardContent() {
     id: ReturnType<typeof setTimeout>;
     key: ScheduleV2ProductKey;
   } | null>(null);
-  const [scheduleLegendUiEpoch, setScheduleLegendUiEpoch] = useState(0);
-  const [scheduleLegendHintOpen, setScheduleLegendHintOpen] = useState(() => {
-    if (typeof window === "undefined") return false;
-    try {
-      return !window.localStorage.getItem("scheduleLegendHintSeen");
-    } catch {
-      return false;
-    }
-  });
-  const [scheduleViewWindow, setScheduleViewWindow] = useState({ start: 0, end: 0 });
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
-  const [dashboardRefreshedAt, setDashboardRefreshedAt] = useState<Date | null>(null);
-  const [dashboardAgeTick, setDashboardAgeTick] = useState(0);
 
   const loadViajes = useCallback(async () => {
     setLoading(true);
@@ -896,12 +702,7 @@ function DashboardContent() {
   );
 
   const operacionesSubAllowed = useMemo(
-    () =>
-      new Set<string>([
-        OPERACIONES_SUB_CONTROL,
-        OPERACIONES_SUB_CONDUCTORES_TIEMPO,
-        OPERACIONES_SUB_SEGUIMIENTO,
-      ]),
+    () => new Set<string>([OPERACIONES_SUB_CONTROL, OPERACIONES_SUB_SEGUIMIENTO]),
     [],
   );
 
@@ -917,11 +718,7 @@ function DashboardContent() {
   useEffect(() => {
     if (mainTab !== "operaciones") return;
     const raw = searchParams.get("operacionesSub");
-    if (
-      raw === OPERACIONES_SUB_CONTROL ||
-      raw === OPERACIONES_SUB_CONDUCTORES_TIEMPO ||
-      raw === OPERACIONES_SUB_SEGUIMIENTO
-    ) {
+    if (raw === OPERACIONES_SUB_CONTROL || raw === OPERACIONES_SUB_SEGUIMIENTO) {
       setOperacionesSubTab(raw);
       return;
     }
@@ -1118,12 +915,6 @@ function DashboardContent() {
     const t = window.setTimeout(() => setSyncNotice(null), 4500);
     return () => window.clearTimeout(t);
   }, [syncNotice]);
-
-  useEffect(() => {
-    if (!dashboardRefreshedAt) return;
-    const id = window.setInterval(() => setDashboardAgeTick((n) => n + 1), 10000);
-    return () => window.clearInterval(id);
-  }, [dashboardRefreshedAt]);
 
   const empresas = useMemo(() => {
     return Array.from(new Set(viajes.map((v) => asText(v.empresa)).filter(Boolean))).sort();
@@ -1384,41 +1175,11 @@ function DashboardContent() {
     }
   };
 
-  const loadDashboard = useCallback(async () => {
-    setDashboardLoading(true);
-    setDashboardError(null);
-    try {
-      const params = new URLSearchParams();
-      if (reservasStartDate) params.set("startDate", reservasStartDate);
-      if (reservasEndDate) params.set("endDate", reservasEndDate);
-      if (reservasEmpresa && reservasEmpresa !== "Todas") {
-        params.set("empresa", reservasEmpresa);
-      }
-      const query = params.toString();
-      const res = await fetch(`/api/viajes${query ? `?${query}` : ""}`, { cache: "no-store" });
-      const data = (await res.json()) as DashboardResponse & { error?: string };
-      if (!res.ok) throw new Error(data?.error || "No se pudo cargar el dashboard.");
-      setDashboardData(data);
-      setDashboardRefreshedAt(new Date());
-    } catch (err) {
-      setDashboardError(err instanceof Error ? err.message : "Error inesperado en dashboard.");
-    } finally {
-      setDashboardLoading(false);
-    }
-  }, [reservasStartDate, reservasEndDate, reservasEmpresa]);
-
   const loadDashboardV2 = useCallback(async () => {
     setDashboardV2Loading(true);
     setDashboardV2Error(null);
     try {
-      const params = new URLSearchParams();
-      if (reservasStartDate) params.set("startDate", reservasStartDate);
-      if (reservasEndDate) params.set("endDate", reservasEndDate);
-      if (reservasEmpresa && reservasEmpresa !== "Todas") {
-        params.set("empresa", reservasEmpresa);
-      }
-      const query = params.toString();
-      const res = await fetch(`/api/dashboard-v2/reservas${query ? `?${query}` : ""}`, {
+      const res = await fetch("/api/dashboard-v2/reservas", {
         cache: "no-store",
       });
       const data = (await res.json()) as DashboardResponse & { error?: string };
@@ -1429,7 +1190,7 @@ function DashboardContent() {
     } finally {
       setDashboardV2Loading(false);
     }
-  }, [reservasStartDate, reservasEndDate, reservasEmpresa]);
+  }, []);
 
   const handleSyncServicesV2 = useCallback(async () => {
     setSyncingServices(true);
@@ -1453,11 +1214,6 @@ function DashboardContent() {
       setSyncingServices(false);
     }
   }, [loadDashboardV2]);
-
-  useEffect(() => {
-    if (mainTab !== "dashboard" || dashboardSubTab !== "reservas") return;
-    void loadDashboard();
-  }, [mainTab, dashboardSubTab, loadDashboard, refreshKey]);
 
   useEffect(() => {
     if (mainTab !== "dashboard" || dashboardSubTab !== "reservas") return;
@@ -1505,84 +1261,10 @@ function DashboardContent() {
     [prodSeries.length],
   );
 
-  const reservasEmpresaOptions = dashboardData?.filters.empresas ?? [];
-
-  const scheduleChartData = dashboardData?.charts.pendingBySchedule ?? [];
-  const scheduleChartWidth = Math.max(scheduleChartData.length * SCHEDULE_SLOT_PX, 320);
-  const visibleScheduleKeys = useMemo(
-    () => SCHEDULE_STACK_ORDER.filter((k) => scheduleProductVisibility[k]),
-    [scheduleProductVisibility],
-  );
   const visibleScheduleKeysV2 = useMemo(
     () => SCHEDULE_V2_STACK_ORDER.filter((k) => visibleProductsV2[k]),
     [visibleProductsV2],
   );
-  const scheduleTimelineData = useMemo<ScheduleTimelineDatum[]>(() => {
-    const grouped = scheduleChartData.reduce<Record<string, Array<{ index: number; time: string }>>>(
-      (acc, item, index) => {
-        const parts = parseScheduleLabelParts(item.etiqueta);
-        const key = parts.dateKey || `fallback-${index}`;
-        if (!acc[key]) acc[key] = [];
-        acc[key].push({ index, time: parts.time });
-        return acc;
-      },
-      {},
-    );
-
-    const centerIndexByDay = new Map<string, number>();
-    Object.entries(grouped).forEach(([dateKey, items]) => {
-      centerIndexByDay.set(dateKey, items[Math.floor((items.length - 1) / 2)]?.index ?? -1);
-    });
-
-    const baseData = scheduleChartData.map((item, index) => {
-      const { time, date, dateKey } = parseScheduleLabelParts(item.etiqueta);
-      const hour24 = extractHour24FromScheduleEtiqueta(item.etiqueta);
-      const prevDateKey =
-        index > 0 ? parseScheduleLabelParts(scheduleChartData[index - 1]?.etiqueta).dateKey : "";
-
-      return {
-        etiqueta: item.etiqueta,
-        total: item.total,
-        hourLabel: hour24 !== null ? String(hour24).padStart(2, "0") : time ? time.slice(0, 2) : "",
-        dateLabel: date,
-        dateKey,
-        showDayLabel: centerIndexByDay.get(dateKey || `fallback-${index}`) === index,
-        dayDividerBefore: index > 0 && Boolean(dateKey) && dateKey !== prevDateKey,
-        OTROS: 0,
-        BUS: 0,
-        FURGON: 0,
-        VAN: 0,
-        SPRINTER: 0,
-        LOGISTICA: 0,
-        "PROVINCIA VIP": 0,
-        "VIP LIMA": 0,
-      };
-    });
-
-    const bySlot = new Map<string, ScheduleTimelineDatum>();
-    for (const item of baseData) {
-      const hour = extractHour24FromScheduleEtiqueta(item.etiqueta);
-      const slotKey = `${item.dateKey}|${hour !== null ? String(hour).padStart(2, "0") : ""}`;
-      bySlot.set(slotKey, item);
-    }
-
-    for (const viaje of dashboardData?.data ?? []) {
-      const d = parseViajeScheduledDate(viaje);
-      if (!d) continue;
-      const slotKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}|${String(d.getHours()).padStart(2, "0")}`;
-      const slot = bySlot.get(slotKey);
-      if (!slot) continue;
-      const bucket = scheduleBucketForProducto(viaje.producto);
-      slot[bucket] += 1;
-    }
-
-    for (const item of baseData) {
-      const sum = SCHEDULE_STACK_ORDER.reduce((acc, key) => acc + item[key], 0);
-      item.total = sum > 0 ? sum : item.total;
-    }
-
-    return baseData;
-  }, [dashboardData?.data, scheduleChartData]);
 
   const scheduleV2ChartData = dashboardV2Data?.charts.pendingBySchedule ?? [];
   const scheduleV2ChartWidth = Math.max(scheduleV2ChartData.length * SCHEDULE_SLOT_PX, 320);
@@ -1663,34 +1345,6 @@ function DashboardContent() {
     return baseData;
   }, [dashboardV2Data?.data, scheduleV2ChartData, visibleScheduleKeysV2]);
 
-  scheduleTimelineDataRef.current = scheduleTimelineData;
-
-  const scheduleSlotCount = scheduleTimelineData.length;
-  const scheduleViewUnset = scheduleViewWindow.end === 0 && scheduleSlotCount > 0;
-  const scheduleViewStart = scheduleViewUnset ? 0 : scheduleViewWindow.start;
-  const scheduleViewEnd = scheduleViewUnset ? scheduleSlotCount : scheduleViewWindow.end;
-
-  const scheduleChartViewportSlice = useMemo(
-    () => buildScheduleWindowSlice(scheduleTimelineData, scheduleViewStart, scheduleViewEnd),
-    [scheduleTimelineData, scheduleViewStart, scheduleViewEnd],
-  );
-
-  const scheduleYAxisMax = useMemo(() => {
-    let m = 0;
-    for (const row of scheduleTimelineData) {
-      if (row.total > m) m = row.total;
-    }
-    return Math.max(1, m);
-  }, [scheduleTimelineData]);
-
-  const scheduleDatumByEtiqueta = useMemo(() => {
-    const map = new Map<string, ScheduleTimelineDatum>();
-    for (const row of scheduleTimelineData) {
-      map.set(row.etiqueta, row);
-    }
-    return map;
-  }, [scheduleTimelineData]);
-
   const scheduleV2YAxisMax = useMemo(() => {
     let m = 0;
     for (const row of scheduleV2TimelineData) {
@@ -1720,177 +1374,6 @@ function DashboardContent() {
     [scheduleV2TimelineData, visibleProductsV2],
   );
 
-  const syncScheduleViewport = useCallback(() => {
-    const el = scheduleTimelineScrollRef.current;
-    const n = scheduleTimelineDataRef.current.length;
-    if (!el || n === 0) {
-      setScheduleViewWindow((prev) => (prev.start === 0 && prev.end === 0 ? prev : { start: 0, end: 0 }));
-      return;
-    }
-    const buffer = SCHEDULE_VIEW_BUFFER_COLUMNS;
-    const scrollLeft = el.scrollLeft;
-    const clientW = Math.max(1, el.clientWidth);
-    const totalW = Math.max(n * SCHEDULE_SLOT_PX, 320);
-    const slotW = totalW / n;
-    const first = Math.max(0, Math.floor(scrollLeft / slotW) - buffer);
-    const rawLast = Math.ceil((scrollLeft + clientW) / slotW) + buffer;
-    const last = Math.min(n, Math.max(first + 1, rawLast));
-    setScheduleViewWindow((prev) => {
-      if (prev.start === first && prev.end === last) return prev;
-      return { start: first, end: last };
-    });
-  }, []);
-
-  const onScheduleChartScroll = useCallback(() => {
-    if (scheduleScrollRafRef.current != null) return;
-    scheduleScrollRafRef.current = window.requestAnimationFrame(() => {
-      scheduleScrollRafRef.current = null;
-      syncScheduleViewport();
-    });
-  }, [syncScheduleViewport]);
-
-  useLayoutEffect(() => {
-    scheduleTimelineDataRef.current = scheduleTimelineData;
-    syncScheduleViewport();
-  }, [scheduleTimelineData, syncScheduleViewport]);
-
-  useEffect(
-    () => () => {
-      if (scheduleScrollRafRef.current != null) {
-        cancelAnimationFrame(scheduleScrollRafRef.current);
-      }
-    },
-    [],
-  );
-
-  useEffect(() => {
-    const el = scheduleTimelineScrollRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => {
-      syncScheduleViewport();
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [syncScheduleViewport]);
-
-  const scrollScheduleChartToProduct = useCallback((key: ScheduleProductKey, turnedOn: boolean) => {
-    if (!turnedOn) return;
-    const rows = scheduleTimelineDataRef.current;
-    queueMicrotask(() => {
-      const container = scheduleTimelineScrollRef.current;
-      if (!container) return;
-      const n = rows.length || 1;
-      const idx = rows.findIndex((row) => (row[key] ?? 0) > 0);
-      if (idx < 0) {
-        container.scrollTo({ left: 0, behavior: "smooth" });
-        return;
-      }
-      const slotWidth = container.scrollWidth / n;
-      const slotCenter = idx * slotWidth + slotWidth / 2;
-      const maxLeft = Math.max(0, container.scrollWidth - container.clientWidth);
-      const targetLeft = Math.max(0, Math.min(maxLeft, slotCenter - container.clientWidth / 2));
-      container.scrollTo({ left: targetLeft, behavior: "smooth" });
-    });
-  }, []);
-
-  const toggleScheduleProduct = useCallback(
-    (key: ScheduleProductKey) => {
-      scheduleLegendSessionRef.current = { restore: null, isolateFocus: null };
-      setScheduleLegendUiEpoch((e) => e + 1);
-      setScheduleProductVisibility((prev) => {
-        const turningOn = !prev[key];
-        const next = { ...prev, [key]: !prev[key] };
-        scrollScheduleChartToProduct(key, turningOn);
-        return next;
-      });
-    },
-    [scrollScheduleChartToProduct],
-  );
-
-  const handleScheduleLegendIsolate = useCallback(
-    (key: ScheduleProductKey) => {
-      setScheduleProductVisibility((vis) => {
-        const session = scheduleLegendSessionRef.current;
-        if (
-          session.restore &&
-          session.isolateFocus === key &&
-          scheduleOnlyProductVisible(vis, key)
-        ) {
-          scheduleLegendSessionRef.current = { restore: null, isolateFocus: null };
-          return { ...session.restore };
-        }
-        scheduleLegendSessionRef.current = { restore: { ...vis }, isolateFocus: key };
-        queueMicrotask(() => {
-          scrollScheduleChartToProduct(key, true);
-        });
-        return scheduleVisibilityOnlyOne(key);
-      });
-      setScheduleLegendUiEpoch((e) => e + 1);
-    },
-    [scrollScheduleChartToProduct],
-  );
-
-  const clearScheduleLegendPendingClick = useCallback(() => {
-    const p = scheduleLegendClickTimerRef.current;
-    if (p) {
-      clearTimeout(p.id);
-      scheduleLegendClickTimerRef.current = null;
-    }
-  }, []);
-
-  const onScheduleLegendItemClick = useCallback(
-    (key: ScheduleProductKey) => {
-      const pending = scheduleLegendClickTimerRef.current;
-      if (pending && pending.key === key) {
-        clearTimeout(pending.id);
-        scheduleLegendClickTimerRef.current = null;
-        return;
-      }
-      if (pending) {
-        clearTimeout(pending.id);
-        scheduleLegendClickTimerRef.current = null;
-      }
-      const id = setTimeout(() => {
-        scheduleLegendClickTimerRef.current = null;
-        toggleScheduleProduct(key);
-      }, 280);
-      scheduleLegendClickTimerRef.current = { id, key };
-    },
-    [toggleScheduleProduct],
-  );
-
-  const onScheduleLegendItemDoubleClick = useCallback(
-    (e: MouseEvent, key: ScheduleProductKey) => {
-      e.preventDefault();
-      clearScheduleLegendPendingClick();
-      handleScheduleLegendIsolate(key);
-    },
-    [clearScheduleLegendPendingClick, handleScheduleLegendIsolate],
-  );
-
-  const onScheduleLegendItemKeyDown = useCallback(
-    (e: KeyboardEvent, key: ScheduleProductKey) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        if (e.shiftKey) {
-          clearScheduleLegendPendingClick();
-          handleScheduleLegendIsolate(key);
-        } else {
-          clearScheduleLegendPendingClick();
-          toggleScheduleProduct(key);
-        }
-      }
-    },
-    [clearScheduleLegendPendingClick, handleScheduleLegendIsolate, toggleScheduleProduct],
-  );
-
-  const restoreScheduleLegendView = useCallback(() => {
-    const snap = scheduleLegendSessionRef.current.restore;
-    if (!snap) return;
-    scheduleLegendSessionRef.current = { restore: null, isolateFocus: null };
-    setScheduleProductVisibility({ ...snap });
-    setScheduleLegendUiEpoch((e) => e + 1);
-  }, []);
   const toggleScheduleProductV2 = useCallback((key: ScheduleV2ProductKey) => {
     scheduleLegendSessionV2Ref.current = { restore: null, isolateFocus: null };
     setVisibleProductsV2((prev) => ({
@@ -1967,70 +1450,12 @@ function DashboardContent() {
     [clearScheduleLegendPendingClickV2, handleScheduleLegendIsolateV2, toggleScheduleProductV2],
   );
 
-  const dismissScheduleLegendHint = useCallback(() => {
-    try {
-      window.localStorage.setItem("scheduleLegendHintSeen", "1");
-    } catch {
-      /* ignore */
-    }
-    setScheduleLegendHintOpen(false);
-  }, []);
-
-  useEffect(
-    () => () => {
-      const p = scheduleLegendClickTimerRef.current;
-      if (p) clearTimeout(p.id);
-    },
-    [],
-  );
   useEffect(
     () => () => {
       const p = scheduleLegendClickTimerV2Ref.current;
       if (p) clearTimeout(p.id);
     },
     [],
-  );
-
-  const dashboardAgeLabel = useMemo(() => {
-    void dashboardAgeTick;
-    if (!dashboardRefreshedAt) return null;
-    return formatDistanceToNow(dashboardRefreshedAt, { addSuffix: true, locale: es });
-  }, [dashboardRefreshedAt, dashboardAgeTick]);
-
-  const ScheduleXAxisTick = useMemo(
-    () =>
-      function ScheduleXAxisTickFn(props: { x?: number; y?: number; payload?: { value: unknown } }) {
-        const { x = 0, y = 0, payload } = props;
-        const entry = scheduleDatumByEtiqueta.get(asText(payload?.value));
-        if (!entry) return null;
-        return (
-          <g transform={`translate(${x},${y})`}>
-            {entry.hourLabel ? (
-              <text
-                x={0}
-                y={0}
-                dy={2}
-                textAnchor="middle"
-                style={{ fontSize: 10, fontWeight: 500, fill: CHART_AXIS.fill }}
-              >
-                {entry.hourLabel}
-              </text>
-            ) : null}
-            {entry.showDayLabel && entry.dateLabel ? (
-              <text
-                x={0}
-                y={0}
-                dy={20}
-                textAnchor="middle"
-                style={{ fontSize: 12, fontWeight: 700, fill: "#334155" }}
-              >
-                {entry.dateLabel}
-              </text>
-            ) : null}
-          </g>
-        );
-      },
-    [scheduleDatumByEtiqueta],
   );
 
   const ScheduleV2XAxisTick = useMemo(
@@ -2067,11 +1492,6 @@ function DashboardContent() {
         );
       },
     [scheduleV2DatumByEtiqueta],
-  );
-
-  const scheduleViewportChartWidth = Math.max(
-    (scheduleViewEnd - scheduleViewStart) * SCHEDULE_SLOT_PX,
-    240,
   );
 
   return (
@@ -2769,18 +2189,12 @@ function DashboardContent() {
 
           <TabsContent value="operaciones" className="mt-0 outline-none">
             <Tabs value={operacionesSubTab} onValueChange={handleOperacionesSubTabChange} className="w-full">
-              <TabsList className="mb-3 grid h-auto min-h-10 w-full max-w-2xl grid-cols-1 gap-1 bg-slate-200/90 p-1 sm:grid-cols-3 sm:gap-0">
+              <TabsList className="mb-3 grid h-auto min-h-10 w-full max-w-2xl grid-cols-1 gap-1 bg-slate-200/90 p-1 sm:grid-cols-2 sm:gap-0">
                 <TabsTrigger
                   value={OPERACIONES_SUB_CONTROL}
                   className="text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm sm:flex-1"
                 >
                   Control
-                </TabsTrigger>
-                <TabsTrigger
-                  value={OPERACIONES_SUB_CONDUCTORES_TIEMPO}
-                  className="text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm sm:flex-1"
-                >
-                  Conductores en el tiempo
                 </TabsTrigger>
                 <TabsTrigger
                   value={OPERACIONES_SUB_SEGUIMIENTO}
@@ -2795,14 +2209,6 @@ function DashboardContent() {
                   aria-hidden={operacionesSubTab !== OPERACIONES_SUB_CONTROL}
                 >
                   <ControlOperacionesPanel />
-                </div>
-                <div
-                  className={
-                    operacionesSubTab === OPERACIONES_SUB_CONDUCTORES_TIEMPO ? "block" : "hidden"
-                  }
-                  aria-hidden={operacionesSubTab !== OPERACIONES_SUB_CONDUCTORES_TIEMPO}
-                >
-                  <ConductorTimelineMatrix dataRevision={refreshKey} />
                 </div>
                 <div
                   className={
@@ -2960,12 +2366,6 @@ function DashboardContent() {
           </TabsContent>
 
           <TabsContent value="dashboard" className="mt-0 space-y-4 outline-none">
-            {dashboardError && dashboardSubTab === "reservas" && (
-              <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
-                {dashboardError}
-              </p>
-            )}
-
             <Tabs value={dashboardSubTab} onValueChange={setDashboardSubTab} className="w-full">
               <TabsList className="mb-3 grid h-auto min-h-10 w-full max-w-3xl grid-cols-1 gap-1 bg-slate-200/90 p-1 sm:grid-cols-2 sm:gap-0">
                 <TabsTrigger
@@ -2983,211 +2383,6 @@ function DashboardContent() {
               </TabsList>
 
               <TabsContent value="reservas" className="mt-0 space-y-4 outline-none">
-                <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm sm:flex-row sm:items-start sm:justify-between">
-                  <div className="order-2 grid w-full min-w-0 flex-1 grid-cols-1 gap-2 sm:order-1 sm:grid-cols-[minmax(0,1.2fr)] sm:gap-3">
-                    <div className="flex min-w-0 flex-col gap-1 sm:col-span-1">
-                      <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
-                        Empresa
-                      </span>
-                      <Select value={reservasEmpresa} onValueChange={setReservasEmpresa}>
-                        <SelectTrigger className="h-9 w-full min-w-0 border-slate-200 bg-white text-sm">
-                          <SelectValue placeholder="Empresa" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="Todas">Todas</SelectItem>
-                          {reservasEmpresaOptions.map((empresa) => (
-                            <SelectItem key={empresa} value={empresa}>
-                              {empresa}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-                  <div className="order-1 shrink-0 self-end rounded-lg border border-[#00e676]/40 bg-[#00e676]/15 px-4 py-2 sm:order-2 sm:self-auto sm:min-w-[140px]">
-                    <p className="text-[10px] uppercase tracking-wide text-slate-600/90">
-                      Pendientes (filtro)
-                    </p>
-                    <p className="text-2xl font-bold leading-none text-[#00e676]">
-                      {dashboardData?.kpi.totalPendientes ?? 0}
-                    </p>
-                  </div>
-                </div>
-                {dashboardLoading && (
-                  <p className="text-xs text-slate-500">Actualizando graficos...</p>
-                )}
-                {!dashboardLoading && dashboardAgeLabel && (
-                  <p className="text-[10px] text-slate-500">
-                    Graficos del dashboard actualizados {dashboardAgeLabel} (segun empresa seleccionada arriba).
-                  </p>
-                )}
-            <Card className="border-slate-200 bg-white shadow-sm">
-              <CardHeader className="space-y-3 py-3">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0">
-                    <CardTitle className="text-base font-semibold text-slate-800">
-                      Pendientes por franja de programacion
-                    </CardTitle>
-                    <p className="text-xs text-slate-500">
-                      Desde la primera hora con viaje pendiente hasta la ultima. Minimo 24 h en el eje;
-                      desplaza horizontalmente si hay mas franjas.
-                    </p>
-                  </div>
-                  {(() => {
-                    void scheduleLegendUiEpoch;
-                    const session = scheduleLegendSessionRef.current;
-                    const isolated =
-                      session.isolateFocus !== null &&
-                      scheduleOnlyProductVisible(scheduleProductVisibility, session.isolateFocus);
-                    const canRestore = session.restore !== null;
-                    return (
-                      <div className="flex min-w-0 flex-col items-stretch gap-2 sm:max-w-[min(100%,520px)] sm:items-end">
-                        <div className="flex flex-wrap items-center justify-end gap-2">
-                          {canRestore && (
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="h-7 shrink-0 text-xs"
-                              onClick={restoreScheduleLegendView}
-                            >
-                              Restaurar vista
-                            </Button>
-                          )}
-                          <div
-                            className="flex flex-wrap justify-end gap-2"
-                            title="Click: mostrar u ocultar en la grafica. Doble click: ver solo este producto. Teclado: Enter alterna; Mayus+Enter aísla."
-                          >
-                            {SCHEDULE_TOOLTIP_ORDER.map((key) => {
-                              const vis = scheduleProductVisibility[key];
-                              const isHidden = !vis;
-                              const isIsolateChip =
-                                isolated && session.isolateFocus === key;
-                              const isDimmed = isolated && session.isolateFocus !== key;
-                              return (
-                                <button
-                                  key={`legend-${key}`}
-                                  type="button"
-                                  tabIndex={0}
-                                  onClick={() => onScheduleLegendItemClick(key)}
-                                  onDoubleClick={(e) => onScheduleLegendItemDoubleClick(e, key)}
-                                  onKeyDown={(e) => onScheduleLegendItemKeyDown(e, key)}
-                                  className={`inline-flex cursor-pointer items-center rounded-md border border-transparent px-2 py-0.5 text-[10px] font-semibold text-white outline-offset-2 transition hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-400 ${
-                                    isHidden ? "opacity-40" : isDimmed ? "opacity-50" : ""
-                                  } ${isIsolateChip ? "z-[1] ring-2 ring-white shadow-md" : ""}`}
-                                  style={{ backgroundColor: SCHEDULE_PRODUCT_COLORS[key] }}
-                                  aria-pressed={vis}
-                                  aria-label={
-                                    key === "OTROS"
-                                      ? `Otros, ${vis ? "visible" : "oculto"} en la grafica`
-                                      : `${key}, ${vis ? "visible" : "oculto"} en la grafica`
-                                  }
-                                >
-                                  {key === "OTROS" ? "Otros" : key}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                        {scheduleLegendHintOpen && (
-                          <div className="flex max-w-full flex-col gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-left sm:items-end">
-                            <p className="text-[10px] leading-snug text-slate-600">
-                              <span className="font-semibold text-slate-700">Leyenda:</span> click para
-                              mostrar u ocultar · doble click para ver solo ese producto (otro doble click o
-                              &quot;Restaurar vista&quot; revierte).
-                            </p>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              className="h-6 self-end px-2 text-[10px]"
-                              onClick={dismissScheduleLegendHint}
-                            >
-                              Entendido
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })()}
-                </div>
-              </CardHeader>
-              <CardContent className="pb-4">
-                <div
-                  ref={scheduleTimelineScrollRef}
-                  onScroll={onScheduleChartScroll}
-                  className="overflow-x-auto overflow-y-hidden rounded-lg border border-slate-100 bg-slate-50/50 [-webkit-overflow-scrolling:touch]"
-                >
-                  <div className="relative" style={{ width: scheduleChartWidth, height: 350 }}>
-                    <div
-                      className="absolute top-0"
-                      style={{
-                        left: scheduleViewStart * SCHEDULE_SLOT_PX,
-                        width: scheduleViewportChartWidth,
-                        height: 350,
-                      }}
-                    >
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart
-                          data={scheduleChartViewportSlice}
-                          margin={{ top: 10, right: 12, left: 4, bottom: 28 }}
-                        >
-                          <CartesianGrid stroke={CHART_GRID} vertical={false} />
-                          {scheduleChartViewportSlice
-                            .filter((item) => item.dayDividerBefore)
-                            .map((item) => (
-                              <ReferenceLine
-                                key={`divider-${item.etiqueta}`}
-                                x={item.etiqueta}
-                                position="start"
-                                ifOverflow="visible"
-                                stroke="rgba(6, 182, 212, 0.3)"
-                                strokeDasharray="4 4"
-                                strokeWidth={1}
-                              />
-                            ))}
-                          <XAxis
-                            dataKey="etiqueta"
-                            tickLine={false}
-                            axisLine={{ stroke: CHART_GRID }}
-                            tick={<ScheduleXAxisTick />}
-                            interval={0}
-                            height={48}
-                          />
-                          <YAxis
-                            tick={CHART_AXIS}
-                            width={40}
-                            tickLine={false}
-                            axisLine={{ stroke: CHART_GRID }}
-                            allowDecimals={false}
-                            domain={[0, scheduleYAxisMax]}
-                          />
-                          <Tooltip content={<ScheduleStackBarTooltip />} />
-                          {visibleScheduleKeys.map((key, idx) => (
-                            <Bar
-                              key={key}
-                              dataKey={key}
-                              name={key === "OTROS" ? "Otros" : key}
-                              stackId="productos"
-                              isAnimationActive={false}
-                              barSize={SCHEDULE_SLOT_PX - 8}
-                              maxBarSize={SCHEDULE_SLOT_PX - 6}
-                              fill={SCHEDULE_PRODUCT_COLORS[key]}
-                              radius={
-                                idx === visibleScheduleKeys.length - 1
-                                  ? [4, 4, 0, 0]
-                                  : [0, 0, 0, 0]
-                              }
-                            />
-                          ))}
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
             <Card className="border-slate-200 bg-white shadow-sm">
               <CardHeader className="space-y-1 py-3">
                 <div className="flex items-start justify-between gap-2">
@@ -3329,181 +2524,6 @@ function DashboardContent() {
                 </div>
               </CardContent>
             </Card>
-
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-              <Card className="border-slate-200 bg-white shadow-sm">
-                <CardHeader className="py-3">
-                  <CardTitle className="text-sm font-semibold text-slate-800">
-                    Distribucion global por estado
-                  </CardTitle>
-                  <p className="text-xs text-slate-500">
-                    Segun empresa seleccionada arriba.
-                  </p>
-                </CardHeader>
-                <CardContent className="h-[300px] pb-4">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
-                      <Pie
-                        data={dashboardData?.charts.estadoDistribution ?? []}
-                        dataKey="total"
-                        nameKey="estado"
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={40}
-                        outerRadius={88}
-                        paddingAngle={1}
-                      >
-                        {(dashboardData?.charts.estadoDistribution ?? []).map((_, idx) => (
-                          <Cell key={idx} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip
-                        content={({ active, payload }) => {
-                          if (!active || !payload?.length) return null;
-                          const p = payload[0].payload as { estado: string; total: number };
-                          return (
-                            <div className="min-w-[160px] space-y-1 p-2" style={CHART_TOOLTIP_STYLE}>
-                              <p className="text-[11px] font-semibold text-white/90">Estado</p>
-                              <ChartTooltipRow label={p.estado} value={p.total} />
-                            </div>
-                          );
-                        }}
-                      />
-                      <Legend
-                        wrapperStyle={{ fontSize: 11 }}
-                        formatter={(value) => (
-                          <span className="text-slate-600">{String(value)}</span>
-                        )}
-                      />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </CardContent>
-              </Card>
-
-              <Card className="border-slate-200 bg-white shadow-sm">
-                <CardHeader className="py-3">
-                  <CardTitle className="text-sm font-semibold text-slate-800">
-                    Pendientes por empresa
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="h-[300px] pb-4">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={dashboardData?.charts.pendingByEmpresa ?? []}
-                      layout="vertical"
-                      margin={{ top: 4, right: 12, left: 4, bottom: 4 }}
-                    >
-                      <CartesianGrid stroke={CHART_GRID} horizontal={false} />
-                      <XAxis type="number" tick={CHART_AXIS} tickLine={false} axisLine={{ stroke: CHART_GRID }} />
-                      <YAxis
-                        dataKey="empresa"
-                        type="category"
-                        width={100}
-                        tick={{ ...CHART_AXIS, fontSize: 10 }}
-                        tickFormatter={(v) => (String(v).length > 18 ? `${String(v).slice(0, 16)}…` : String(v))}
-                        tickLine={false}
-                        axisLine={{ stroke: CHART_GRID }}
-                      />
-                      <Tooltip
-                        content={({ active, payload }) => {
-                          if (!active || !payload?.length) return null;
-                          const p = payload[0].payload as { empresa: string; total: number };
-                          return (
-                            <div className="min-w-[180px] space-y-1 p-2" style={CHART_TOOLTIP_STYLE}>
-                              <ChartTooltipRow label="Empresa" value={p.empresa} />
-                              <ChartTooltipRow label="Viajes pendientes" value={p.total} />
-                            </div>
-                          );
-                        }}
-                      />
-                      <Bar dataKey="total" name="Viajes" fill="#00e676" radius={[0, 4, 4, 0]} maxBarSize={22} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </CardContent>
-              </Card>
-            </div>
-
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-              <Card className="border-slate-200 bg-white shadow-sm">
-                <CardHeader className="py-3">
-                  <CardTitle className="text-sm font-semibold text-slate-800">Top 10 origenes</CardTitle>
-                </CardHeader>
-                <CardContent className="h-[280px] pb-4">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={dashboardData?.charts.topOrigens ?? []}
-                      layout="vertical"
-                      margin={{ top: 4, right: 12, left: 4, bottom: 4 }}
-                    >
-                      <CartesianGrid stroke={CHART_GRID} horizontal={false} />
-                      <XAxis type="number" tick={CHART_AXIS} tickLine={false} axisLine={{ stroke: CHART_GRID }} />
-                      <YAxis
-                        dataKey="label"
-                        type="category"
-                        width={110}
-                        tick={{ ...CHART_AXIS, fontSize: 9 }}
-                        tickFormatter={(v) => (String(v).length > 20 ? `${String(v).slice(0, 18)}…` : String(v))}
-                        tickLine={false}
-                        axisLine={{ stroke: CHART_GRID }}
-                      />
-                      <Tooltip
-                        content={({ active, payload }) => {
-                          if (!active || !payload?.length) return null;
-                          const p = payload[0].payload as { label: string; total: number };
-                          return (
-                            <div className="min-w-[200px] space-y-1 p-2" style={CHART_TOOLTIP_STYLE}>
-                              <ChartTooltipRow label="Origen" value={p.label} />
-                              <ChartTooltipRow label="Viajes pendientes" value={p.total} />
-                            </div>
-                          );
-                        }}
-                      />
-                      <Bar dataKey="total" fill="#00e676" radius={[0, 4, 4, 0]} maxBarSize={20} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </CardContent>
-              </Card>
-
-              <Card className="border-slate-200 bg-white shadow-sm">
-                <CardHeader className="py-3">
-                  <CardTitle className="text-sm font-semibold text-slate-800">Top 10 destinos</CardTitle>
-                </CardHeader>
-                <CardContent className="h-[280px] pb-4">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={dashboardData?.charts.topDestinos ?? []}
-                      layout="vertical"
-                      margin={{ top: 4, right: 12, left: 4, bottom: 4 }}
-                    >
-                      <CartesianGrid stroke={CHART_GRID} horizontal={false} />
-                      <XAxis type="number" tick={CHART_AXIS} tickLine={false} axisLine={{ stroke: CHART_GRID }} />
-                      <YAxis
-                        dataKey="label"
-                        type="category"
-                        width={110}
-                        tick={{ ...CHART_AXIS, fontSize: 9 }}
-                        tickFormatter={(v) => (String(v).length > 20 ? `${String(v).slice(0, 18)}…` : String(v))}
-                        tickLine={false}
-                        axisLine={{ stroke: CHART_GRID }}
-                      />
-                      <Tooltip
-                        content={({ active, payload }) => {
-                          if (!active || !payload?.length) return null;
-                          const p = payload[0].payload as { label: string; total: number };
-                          return (
-                            <div className="min-w-[200px] space-y-1 p-2" style={CHART_TOOLTIP_STYLE}>
-                              <ChartTooltipRow label="Destino" value={p.label} />
-                              <ChartTooltipRow label="Viajes pendientes" value={p.total} />
-                            </div>
-                          );
-                        }}
-                      />
-                      <Bar dataKey="total" fill="#1e88e5" radius={[0, 4, 4, 0]} maxBarSize={20} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </CardContent>
-              </Card>
-            </div>
               </TabsContent>
 
               <TabsContent value="productividad" className="mt-0 space-y-4 outline-none">

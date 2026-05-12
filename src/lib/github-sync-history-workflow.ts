@@ -13,7 +13,9 @@ function getGithubToken(): string | null {
 export async function dispatchSyncHistoryWorkflow(): Promise<void> {
   const token = getGithubToken();
   if (!token) {
-    throw new Error("Falta GITHUB_PAT o GITHUB_TOKEN en el entorno del servidor.");
+    throw new Error(
+      "Falta GITHUB_PAT o GITHUB_TOKEN en el entorno del servidor. En Vercel: Project → Settings → Environment Variables, crea GITHUB_PAT (scope del proyecto, entorno Production) y redeploy.",
+    );
   }
 
   const res = await fetch(GITHUB_DISPATCH_URL, {

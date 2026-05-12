@@ -1,8 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { format, parse } from "date-fns";
-import { es } from "date-fns/locale";
 import { Loader2 } from "lucide-react";
 import {
   Bar,
@@ -33,7 +31,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ymToMmmYy, type ServicesMoobizGranularity } from "@/lib/services-moobiz-dashboard-params";
+import { formatLimaDate, formatLimaDateTime } from "@/lib/date-utils";
+import { type ServicesMoobizGranularity } from "@/lib/services-moobiz-dashboard-params";
 
 const CHART_GRID = "rgba(148, 163, 184, 0.35)";
 const BAR_FILL = "#0ea5e9";
@@ -99,19 +98,6 @@ function buildQueryParams(args: {
   for (const v of args.conductorCategories) p.append("conductor_category", v);
   for (const v of args.months) p.append("months", v);
   return p.toString();
-}
-
-function periodTickLabel(period: string, granularity: ServicesMoobizGranularity): string {
-  if (!period) return "";
-  if (granularity === "monthly") {
-    if (/^\d{4}-\d{2}$/.test(period)) return ymToMmmYy(period);
-    return period;
-  }
-  if (/^\d{4}-\d{2}-\d{2}$/.test(period)) {
-    const d = parse(period, "yyyy-MM-dd", new Date());
-    if (!Number.isNaN(d.getTime())) return format(d, "d/M/yyyy", { locale: es });
-  }
-  return period;
 }
 
 function MultiFilterDialog(props: {
@@ -345,14 +331,7 @@ export function ServiciosMoobizCard() {
     [],
   );
 
-  const chartData = useMemo(
-    () =>
-      series.map((s) => ({
-        ...s,
-        label: periodTickLabel(s.period, debounced.granularity),
-      })),
-    [series, debounced.granularity],
-  );
+  const chartData = useMemo(() => series, [series]);
 
   const openData = async () => {
     setDataOpen(true);
@@ -526,8 +505,9 @@ export function ServiciosMoobizCard() {
               <BarChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
                 <CartesianGrid stroke={CHART_GRID} vertical={false} />
                 <XAxis
-                  dataKey="label"
+                  dataKey="period"
                   tick={{ fontSize: 10, fill: "#475569" }}
+                  tickFormatter={(v) => formatLimaDate(String(v))}
                   interval="preserveStartEnd"
                   angle={granularity === "daily" ? -35 : 0}
                   textAnchor={granularity === "daily" ? "end" : "middle"}
@@ -536,7 +516,7 @@ export function ServiciosMoobizCard() {
                 <YAxis width={36} tick={{ fontSize: 10 }} allowDecimals={false} />
                 <Tooltip
                   formatter={(value) => [value != null ? String(value) : "", "Servicios"]}
-                  labelFormatter={(label) => String(label ?? "")}
+                  labelFormatter={(label) => formatLimaDate(String(label ?? ""))}
                 />
                 <Bar dataKey="count" name="Servicios" fill={BAR_FILL} radius={[4, 4, 0, 0]} maxBarSize={48} isAnimationActive={false} />
               </BarChart>
@@ -697,8 +677,8 @@ export function ServiciosMoobizCard() {
                 <TableBody>
                   {dataRows.map((r, i) => (
                     <TableRow key={`${String(r.id_servicio ?? i)}-${i}`}>
-                      <TableCell className="max-w-[140px] truncate text-xs">
-                        {String(r.f_programada ?? "—")}
+                      <TableCell className="max-w-[180px] truncate text-xs">
+                        {formatLimaDateTime(r.f_programada as string | number | Date | null | undefined)}
                       </TableCell>
                       <TableCell className="font-mono text-xs">{String(r.id_servicio ?? "—")}</TableCell>
                       <TableCell className="text-xs">{String(r.estado ?? "—")}</TableCell>

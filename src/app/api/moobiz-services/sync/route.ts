@@ -1,15 +1,35 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { formatApiError } from "@/lib/format-api-error";
+import { dispatchSyncHistoryWorkflow } from "@/lib/github-sync-history-workflow";
 import { assertQualityWriteAccess } from "@/lib/panel-session";
 import { runMoobizServicesSync } from "@/lib/moobiz-services-sync";
 
 export const runtime = "nodejs";
 
-/** Sync manual Moobiz dispatcher → `moobiz_services` (token solo en servidor). */
+async function readSyncTarget(request: NextRequest): Promise<"services" | "history"> {
+  const ct = request.headers.get("content-type") ?? "";
+  if (!ct.includes("application/json")) return "services";
+  try {
+    const body = (await request.json()) as { target?: unknown };
+    return body?.target === "history" ? "history" : "services";
+  } catch {
+    return "services";
+  }
+}
+
+/** Sync manual: Moobiz dispatcher → `moobiz_services`, o disparo GitHub `sync-history` si `target: "history"`. */
 export async function POST(request: NextRequest) {
   try {
     console.log("[services-sync][AUDIT] POST /api/moobiz-services/sync iniciado");
     assertQualityWriteAccess(request);
+    const target = await readSyncTarget(request);
+
+    if (target === "history") {
+      console.log("[services-sync][AUDIT] modo=history workflow_dispatch sync-history.yml");
+      await dispatchSyncHistoryWorkflow();
+      return NextResponse.json({ ok: true, target: "history" as const }, { status: 200 });
+    }
+
     const result = await runMoobizServicesSync();
     const status = result.ok ? 200 : 422;
     console.log(

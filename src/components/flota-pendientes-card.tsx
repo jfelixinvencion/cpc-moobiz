@@ -118,26 +118,32 @@ export function FlotaPendientesCard() {
   }, [page, producto, sucursal]);
 
   const handleActualizarHistorial = async () => {
+    if (syncingHistory) return;
     setSyncingHistory(true);
     setFeedback(null);
     try {
-      const res = await fetch("/api/sync/moobiz-history", {
+      const res = await fetch("/api/moobiz-services/sync", {
         method: "POST",
         credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target: "history" }),
         cache: "no-store",
       });
-      if (res.status === 204) {
-        setFeedback({
-          type: "success",
-          message:
-            "Sincronización iniciada en GitHub. Los datos tardarán unos minutos en actualizarse",
-        });
-        await new Promise((r) => window.setTimeout(r, 2000));
-        await loadRows({ silent: true });
-        return;
+      const body = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        target?: string;
+      };
+      if (!res.ok || body?.ok !== true) {
+        throw new Error(body?.error || "No se pudo iniciar la sincronización del historial.");
       }
-      const body = (await res.json().catch(() => ({}))) as { error?: string };
-      throw new Error(body?.error || `Error ${res.status}`);
+      setFeedback({
+        type: "success",
+        message:
+          "Sincronización iniciada en GitHub. Los datos tardarán unos minutos en actualizarse",
+      });
+      await new Promise((r) => window.setTimeout(r, 2000));
+      await loadRows({ silent: true });
     } catch (e) {
       setFeedback({
         type: "error",
@@ -186,7 +192,7 @@ export function FlotaPendientesCard() {
             {syncingHistory ? (
               <>
                 <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
-                Sincronizando...
+                Actualizando...
               </>
             ) : (
               <>

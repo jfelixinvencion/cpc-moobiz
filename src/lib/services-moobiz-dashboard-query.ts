@@ -41,6 +41,105 @@ function getFilterWhereSql(): string {
 
 export type SeriesRow = { period: string; count: number };
 
+export type ServicesMoobizOptionsPayload = {
+  estados: string[];
+  creados_por: string[];
+  productos: string[];
+  empresas: string[];
+  sucursales: string[];
+  conductor_categories: string[];
+  months: { key: string; label: string }[];
+};
+
+const OPT_RANGE_DAYS = 730;
+const OPT_LIMIT_STRINGS = 400;
+const OPT_LIMIT_MONTHS = 48;
+
+/** DISTINCT opciones de filtro (sin filtros de usuario); cacheable aparte de la serie. */
+export async function runServicesMoobizFilterOptions(pool: Pool): Promise<ServicesMoobizOptionsPayload> {
+  const optEstados = `
+${V31_PARSED_CTE}
+SELECT DISTINCT trim(COALESCE(p.${V31.estado}, '')) AS v
+FROM p
+WHERE p.scheduled_ts IS NOT NULL
+  AND trim(COALESCE(p.${V31.estado}, '')) <> ''
+  AND p.scheduled_ts >= (((CURRENT_TIMESTAMP AT TIME ZONE 'America/Lima')::date - ${OPT_RANGE_DAYS})::timestamp AT TIME ZONE 'America/Lima')
+ORDER BY 1
+LIMIT ${OPT_LIMIT_STRINGS}
+`;
+
+  const optCreados = `
+${V31_PARSED_CTE}
+SELECT DISTINCT trim(COALESCE(p.${V31.creadoPor}, '')) AS v
+FROM p
+WHERE p.scheduled_ts IS NOT NULL
+  AND trim(COALESCE(p.${V31.creadoPor}, '')) <> ''
+  AND p.scheduled_ts >= (((CURRENT_TIMESTAMP AT TIME ZONE 'America/Lima')::date - ${OPT_RANGE_DAYS})::timestamp AT TIME ZONE 'America/Lima')
+ORDER BY 1
+LIMIT ${OPT_LIMIT_STRINGS}
+`;
+
+  const optProductos = `
+${V31_PARSED_CTE}
+SELECT DISTINCT trim(COALESCE(p.${V31.producto}, '')) AS v
+FROM p
+WHERE p.scheduled_ts IS NOT NULL
+  AND trim(COALESCE(p.${V31.producto}, '')) <> ''
+  AND p.scheduled_ts >= (((CURRENT_TIMESTAMP AT TIME ZONE 'America/Lima')::date - ${OPT_RANGE_DAYS})::timestamp AT TIME ZONE 'America/Lima')
+ORDER BY 1
+LIMIT ${OPT_LIMIT_STRINGS}
+`;
+
+  const optEmpresas = `
+${V31_PARSED_CTE}
+SELECT DISTINCT trim(COALESCE(p.${V31.empresa}, '')) AS v
+FROM p
+WHERE p.scheduled_ts IS NOT NULL
+  AND trim(COALESCE(p.${V31.empresa}, '')) <> ''
+  AND p.scheduled_ts >= (((CURRENT_TIMESTAMP AT TIME ZONE 'America/Lima')::date - ${OPT_RANGE_DAYS})::timestamp AT TIME ZONE 'America/Lima')
+ORDER BY 1
+LIMIT ${OPT_LIMIT_STRINGS}
+`;
+
+  const monthsSql = `
+${V31_PARSED_CTE}
+SELECT DISTINCT p.month_key_lima AS v
+FROM p
+WHERE p.scheduled_ts IS NOT NULL
+  AND p.month_key_lima IS NOT NULL
+  AND trim(p.month_key_lima) <> ''
+  AND p.scheduled_ts >= (((CURRENT_TIMESTAMP AT TIME ZONE 'America/Lima')::date - ${OPT_RANGE_DAYS})::timestamp AT TIME ZONE 'America/Lima')
+ORDER BY 1 DESC
+LIMIT ${OPT_LIMIT_MONTHS}
+`;
+
+  const [eEst, eCr, ePr, eEm, eMo] = await Promise.all([
+    pool.query<{ v: string }>(optEstados),
+    pool.query<{ v: string }>(optCreados),
+    pool.query<{ v: string }>(optProductos),
+    pool.query<{ v: string }>(optEmpresas),
+    pool.query<{ v: string }>(monthsSql),
+  ]);
+
+  const mapV = (rows: { v: string }[]) =>
+    rows.map((r) => r.v).filter((s) => typeof s === "string" && s.trim());
+
+  const monthsRaw = mapV(eMo.rows);
+  const sucursales = ["LIMA", "PROVINCIA"];
+  const conductor_categories = ["APOYO LIMA", "APOYO PROVINCIA", "AFILIADO"];
+
+  return {
+    estados: mapV(eEst.rows),
+    creados_por: mapV(eCr.rows),
+    productos: mapV(ePr.rows),
+    empresas: mapV(eEm.rows),
+    sucursales,
+    conductor_categories,
+    months: monthsRaw.map((key) => ({ key, label: ymToMmmYy(key) })),
+  };
+}
+
+/** Solo agregación serie + total (sin DISTINCT de opciones). */
 export async function runServicesMoobizDashboard(pool: Pool, parsed: ServicesMoobizParsedParams) {
   const monthly = parsed.granularity === "monthly";
   const trunc = monthly ? "month" : "day";
@@ -78,78 +177,9 @@ FROM p
 WHERE ${filterWhere}
 `;
 
-  const optEstados = `
-${V31_PARSED_CTE}
-SELECT DISTINCT trim(COALESCE(p.${V31.estado}, '')) AS v
-FROM p
-WHERE p.scheduled_ts IS NOT NULL
-  AND trim(COALESCE(p.${V31.estado}, '')) <> ''
-  AND p.scheduled_ts >= (((CURRENT_TIMESTAMP AT TIME ZONE 'America/Lima')::date - 730)::timestamp AT TIME ZONE 'America/Lima')
-ORDER BY 1
-LIMIT 400
-`;
-
-  const optCreados = `
-${V31_PARSED_CTE}
-SELECT DISTINCT trim(COALESCE(p.${V31.creadoPor}, '')) AS v
-FROM p
-WHERE p.scheduled_ts IS NOT NULL
-  AND trim(COALESCE(p.${V31.creadoPor}, '')) <> ''
-  AND p.scheduled_ts >= (((CURRENT_TIMESTAMP AT TIME ZONE 'America/Lima')::date - 730)::timestamp AT TIME ZONE 'America/Lima')
-ORDER BY 1
-LIMIT 400
-`;
-
-  const optProductos = `
-${V31_PARSED_CTE}
-SELECT DISTINCT trim(COALESCE(p.${V31.producto}, '')) AS v
-FROM p
-WHERE p.scheduled_ts IS NOT NULL
-  AND trim(COALESCE(p.${V31.producto}, '')) <> ''
-  AND p.scheduled_ts >= (((CURRENT_TIMESTAMP AT TIME ZONE 'America/Lima')::date - 730)::timestamp AT TIME ZONE 'America/Lima')
-ORDER BY 1
-LIMIT 400
-`;
-
-  const optEmpresas = `
-${V31_PARSED_CTE}
-SELECT DISTINCT trim(COALESCE(p.${V31.empresa}, '')) AS v
-FROM p
-WHERE p.scheduled_ts IS NOT NULL
-  AND trim(COALESCE(p.${V31.empresa}, '')) <> ''
-  AND p.scheduled_ts >= (((CURRENT_TIMESTAMP AT TIME ZONE 'America/Lima')::date - 730)::timestamp AT TIME ZONE 'America/Lima')
-ORDER BY 1
-LIMIT 400
-`;
-
-  const monthsSql = `
-${V31_PARSED_CTE}
-SELECT DISTINCT p.month_key_lima AS v
-FROM p
-WHERE p.scheduled_ts IS NOT NULL
-  AND p.month_key_lima IS NOT NULL
-  AND trim(p.month_key_lima) <> ''
-  AND p.scheduled_ts >= (((CURRENT_TIMESTAMP AT TIME ZONE 'America/Lima')::date - 730)::timestamp AT TIME ZONE 'America/Lima')
-ORDER BY 1 DESC
-LIMIT 48
-`;
-
-  const [
-    seriesRes,
-    totalRes,
-    eEst,
-    eCr,
-    ePr,
-    eEm,
-    eMo,
-  ] = await Promise.all([
+  const [seriesRes, totalRes] = await Promise.all([
     pool.query<SeriesRow>(seriesSql, params),
     pool.query<{ total: number }>(totalSql, params),
-    pool.query<{ v: string }>(optEstados),
-    pool.query<{ v: string }>(optCreados),
-    pool.query<{ v: string }>(optProductos),
-    pool.query<{ v: string }>(optEmpresas),
-    pool.query<{ v: string }>(monthsSql),
   ]);
 
   const series: SeriesRow[] = seriesRes.rows.map((r) => ({
@@ -159,31 +189,7 @@ LIMIT 48
 
   const total = totalRes.rows[0]?.total ?? 0;
 
-  const mapV = (rows: { v: string }[]) =>
-    rows.map((r) => r.v).filter((s) => typeof s === "string" && s.trim());
-
-  const monthsRaw = mapV(eMo.rows);
-  const sucursales = ["LIMA", "PROVINCIA"];
-  const conductor_categories = ["APOYO LIMA", "APOYO PROVINCIA", "AFILIADO"];
-
-  const monthsOptions = monthsRaw.map((value) => ({
-    value,
-    label: ymToMmmYy(value),
-  }));
-
-  return {
-    series,
-    total,
-    monthsOptions,
-    filtersOptions: {
-      estados: mapV(eEst.rows),
-      creados_por: mapV(eCr.rows),
-      productos: mapV(ePr.rows),
-      empresas: mapV(eEm.rows),
-      sucursales,
-      conductor_categories,
-    },
-  };
+  return { series, total };
 }
 
 export async function runServicesMoobizData(pool: Pool, parsed: ServicesMoobizParsedParams) {

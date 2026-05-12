@@ -51,13 +51,24 @@ type FiltersOptions = {
 
 type ApiSeries = { period: string; count: number };
 
-type ApiBody = {
-  series?: ApiSeries[];
-  total?: number;
-  monthsOptions?: MonthOpt[];
-  filtersOptions?: FiltersOptions;
+type OptionsApiBody = {
+  estados?: string[];
+  creados_por?: string[];
+  productos?: string[];
+  empresas?: string[];
+  sucursales?: string[];
+  conductor_categories?: string[];
+  months?: { key: string; label: string }[];
   error?: string;
 };
+
+type SeriesApiBody = {
+  series?: ApiSeries[];
+  total?: number;
+  error?: string;
+};
+
+const OPTIONS_TTL_MS = 5 * 60 * 1000;
 
 function useDebounced<T>(value: T, ms: number): T {
   const [debounced, setDebounced] = useState(value);
@@ -174,6 +185,9 @@ export function ServiciosMoobizCard() {
   const [conductorCat, setConductorCat] = useState<Set<string>>(new Set());
   const [months, setMonths] = useState<Set<string>>(new Set());
 
+  const optionsCacheRef = useRef<{ at: number; payload: OptionsApiBody } | null>(null);
+  const optionsAbortRef = useRef<AbortController | null>(null);
+
   const debounced = useDebounced(
     {
       granularity,
@@ -188,10 +202,12 @@ export function ServiciosMoobizCard() {
     300,
   );
 
+  const [filtersOptions, setFiltersOptions] = useState<FiltersOptions | null>(null);
+  const [monthsOptions, setMonthsOptions] = useState<MonthOpt[]>([]);
+  const [optionsLoading, setOptionsLoading] = useState(true);
+  const [optionsError, setOptionsError] = useState<string | null>(null);
   const [series, setSeries] = useState<ApiSeries[]>([]);
   const [total, setTotal] = useState(0);
-  const [monthsOptions, setMonthsOptions] = useState<MonthOpt[]>([]);
-  const [filtersOptions, setFiltersOptions] = useState<FiltersOptions | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dataOpen, setDataOpen] = useState(false);
@@ -211,6 +227,69 @@ export function ServiciosMoobizCard() {
   >(null);
 
   const abortRef = useRef<AbortController | null>(null);
+  const dataAbortRef = useRef<AbortController | null>(null);
+
+  const applyOptionsPayload = useCallback((body: OptionsApiBody) => {
+    setFiltersOptions({
+      estados: Array.isArray(body.estados) ? body.estados : [],
+      creados_por: Array.isArray(body.creados_por) ? body.creados_por : [],
+      productos: Array.isArray(body.productos) ? body.productos : [],
+      empresas: Array.isArray(body.empresas) ? body.empresas : [],
+      sucursales: Array.isArray(body.sucursales) ? body.sucursales : ["LIMA", "PROVINCIA"],
+      conductor_categories: Array.isArray(body.conductor_categories)
+        ? body.conductor_categories
+        : ["APOYO LIMA", "APOYO PROVINCIA", "AFILIADO"],
+    });
+    const mo = Array.isArray(body.months) ? body.months : [];
+    setMonthsOptions(mo.map((m) => ({ value: m.key, label: m.label })));
+  }, []);
+
+  const loadOptions = useCallback(
+    async (force: boolean) => {
+      const now = Date.now();
+      if (
+        !force &&
+        optionsCacheRef.current &&
+        now - optionsCacheRef.current.at < OPTIONS_TTL_MS
+      ) {
+        applyOptionsPayload(optionsCacheRef.current.payload);
+        setOptionsLoading(false);
+        setOptionsError(null);
+        return;
+      }
+
+      optionsAbortRef.current?.abort();
+      const c = new AbortController();
+      optionsAbortRef.current = c;
+      setOptionsLoading(true);
+      setOptionsError(null);
+      try {
+        const res = await fetch("/api/dashboard/services-moobiz/options", { signal: c.signal });
+        const body = (await res.json()) as OptionsApiBody;
+        if (!res.ok) throw new Error(body.error || "No se pudieron cargar las opciones de filtro.");
+        optionsCacheRef.current = { at: Date.now(), payload: body };
+        applyOptionsPayload(body);
+      } catch (e) {
+        if (e instanceof Error && e.name === "AbortError") return;
+        setOptionsError(e instanceof Error ? e.message : String(e));
+        setFiltersOptions(null);
+        setMonthsOptions([]);
+      } finally {
+        if (optionsAbortRef.current === c) {
+          optionsAbortRef.current = null;
+          setOptionsLoading(false);
+        }
+      }
+    },
+    [applyOptionsPayload],
+  );
+
+  useEffect(() => {
+    void loadOptions(false);
+    return () => {
+      optionsAbortRef.current?.abort();
+    };
+  }, [loadOptions]);
 
   const queryString = useMemo(
     () =>
@@ -235,15 +314,12 @@ export function ServiciosMoobizCard() {
     setError(null);
     try {
       const res = await fetch(`/api/dashboard/services-moobiz?${queryString}`, {
-        cache: "no-store",
         signal: c.signal,
       });
-      const body = (await res.json()) as ApiBody;
+      const body = (await res.json()) as SeriesApiBody;
       if (!res.ok) throw new Error(body.error || "No se pudo cargar Servicios Moobiz.");
       setSeries(Array.isArray(body.series) ? body.series : []);
       setTotal(typeof body.total === "number" ? body.total : 0);
-      setMonthsOptions(Array.isArray(body.monthsOptions) ? body.monthsOptions : []);
-      setFiltersOptions(body.filtersOptions ?? null);
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") return;
       setSeries([]);
@@ -264,6 +340,7 @@ export function ServiciosMoobizCard() {
   useEffect(
     () => () => {
       abortRef.current?.abort();
+      dataAbortRef.current?.abort();
     },
     [],
   );
@@ -279,18 +356,27 @@ export function ServiciosMoobizCard() {
 
   const openData = async () => {
     setDataOpen(true);
+    dataAbortRef.current?.abort();
+    const c = new AbortController();
+    dataAbortRef.current = c;
     setDataLoading(true);
     setDataError(null);
     try {
-      const res = await fetch(`/api/dashboard/services-moobiz/data?${queryString}`, { cache: "no-store" });
+      const res = await fetch(`/api/dashboard/services-moobiz/data?${queryString}`, {
+        signal: c.signal,
+      });
       const body = (await res.json()) as { data?: Record<string, unknown>[]; error?: string };
       if (!res.ok) throw new Error(body.error || "No se pudieron cargar las filas.");
       setDataRows(Array.isArray(body.data) ? body.data : []);
     } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return;
       setDataRows([]);
       setDataError(e instanceof Error ? e.message : String(e));
     } finally {
-      setDataLoading(false);
+      if (dataAbortRef.current === c) {
+        dataAbortRef.current = null;
+        setDataLoading(false);
+      }
     }
   };
 
@@ -305,6 +391,16 @@ export function ServiciosMoobizCard() {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle className="text-base font-semibold">Servicios Moobiz</CardTitle>
           <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-8 text-xs text-slate-600"
+              disabled={optionsLoading}
+              onClick={() => void loadOptions(true)}
+            >
+              Actualizar filtros
+            </Button>
             <Badge variant="secondary" className="bg-slate-100 text-slate-700">
               {loading ? "…" : `${total.toLocaleString("es-PE")} servicios`}
             </Badge>
@@ -313,6 +409,9 @@ export function ServiciosMoobizCard() {
             </Button>
           </div>
         </div>
+        {optionsError ? (
+          <p className="text-xs text-amber-700">{optionsError}</p>
+        ) : null}
         <div className="flex flex-wrap items-center gap-2">
           <div className="inline-flex rounded-md border border-slate-200 p-0.5">
             <Button
@@ -320,7 +419,7 @@ export function ServiciosMoobizCard() {
               variant={granularity === "daily" ? "default" : "ghost"}
               size="sm"
               className="h-8 px-3 text-xs"
-              disabled={loading}
+              disabled={loading || optionsLoading}
               onClick={() => setGranularity("daily")}
             >
               Diario
@@ -330,7 +429,7 @@ export function ServiciosMoobizCard() {
               variant={granularity === "monthly" ? "default" : "ghost"}
               size="sm"
               className="h-8 px-3 text-xs"
-              disabled={loading}
+              disabled={loading || optionsLoading}
               onClick={() => setGranularity("monthly")}
             >
               Mensual
@@ -403,7 +502,7 @@ export function ServiciosMoobizCard() {
             variant="outline"
             size="sm"
             className="h-8 max-w-[10rem] truncate text-xs"
-            disabled={loading}
+            disabled={loading || optionsLoading}
             onClick={() => setDlg("mes")}
           >
             {chip("F. Programada (mes)", months)}
@@ -562,7 +661,13 @@ export function ServiciosMoobizCard() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={dataOpen} onOpenChange={setDataOpen}>
+      <Dialog
+        open={dataOpen}
+        onOpenChange={(open) => {
+          setDataOpen(open);
+          if (!open) dataAbortRef.current?.abort();
+        }}
+      >
         <DialogContent className="max-w-4xl">
           <DialogHeader>
             <DialogTitle>Servicios (muestra)</DialogTitle>

@@ -61,6 +61,7 @@ import {
   type SyncMonitorRow,
 } from "@/components/logs-sync-health-banner";
 import { DatosPendientesTable } from "@/components/DatosPendientesTable";
+import { FlotaPendientesCard } from "@/components/flota-pendientes-card";
 import { ControlOperacionesPanel } from "@/components/control-operaciones-panel";
 import {
   SCHEDULE_PRODUCT_COLORS,
@@ -184,6 +185,7 @@ type DashboardResponse = {
 
 /** Query `datosSub` para la vista en Flota (tab principal `value="datos"`). */
 const DATOS_SUB_DATOS_PENDIENTES = "datos-pendientes" as const;
+const DATOS_SUB_PENDIENTES = "pendientes" as const;
 const OPERACIONES_SUB_CONTROL = "control" as const;
 const OPERACIONES_SUB_SEGUIMIENTO = "seguimiento" as const;
 const HISTORY_PAGE_SIZE = 50;
@@ -446,6 +448,7 @@ function DashboardContent() {
       >,
   );
   const [mainTab, setMainTab] = useState("dashboard");
+  const [datosSubTab, setDatosSubTab] = useState<string>(DATOS_SUB_DATOS_PENDIENTES);
   const [operacionesSubTab, setOperacionesSubTab] = useState<string>(OPERACIONES_SUB_CONTROL);
   const [historyUserSearch, setHistoryUserSearch] = useState("");
   const [historyDateFrom, setHistoryDateFrom] = useState("");
@@ -535,6 +538,20 @@ function DashboardContent() {
     [operacionesSubAllowed, setOperacionesSubInUrl],
   );
 
+  const datosSubAllowed = useMemo(
+    () => new Set<string>([DATOS_SUB_DATOS_PENDIENTES, DATOS_SUB_PENDIENTES]),
+    [],
+  );
+
+  const handleDatosSubTabChange = useCallback(
+    (value: string) => {
+      if (!datosSubAllowed.has(value)) return;
+      setDatosSubTab(value);
+      setDatosSubInUrl(value);
+    },
+    [datosSubAllowed, setDatosSubInUrl],
+  );
+
   useEffect(() => {
     if (mainTab !== "operaciones") return;
     const raw = searchParams.get("operacionesSub");
@@ -549,7 +566,11 @@ function DashboardContent() {
   useEffect(() => {
     if (mainTab !== "datos") return;
     const raw = searchParams.get("datosSub");
-    if (raw === DATOS_SUB_DATOS_PENDIENTES) return;
+    if (raw === DATOS_SUB_DATOS_PENDIENTES || raw === DATOS_SUB_PENDIENTES) {
+      setDatosSubTab(raw);
+      return;
+    }
+    setDatosSubTab(DATOS_SUB_DATOS_PENDIENTES);
     setDatosSubInUrl(DATOS_SUB_DATOS_PENDIENTES);
   }, [mainTab, searchParams, setDatosSubInUrl]);
 
@@ -1027,7 +1048,28 @@ function DashboardContent() {
         >
         <div className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-6 md:px-6">
           <TabsContent value="datos" className="mt-0 space-y-4 outline-none">
-            <DatosPendientesTable />
+            <Tabs value={datosSubTab} onValueChange={handleDatosSubTabChange} className="w-full">
+              <TabsList className="mb-3 h-10 w-full max-w-4xl bg-slate-200/90 p-1">
+                <TabsTrigger
+                  value={DATOS_SUB_DATOS_PENDIENTES}
+                  className="flex-1 text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm"
+                >
+                  Datos Pendientes
+                </TabsTrigger>
+                <TabsTrigger
+                  value={DATOS_SUB_PENDIENTES}
+                  className="flex-1 text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm"
+                >
+                  Pendientes
+                </TabsTrigger>
+              </TabsList>
+              <TabsContent value={DATOS_SUB_DATOS_PENDIENTES} className="mt-0 space-y-4 outline-none">
+                <DatosPendientesTable />
+              </TabsContent>
+              <TabsContent value={DATOS_SUB_PENDIENTES} className="mt-0 space-y-4 outline-none">
+                <FlotaPendientesCard />
+              </TabsContent>
+            </Tabs>
           </TabsContent>
 
           <TabsContent value="operaciones" className="mt-0 outline-none">

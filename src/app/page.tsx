@@ -62,6 +62,7 @@ import {
 } from "@/components/logs-sync-health-banner";
 import { DatosPendientesTable } from "@/components/DatosPendientesTable";
 import { FlotaPendientesCard } from "@/components/flota-pendientes-card";
+import { ServiciosMoobizCard } from "@/components/dashboard/ServiciosMoobizCard";
 import { ControlOperacionesPanel } from "@/components/control-operaciones-panel";
 import {
   SCHEDULE_PRODUCT_COLORS,
@@ -1409,7 +1410,8 @@ function DashboardContent() {
                 </div>
               </CardContent>
             </Card>
-              </TabsContent>
+            <ServiciosMoobizCard />
+          </TabsContent>
 
               <TabsContent value="productividad" className="mt-0 space-y-4 outline-none">
                 {prodError && (

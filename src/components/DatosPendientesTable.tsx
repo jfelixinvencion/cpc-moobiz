@@ -26,6 +26,7 @@ import {
   buildDatosPendientesQueryParams,
   DATOS_PENDIENTES_COLUMNS,
 } from "@/lib/datos-pendientes";
+import { formatVencimientoDatosPendienteCell } from "@/lib/date-utils";
 
 const PAGE_SIZE = 50;
 /** Orden fijo en servidor (sin UI de ordenamiento en cabeceras). */
@@ -51,14 +52,6 @@ type ApiResponse = {
 function asText(v: unknown): string {
   if (v === null || v === undefined) return "";
   return String(v);
-}
-
-function formatDateTimeCell(value: unknown): string {
-  const s = asText(value).trim();
-  if (!s) return "—";
-  const d = new Date(s);
-  if (Number.isNaN(d.getTime())) return s;
-  return d.toLocaleString("es-PE", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 function sortBadgeClass(statusRaw: unknown): string {
@@ -308,9 +301,9 @@ export function DatosPendientesTable() {
                       <TableCell className="text-xs">{asText(row.sucursal) || "—"}</TableCell>
                       <TableCell className="text-xs">{asText(row.distrito_vive) || "—"}</TableCell>
                       <TableCell className="text-xs">{asText(row.turno) || "—"}</TableCell>
-                      <TableCell className="text-xs">{formatDateTimeCell(row.vencimiento_brevete)}</TableCell>
-                      <TableCell className="text-xs">{formatDateTimeCell(row.vencimiento_revision_tecnica)}</TableCell>
-                      <TableCell className="text-xs">{formatDateTimeCell(row.vencimiento_soat)}</TableCell>
+                      <TableCell className="text-xs">{formatVencimientoDatosPendienteCell(row.vencimiento_brevete)}</TableCell>
+                      <TableCell className="text-xs">{formatVencimientoDatosPendienteCell(row.vencimiento_revision_tecnica)}</TableCell>
+                      <TableCell className="text-xs">{formatVencimientoDatosPendienteCell(row.vencimiento_soat)}</TableCell>
                       <TableCell className="text-xs">{asText(row.tipo_contribuyente) || "—"}</TableCell>
                       <TableCell className="text-xs">{asText(row.marca_contabilidad_moobiz) || "—"}</TableCell>
                       <TableCell className="text-xs">{asText(row.numero_ruc_factura) || "—"}</TableCell>

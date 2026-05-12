@@ -1,4 +1,5 @@
 import { V31 } from "@/lib/services-moobiz-31cols";
+import { scheduledTsFromFpRawExpr } from "@/lib/services-moobiz-scheduled-ts-sql";
 
 /**
  * CTE `p`: filas con scheduled_ts parseado, sucursal_group y conductor_category.
@@ -8,30 +9,26 @@ export const V31_PARSED_CTE = `
 WITH base AS (
   SELECT * FROM vista.vw_moobiz_31cols_pe
 ),
-p0 AS (
+fp AS (
   SELECT
     base.*,
-    trim(both FROM COALESCE(base.${V31.fProgramada}::text, '')) AS fp_raw,
-    COALESCE(
-      to_timestamp(NULLIF(trim(both FROM COALESCE(base.${V31.fProgramada}::text, '')), ''), 'DD/MM/YYYY HH24:MI'),
-      to_timestamp(NULLIF(trim(both FROM COALESCE(base.${V31.fProgramada}::text, '')), ''), 'DD/MM/YYYY HH12:MI AM'),
-      to_timestamp(NULLIF(trim(both FROM COALESCE(base.${V31.fProgramada}::text, '')), ''), 'DD/MM/YYYY'),
-      CASE
-        WHEN trim(both FROM COALESCE(base.${V31.fProgramada}::text, '')) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'
-          THEN trim(both FROM COALESCE(base.${V31.fProgramada}::text, ''))::timestamptz
-        ELSE NULL
-      END
-    ) AS scheduled_ts,
+    trim(both FROM COALESCE(base.${V31.fProgramada}::text, '')) AS fp_raw
+  FROM base
+),
+p0 AS (
+  SELECT
+    fp.*,
+    ${scheduledTsFromFpRawExpr("fp.fp_raw")} AS scheduled_ts,
     CASE
-      WHEN upper(trim(COALESCE(base.${V31.sucursal}, ''))) = 'LIMA' THEN 'LIMA'
+      WHEN upper(trim(COALESCE(fp.${V31.sucursal}, ''))) = 'LIMA' THEN 'LIMA'
       ELSE 'PROVINCIA'
     END AS sucursal_group,
     CASE
-      WHEN trim(COALESCE(base.${V31.idConductor}::text, '')) = '83320' THEN 'APOYO LIMA'
-      WHEN trim(COALESCE(base.${V31.idConductor}::text, '')) = '124779' THEN 'APOYO PROVINCIA'
+      WHEN trim(COALESCE(fp.${V31.idConductor}::text, '')) = '83320' THEN 'APOYO LIMA'
+      WHEN trim(COALESCE(fp.${V31.idConductor}::text, '')) = '124779' THEN 'APOYO PROVINCIA'
       ELSE 'AFILIADO'
     END AS conductor_category
-  FROM base
+  FROM fp
 ),
 p AS (
   SELECT

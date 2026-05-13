@@ -43,10 +43,20 @@ import {
 import type { NearbyServiceMarker } from "@/components/LiveDriverMap";
 import {
   GPS_MULTI_OPTIONS,
+  GPS_TABLE_LABEL_EN_LINEA,
+  GPS_TABLE_LABEL_OCUPADO,
   type DriverLiveAvailability,
   gpsTableLabelFromAvailability,
   rowMatchesGpsMultiFilter,
 } from "@/lib/control-operaciones-gps-filter";
+import {
+  SOLICITANTE_FILTER_ALL,
+  SOLICITANTE_FILTER_EMPTY,
+  buildSolicitanteFilterOptions,
+  emptyControlSolicitanteCell,
+  rowMatchesSolicitanteFilter,
+  type ControlSolicitanteCell,
+} from "@/lib/control-operaciones-solicitante-tm-tt";
 import type { ControlDriverExcelRow } from "@/lib/control-operaciones-map";
 import { semaforoSwatch } from "@/lib/control-operaciones-map";
 import {
@@ -72,8 +82,8 @@ const TOOLBAR_BTN_SECONDARY =
 /** Destacado respecto a secundarios, sin gradientes ni colores saturados. */
 const TOOLBAR_BTN_GPS =
   "h-8 min-h-8 gap-1.5 px-2.5 text-xs font-medium shadow-sm border-indigo-200 bg-indigo-50/90 text-indigo-950 hover:bg-indigo-100 hover:border-indigo-300 hover:text-indigo-950";
-const SOLICITANTE_ALL = "__all__";
-const SOLICITANTE_EMPTY = "__empty__";
+const SOLICITANTE_ALL = SOLICITANTE_FILTER_ALL;
+const SOLICITANTE_EMPTY = SOLICITANTE_FILTER_EMPTY;
 const GPS_ICON_COLOR_NEUTRAL = "#cbd5e1";
 const GPS_ICON_COLOR_ONLINE = "#22c55e";
 const GPS_ICON_COLOR_BUSY = "#f97316";
@@ -129,12 +139,10 @@ type MergedDriver = ControlDriverExcelRow & {
   semaforo?: string | null;
 };
 
-type ControlCell = { solicitante: string | null; observacion: string | null };
-
 type ApiPage = {
   drivers: ControlDriverExcelRow[];
-  gpsAvailabilityById?: Record<string, DriverLiveAvailability>;
-  controlById: Record<string, ControlCell>;
+  gpsAvailabilityById?: Record<string, DriverLiveAvailability | null>;
+  controlById: Record<string, ControlSolicitanteCell>;
   total: number;
   approvedCount?: number;
   semanaLabel: string;
@@ -441,7 +449,12 @@ function SearchableMultiMiniSelect(props: {
 }
 
 async function postUpsert(
-  rows: { id_conductor: string; solicitante: string | null; observacion: string | null }[],
+  rows: {
+    id_conductor: string;
+    solicitante_tm: string | null;
+    solicitante_tt: string | null;
+    observacion: string | null;
+  }[],
 ): Promise<void> {
   const res = await fetch("/api/control-operaciones", {
     method: "POST",
@@ -450,6 +463,20 @@ async function postUpsert(
   });
   const j = (await res.json()) as { error?: string };
   if (!res.ok) throw new Error(j.error || "Error al guardar");
+}
+
+async function postBulkUpdate(
+  ids: string[],
+  field: "solicitante_tm" | "solicitante_tt" | "observacion",
+  value: string | null,
+): Promise<void> {
+  const res = await fetch("/api/control-operaciones", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bulk: true, ids, field, value }),
+  });
+  const j = (await res.json()) as { error?: string };
+  if (!res.ok) throw new Error(j.error || "Actualización masiva falló");
 }
 
 async function fetchServCountsByDriverIdsChunked(driverIds: string[]): Promise<Record<string, number>> {
@@ -543,7 +570,7 @@ function formatGpsDate(value: string): string {
 
 export function ControlOperacionesPanel() {
   const [rows, setRows] = useState<MergedDriver[]>([]);
-  const [controlById, setControlById] = useState<Record<string, ControlCell>>({});
+  const [controlById, setControlById] = useState<Record<string, ControlSolicitanteCell>>({});
   const [operatorOptions, setOperatorOptions] = useState<{ value: string; label: string }[]>([]);
   const [operatorsReady, setOperatorsReady] = useState(false);
   const [semanaLabel, setSemanaLabel] = useState("");
@@ -575,13 +602,14 @@ export function ControlOperacionesPanel() {
 
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkSolicitante, setBulkSolicitante] = useState("");
+  const [bulkSolicitanteTarget, setBulkSolicitanteTarget] = useState<"tm" | "tt">("tm");
   const [bulkClearMenuOpen, setBulkClearMenuOpen] = useState(false);
   const bulkClearMenuRef = useRef<HTMLDivElement>(null);
   const [bulkModalPortalContainer, setBulkModalPortalContainer] = useState<HTMLElement | null>(null);
   const liveLocationCacheRef = useRef<Map<string, DriverLiveLocationApiResponse>>(new Map());
   /** Colores del ícono MapPin por fila (solo tras consulta exitosa; evita leer refs durante render). */
   const [gpsAvailByDriverId, setGpsAvailByDriverId] = useState<
-    Record<string, DriverLiveAvailability>
+    Record<string, DriverLiveAvailability | null>
   >({});
   const [gpsModalOpen, setGpsModalOpen] = useState(false);
   const [gpsModalDriver, setGpsModalDriver] = useState<{ id: string; name: string } | null>(null);
@@ -605,29 +633,12 @@ export function ControlOperacionesPanel() {
     return map;
   }, [operatorOptions]);
 
-  const solicitanteLabel = useCallback(
-    (raw: string | null | undefined): string => {
-      const v = String(raw ?? "").trim();
-      if (!v) return "";
-      return operatorLabelByValue.get(v) ?? v;
-    },
-    [operatorLabelByValue],
-  );
-
   const solicitanteFilterOptions = useMemo(() => {
-    const set = new Set<string>();
-    for (const r of rows) {
-      const sol = solicitanteLabel(controlById[r.id_conductor]?.solicitante);
-      if (sol) set.add(sol);
-    }
-    return [
-      { value: SOLICITANTE_ALL, label: "Todos" },
-      { value: SOLICITANTE_EMPTY, label: "Vacíos" },
-      ...Array.from(set)
-        .sort((a, b) => a.localeCompare(b, "es"))
-        .map((s) => ({ value: s, label: s })),
-    ];
-  }, [rows, controlById, solicitanteLabel]);
+    return buildSolicitanteFilterOptions({
+      controlById,
+      operatorLabelByValue,
+    });
+  }, [controlById, operatorLabelByValue]);
 
   const rowsBeforeDistritoFilter = useMemo(() => {
     const cq = conductorQ.trim().toLowerCase();
@@ -641,11 +652,14 @@ export function ControlOperacionesPanel() {
         const nm = r.nombre_conductor.toLowerCase();
         if (!idm.includes(cq) && !nm.includes(cq)) return false;
       }
-      const sol = solicitanteLabel(controlById[r.id_conductor]?.solicitante);
-      if (solicitanteFilter === SOLICITANTE_EMPTY) {
-        if (sol) return false;
-      } else if (solicitanteFilter !== SOLICITANTE_ALL) {
-        if (sol !== solicitanteFilter) return false;
+      if (
+        !rowMatchesSolicitanteFilter({
+          solicitanteFilter,
+          cell: controlById[r.id_conductor],
+          operatorLabelByValue,
+        })
+      ) {
+        return false;
       }
       return true;
     });
@@ -657,7 +671,7 @@ export function ControlOperacionesPanel() {
     conductorQ,
     solicitanteFilter,
     controlById,
-    solicitanteLabel,
+    operatorLabelByValue,
     gpsAvailByDriverId,
   ]);
 
@@ -748,7 +762,13 @@ export function ControlOperacionesPanel() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/control-operaciones", { cache: "no-store" });
+      const sp = new URLSearchParams();
+      if (solicitanteFilter === SOLICITANTE_EMPTY) sp.append("solicitante", SOLICITANTE_EMPTY);
+      else if (solicitanteFilter !== SOLICITANTE_ALL) sp.append("solicitante", solicitanteFilter);
+      const qs = sp.toString();
+      const res = await fetch(qs ? `/api/control-operaciones?${qs}` : "/api/control-operaciones", {
+        cache: "no-store",
+      });
       const j = (await res.json()) as ApiPage & { loadStrategy?: unknown };
       if (!res.ok) throw new Error(j.error || "Error al cargar control");
 
@@ -776,7 +796,7 @@ export function ControlOperacionesPanel() {
     } finally {
       setLoading(false);
     }
-  }, [enrichHeavyForSlice]);
+  }, [enrichHeavyForSlice, solicitanteFilter]);
 
   const reloadTable = useCallback(() => {
     setSelected(new Set());
@@ -795,7 +815,12 @@ export function ControlOperacionesPanel() {
     try {
       const res = await fetch("/api/control-operaciones?partial=asignaciones", { cache: "no-store" });
       let j: {
-        asignaciones?: { id_conductor: string; solicitante: string | null; observacion: string | null }[];
+        asignaciones?: {
+          id_conductor: string;
+          solicitante_tm: string | null;
+          solicitante_tt: string | null;
+          observacion: string | null;
+        }[];
         error?: string;
       };
       try {
@@ -815,7 +840,10 @@ export function ControlOperacionesPanel() {
           const id = String(a.id_conductor ?? "").trim();
           if (!id) continue;
           next[id] = {
-            solicitante: a.solicitante == null || a.solicitante === "" ? null : String(a.solicitante),
+            solicitante_tm:
+              a.solicitante_tm == null || a.solicitante_tm === "" ? null : String(a.solicitante_tm),
+            solicitante_tt:
+              a.solicitante_tt == null || a.solicitante_tt === "" ? null : String(a.solicitante_tt),
             observacion: a.observacion == null || a.observacion === "" ? null : String(a.observacion),
           };
         }
@@ -935,7 +963,7 @@ export function ControlOperacionesPanel() {
       try {
         const res = await fetch("/api/control-operaciones?partial=control", { cache: "no-store" });
         const j = (await res.json()) as {
-          controlById?: Record<string, ControlCell>;
+          controlById?: Record<string, ControlSolicitanteCell>;
           error?: string;
         };
         if (!res.ok) return;
@@ -992,15 +1020,23 @@ export function ControlOperacionesPanel() {
   }, [allFilteredSelected, filtered]);
 
   const persistRow = useCallback(
-    async (id: string, patch: Partial<ControlCell>) => {
-      const cur = controlById[id] ?? { solicitante: null, observacion: null };
-      const next: ControlCell = {
-        solicitante: patch.solicitante !== undefined ? patch.solicitante : cur.solicitante,
+    async (id: string, patch: Partial<ControlSolicitanteCell>) => {
+      const cur = controlById[id] ?? emptyControlSolicitanteCell();
+      const next: ControlSolicitanteCell = {
+        solicitante_tm: patch.solicitante_tm !== undefined ? patch.solicitante_tm : cur.solicitante_tm,
+        solicitante_tt: patch.solicitante_tt !== undefined ? patch.solicitante_tt : cur.solicitante_tt,
         observacion: patch.observacion !== undefined ? patch.observacion : cur.observacion,
       };
       setSaving(true);
       try {
-        await postUpsert([{ id_conductor: id, solicitante: next.solicitante, observacion: next.observacion }]);
+        await postUpsert([
+          {
+            id_conductor: id,
+            solicitante_tm: next.solicitante_tm,
+            solicitante_tt: next.solicitante_tt,
+            observacion: next.observacion,
+          },
+        ]);
         setControlById((prev) => ({ ...prev, [id]: next }));
       } catch (e) {
         setError(e instanceof Error ? e.message : "Guardar");
@@ -1015,22 +1051,18 @@ export function ControlOperacionesPanel() {
     const ids = Array.from(selected);
     if (ids.length === 0 || !bulkSolicitante.trim()) return;
     const sol = bulkSolicitante.trim();
-    const payload = ids.map((id) => {
-      const cur = controlById[id] ?? { solicitante: null, observacion: null };
-      return {
-        id_conductor: id,
-        solicitante: sol,
-        observacion: cur.observacion,
-      };
-    });
+    const field = bulkSolicitanteTarget === "tm" ? "solicitante_tm" : "solicitante_tt";
     setSaving(true);
     try {
-      await postUpsert(payload);
+      await postBulkUpdate(ids, field, sol);
       setControlById((prev) => {
         const n = { ...prev };
         for (const id of ids) {
-          const cur = n[id] ?? { solicitante: null, observacion: null };
-          n[id] = { solicitante: sol, observacion: cur.observacion };
+          const cur = n[id] ?? emptyControlSolicitanteCell();
+          n[id] =
+            field === "solicitante_tm"
+              ? { ...cur, solicitante_tm: sol }
+              : { ...cur, solicitante_tt: sol };
         }
         return n;
       });
@@ -1041,27 +1073,20 @@ export function ControlOperacionesPanel() {
     } finally {
       setSaving(false);
     }
-  }, [selected, bulkSolicitante, controlById]);
+  }, [selected, bulkSolicitante, bulkSolicitanteTarget]);
 
   const clearBulkObservaciones = useCallback(async () => {
     const ids = Array.from(selected);
     if (ids.length === 0) return;
-    const payload = ids.map((id) => {
-      const cur = controlById[id] ?? { solicitante: null, observacion: null };
-      return {
-        id_conductor: id,
-        solicitante: cur.solicitante,
-        observacion: null,
-      };
-    });
+    if (!window.confirm(`¿Limpiar observaciones en ${ids.length} fila(s)?`)) return;
     setSaving(true);
     try {
-      await postUpsert(payload);
+      await postBulkUpdate(ids, "observacion", null);
       setControlById((prev) => {
         const n = { ...prev };
         for (const id of ids) {
-          const cur = n[id] ?? { solicitante: null, observacion: null };
-          n[id] = { solicitante: cur.solicitante, observacion: null };
+          const cur = n[id] ?? emptyControlSolicitanteCell();
+          n[id] = { ...cur, observacion: null };
         }
         return n;
       });
@@ -1070,27 +1095,20 @@ export function ControlOperacionesPanel() {
     } finally {
       setSaving(false);
     }
-  }, [selected, controlById]);
+  }, [selected]);
 
-  const clearBulkSolicitantes = useCallback(async () => {
+  const clearBulkSolicitanteTm = useCallback(async () => {
     const ids = Array.from(selected);
     if (ids.length === 0) return;
-    const payload = ids.map((id) => {
-      const cur = controlById[id] ?? { solicitante: null, observacion: null };
-      return {
-        id_conductor: id,
-        solicitante: null,
-        observacion: cur.observacion,
-      };
-    });
+    if (!window.confirm(`¿Limpiar SOLICITANTE TM en ${ids.length} fila(s)?`)) return;
     setSaving(true);
     try {
-      await postUpsert(payload);
+      await postBulkUpdate(ids, "solicitante_tm", null);
       setControlById((prev) => {
         const n = { ...prev };
         for (const id of ids) {
-          const cur = n[id] ?? { solicitante: null, observacion: null };
-          n[id] = { solicitante: null, observacion: cur.observacion };
+          const cur = n[id] ?? emptyControlSolicitanteCell();
+          n[id] = { ...cur, solicitante_tm: null };
         }
         return n;
       });
@@ -1099,7 +1117,29 @@ export function ControlOperacionesPanel() {
     } finally {
       setSaving(false);
     }
-  }, [selected, controlById]);
+  }, [selected]);
+
+  const clearBulkSolicitanteTt = useCallback(async () => {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    if (!window.confirm(`¿Limpiar SOLICITANTE TT en ${ids.length} fila(s)?`)) return;
+    setSaving(true);
+    try {
+      await postBulkUpdate(ids, "solicitante_tt", null);
+      setControlById((prev) => {
+        const n = { ...prev };
+        for (const id of ids) {
+          const cur = n[id] ?? emptyControlSolicitanteCell();
+          n[id] = { ...cur, solicitante_tt: null };
+        }
+        return n;
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Guardar");
+    } finally {
+      setSaving(false);
+    }
+  }, [selected]);
 
   const rememberGpsAvailability = useCallback((driverId: string, entry: DriverLiveLocationApiResponse) => {
     if (!entry.ok || !entry.item) return;
@@ -1195,7 +1235,7 @@ export function ControlOperacionesPanel() {
   }, [bulkClearMenuOpen]);
 
   const gridTemplate =
-    "40px minmax(72px,0.65fr) minmax(120px,1fr) minmax(88px,0.75fr) minmax(64px,0.5fr) minmax(52px,0.45fr) minmax(100px,0.75fr) minmax(64px,0.45fr) minmax(140px,0.9fr) minmax(140px,1fr) 64px";
+    "40px minmax(72px,0.65fr) minmax(120px,1fr) minmax(88px,0.75fr) minmax(64px,0.5fr) minmax(52px,0.45fr) minmax(100px,0.75fr) minmax(64px,0.45fr) minmax(96px,0.42fr) minmax(96px,0.42fr) minmax(120px,0.85fr) 64px";
 
   const serviciosCell = (r: MergedDriver) =>
     r.servicios_activos === undefined ? "—" : String(r.servicios_activos);
@@ -1335,10 +1375,20 @@ export function ControlOperacionesPanel() {
                     className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-slate-100"
                     onClick={() => {
                       setBulkClearMenuOpen(false);
-                      void clearBulkSolicitantes();
+                      void clearBulkSolicitanteTm();
                     }}
                   >
-                    Limpiar solicitantes
+                    Limpiar solicitante TM
+                  </button>
+                  <button
+                    type="button"
+                    className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-slate-100"
+                    onClick={() => {
+                      setBulkClearMenuOpen(false);
+                      void clearBulkSolicitanteTt();
+                    }}
+                  >
+                    Limpiar solicitante TT
                   </button>
                 </div>
               ) : null}
@@ -1439,7 +1489,8 @@ export function ControlOperacionesPanel() {
               <span className="text-center">Serv.</span>
               <span>Semáforo</span>
               <span>GPS</span>
-              <span>Solicitante</span>
+              <span>SOLICITANTE TM</span>
+              <span>SOLICITANTE TT</span>
               <span>Observación</span>
               <span className="flex items-center justify-center gap-2">
                 <MapPin className="h-3.5 w-3.5 text-slate-400" />
@@ -1451,14 +1502,14 @@ export function ControlOperacionesPanel() {
                 {rowVirtualizer.getVirtualItems().map((vi) => {
                   const r = filtered[vi.index];
                   if (!r) return null;
-                  const c = controlById[r.id_conductor] ?? { solicitante: null, observacion: null };
+                  const c = controlById[r.id_conductor] ?? emptyControlSolicitanteCell();
                   const sem = semaforoCell(r);
                   const checked = selected.has(r.id_conductor);
                   const gpsLabel = gpsTableLabelFromAvailability(gpsAvailByDriverId[r.id_conductor]);
                   const gpsBadgeClass =
-                    gpsLabel === "En linea"
+                    gpsLabel === GPS_TABLE_LABEL_EN_LINEA
                       ? "h-6 justify-self-start border-emerald-200 bg-emerald-50 text-[10px] text-emerald-900"
-                      : gpsLabel === "Ocupado"
+                      : gpsLabel === GPS_TABLE_LABEL_OCUPADO
                         ? "h-6 justify-self-start border-orange-200 bg-orange-50 text-[10px] text-orange-900"
                         : "h-6 justify-self-start border-slate-200 bg-slate-100 text-[10px] text-slate-700";
                   return (
@@ -1510,10 +1561,20 @@ export function ControlOperacionesPanel() {
                       </Badge>
                       <div data-no-shift-select>
                         <SearchableMiniSelect
-                          value={c.solicitante ?? ""}
-                          onChange={(v) => void persistRow(r.id_conductor, { solicitante: v || null })}
+                          value={c.solicitante_tm ?? ""}
+                          onChange={(v) => void persistRow(r.id_conductor, { solicitante_tm: v || null })}
                           options={[{ value: "", label: "— vacío —" }, ...operatorOptions]}
-                          widthClass="w-full min-w-[120px]"
+                          widthClass="w-full min-w-[88px]"
+                          markEditing
+                          disabled={!operatorsReady}
+                        />
+                      </div>
+                      <div data-no-shift-select>
+                        <SearchableMiniSelect
+                          value={c.solicitante_tt ?? ""}
+                          onChange={(v) => void persistRow(r.id_conductor, { solicitante_tt: v || null })}
+                          options={[{ value: "", label: "— vacío —" }, ...operatorOptions]}
+                          widthClass="w-full min-w-[88px]"
                           markEditing
                           disabled={!operatorsReady}
                         />
@@ -1684,8 +1745,34 @@ export function ControlOperacionesPanel() {
         <DialogContent className="sm:max-w-md" showCloseButton>
           <DialogHeader>
             <DialogTitle>Solicitante masivo</DialogTitle>
+            <p className="text-xs text-slate-600">
+              Se aplicará el operador elegido a la columna indicada en las filas seleccionadas.
+            </p>
           </DialogHeader>
-          <div ref={setBulkModalPortalContainer}>
+          <div ref={setBulkModalPortalContainer} className="space-y-3">
+            <div className="flex flex-col gap-2 rounded-md border border-slate-200 bg-slate-50/80 p-2 text-xs">
+              <span className="font-medium text-slate-700">Aplicar a</span>
+              <label className="flex cursor-pointer items-center gap-2">
+                <input
+                  type="radio"
+                  name="bulk-solic-col"
+                  checked={bulkSolicitanteTarget === "tm"}
+                  onChange={() => setBulkSolicitanteTarget("tm")}
+                  className="h-3.5 w-3.5"
+                />
+                <span>SOLICITANTE TM</span>
+              </label>
+              <label className="flex cursor-pointer items-center gap-2">
+                <input
+                  type="radio"
+                  name="bulk-solic-col"
+                  checked={bulkSolicitanteTarget === "tt"}
+                  onChange={() => setBulkSolicitanteTarget("tt")}
+                  className="h-3.5 w-3.5"
+                />
+                <span>SOLICITANTE TT</span>
+              </label>
+            </div>
             <SearchableMiniSelect
               value={bulkSolicitante}
               onChange={setBulkSolicitante}

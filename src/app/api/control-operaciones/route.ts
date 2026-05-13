@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { formatApiError } from "@/lib/format-api-error";
+import type { DriverLiveAvailability } from "@/lib/control-operaciones-gps-filter";
+import { SOLICITANTE_FILTER_EMPTY, type ControlSolicitanteCell } from "@/lib/control-operaciones-solicitante-tm-tt";
 import { mapExcelRowToControlDriver, type ControlDriverExcelRow } from "@/lib/control-operaciones-map";
 import { semanaLabelLiquidaciones } from "@/lib/control-operaciones-semana";
 import { assertQualityReadAccess, assertQualityWriteAccess } from "@/lib/panel-session";
@@ -26,8 +28,6 @@ const DRIVERS_INTERNAL_CHUNK = 150;
 const MAX_DRIVER_IDS_SERV = 500;
 const CONTROL_LIMIT = 50_000;
 const DRIVER_LIVE_AVAILABILITY_CHUNK = 200;
-
-type DriverLiveAvailability = "online" | "busy" | "offline";
 
 function nowMs(): number {
   return Date.now();
@@ -119,9 +119,9 @@ function normalizeDriverLiveAvailability(value: unknown): DriverLiveAvailability
 
 async function fetchDriverLiveAvailabilityByIds(
   driverIds: string[],
-): Promise<Record<string, DriverLiveAvailability>> {
+): Promise<Record<string, DriverLiveAvailability | null>> {
   const sb = getSupabaseAdmin();
-  const out: Record<string, DriverLiveAvailability> = {};
+  const out: Record<string, DriverLiveAvailability | null> = {};
   const uniq = [...new Set(driverIds.map((id) => String(id).trim()).filter(Boolean))];
   for (let i = 0; i < uniq.length; i += DRIVER_LIVE_AVAILABILITY_CHUNK) {
     const part = uniq.slice(i, i + DRIVER_LIVE_AVAILABILITY_CHUNK);
@@ -138,6 +138,11 @@ async function fetchDriverLiveAvailabilityByIds(
       const idUser = String(row.id_user ?? "").trim();
       if (!idUser) continue;
       out[idUser] = normalizeDriverLiveAvailability(row.availability);
+    }
+  }
+  for (const id of uniq) {
+    if (!Object.prototype.hasOwnProperty.call(out, id)) {
+      out[id] = null;
     }
   }
   return out;
@@ -229,13 +234,19 @@ function normalizeOperatorRows(data: unknown): { value: string; label: string }[
   return out;
 }
 
+function normCellText(v: unknown): string | null {
+  if (v === undefined || v === null) return null;
+  const s = String(v).trim();
+  return s.length ? s : null;
+}
+
 async function fetchControlRows(): Promise<
-  { id_conductor: string; solicitante: string | null; observacion: string | null }[]
+  { id_conductor: string; solicitante_tm: string | null; solicitante_tt: string | null; observacion: string | null }[]
 > {
   const sb = getSupabaseAdmin();
   const { data, error } = await sb
     .from("control_operaciones")
-    .select("id_conductor, solicitante, observacion")
+    .select("id_conductor, solicitante_tm, solicitante_tt, observacion")
     .limit(CONTROL_LIMIT);
   if (error) throw error;
   const rows = Array.isArray(data) ? data : [];
@@ -247,21 +258,71 @@ async function fetchControlRows(): Promise<
       if (!id) return null;
       return {
         id_conductor: id,
-        solicitante: o.solicitante == null || o.solicitante === "" ? null : String(o.solicitante),
-        observacion: o.observacion == null || o.observacion === "" ? null : String(o.observacion),
+        solicitante_tm: normCellText(o.solicitante_tm),
+        solicitante_tt: normCellText(o.solicitante_tt),
+        observacion: normCellText(o.observacion),
       };
     })
-    .filter(Boolean) as { id_conductor: string; solicitante: string | null; observacion: string | null }[];
+    .filter(Boolean) as {
+    id_conductor: string;
+    solicitante_tm: string | null;
+    solicitante_tt: string | null;
+    observacion: string | null;
+  }[];
 }
 
 function controlByIdFromRows(
-  controlRows: { id_conductor: string; solicitante: string | null; observacion: string | null }[],
-): Record<string, { solicitante: string | null; observacion: string | null }> {
-  const controlById: Record<string, { solicitante: string | null; observacion: string | null }> = {};
+  controlRows: {
+    id_conductor: string;
+    solicitante_tm: string | null;
+    solicitante_tt: string | null;
+    observacion: string | null;
+  }[],
+): Record<string, ControlSolicitanteCell> {
+  const controlById: Record<string, ControlSolicitanteCell> = {};
   for (const r of controlRows) {
-    controlById[r.id_conductor] = { solicitante: r.solicitante, observacion: r.observacion };
+    controlById[r.id_conductor] = {
+      solicitante_tm: r.solicitante_tm,
+      solicitante_tt: r.solicitante_tt,
+      observacion: r.observacion,
+    };
   }
   return controlById;
+}
+
+function operatorIdsMatchingSolicitanteLabels(
+  labels: string[],
+  operatorOptions: { value: string; label: string }[],
+): Set<string> {
+  const want = new Set(labels.map((l) => l.trim()).filter(Boolean));
+  const ids = new Set<string>();
+  for (const o of operatorOptions) {
+    if (want.has(o.label) || want.has(o.value)) ids.add(o.value);
+  }
+  return ids;
+}
+
+function filterDriversBySolicitanteParams(
+  drivers: ControlDriverExcelRow[],
+  controlById: Record<string, ControlSolicitanteCell>,
+  solicitanteParams: string[],
+  operatorOptions: { value: string; label: string }[],
+): ControlDriverExcelRow[] {
+  if (solicitanteParams.length === 0) return drivers;
+  if (solicitanteParams.length === 1 && solicitanteParams[0] === SOLICITANTE_FILTER_EMPTY) {
+    return drivers.filter((d) => {
+      const c = controlById[d.id_conductor];
+      return !normCellText(c?.solicitante_tm) && !normCellText(c?.solicitante_tt);
+    });
+  }
+  const idSet = operatorIdsMatchingSolicitanteLabels(solicitanteParams, operatorOptions);
+  if (idSet.size === 0) return [];
+  return drivers.filter((d) => {
+    const c = controlById[d.id_conductor];
+    const tm = normCellText(c?.solicitante_tm);
+    const tt = normCellText(c?.solicitante_tt);
+    return (tm != null && idSet.has(tm)) || (tt != null && idSet.has(tt));
+  });
 }
 
 /**
@@ -358,11 +419,32 @@ export async function GET(request: NextRequest) {
     const controlById = controlByIdFromRows(controlRows);
     const semanaLabel = semanaLabelLiquidaciones();
 
+    const solicitanteParams = url.searchParams.getAll("solicitante").map((s) => s.trim()).filter(Boolean);
+    let driversResponse = drivers;
+    let gpsAvailabilityResponse = gpsAvailabilityById;
+    if (solicitanteParams.length > 0) {
+      const tSol = nowMs();
+      const operatorOptions = await fetchOperatorsActivos();
+      driversResponse = filterDriversBySolicitanteParams(
+        drivers,
+        controlById,
+        solicitanteParams,
+        operatorOptions,
+      );
+      const allowed = new Set(driversResponse.map((d) => d.id_conductor));
+      const gpsFiltered: Record<string, DriverLiveAvailability | null> = {};
+      for (const [k, v] of Object.entries(gpsAvailabilityById)) {
+        if (allowed.has(k)) gpsFiltered[k] = v;
+      }
+      gpsAvailabilityResponse = gpsFiltered;
+      logBlock(`solicitante filter params=${solicitanteParams.length} drivers=${driversResponse.length}`, tSol);
+    }
+
     logBlock("GET total (drivers aprobados + control)", tRequest);
 
     return NextResponse.json({
-      drivers,
-      gpsAvailabilityById,
+      drivers: driversResponse,
+      gpsAvailabilityById: gpsAvailabilityResponse,
       controlById,
       total,
       approvedCount: drivers.length,
@@ -387,14 +469,96 @@ export async function GET(request: NextRequest) {
   }
 }
 
-type UpsertBody = {
-  rows?: { id_conductor: string; solicitante?: string | null; observacion?: string | null }[];
+type ControlBulkField = "solicitante_tm" | "solicitante_tt" | "observacion";
+
+type UpsertRowInput = {
+  id_conductor: string;
+  solicitante_tm?: string | null;
+  solicitante_tt?: string | null;
+  observacion?: string | null;
 };
+
+type PostBody =
+  | { rows: UpsertRowInput[]; bulk?: never }
+  | { bulk: true; ids: string[]; field: ControlBulkField; value: string | null; rows?: never };
+
+function normUnknown(v: unknown): string | null {
+  if (v === undefined) return null;
+  if (v === null) return null;
+  const s = String(v).trim();
+  return s.length ? s : null;
+}
+
+async function upsertControlRowsMerged(
+  sb: ReturnType<typeof getSupabaseAdmin>,
+  rows: { id_conductor: string; solicitante_tm: string | null; solicitante_tt: string | null; observacion: string | null }[],
+): Promise<void> {
+  const { error } = await sb.from("control_operaciones").upsert(rows, { onConflict: "id_conductor" });
+  if (error) throw error;
+}
 
 export async function POST(request: NextRequest) {
   try {
     assertQualityWriteAccess(request);
-    const body = (await request.json()) as UpsertBody;
+    const body = (await request.json()) as PostBody;
+
+    if (body && typeof body === "object" && body.bulk === true) {
+      const maybeRows = (body as { rows?: unknown }).rows;
+      if (Array.isArray(maybeRows) && maybeRows.length > 0) {
+        return NextResponse.json({ error: "No mezclar bulk con rows" }, { status: 400 });
+      }
+      const idsRaw = Array.isArray(body.ids) ? body.ids : [];
+      const ids = [...new Set(idsRaw.map((x) => String(x).trim()).filter(Boolean))];
+      if (ids.length === 0) {
+        return NextResponse.json({ error: "ids vacío" }, { status: 400 });
+      }
+      if (ids.length > 500) {
+        return NextResponse.json({ error: "Máximo 500 ids por solicitud" }, { status: 400 });
+      }
+      const field = body.field;
+      if (field !== "solicitante_tm" && field !== "solicitante_tt" && field !== "observacion") {
+        return NextResponse.json({ error: "field inválido" }, { status: 400 });
+      }
+      const value = normUnknown(body.value);
+
+      const sb = getSupabaseAdmin();
+      const { data: existing, error: selErr } = await sb
+        .from("control_operaciones")
+        .select("id_conductor, solicitante_tm, solicitante_tt, observacion")
+        .in("id_conductor", ids);
+      if (selErr) throw selErr;
+      const byId = new Map<string, ControlSolicitanteCell & { id_conductor: string }>();
+      for (const raw of existing || []) {
+        if (!raw || typeof raw !== "object") continue;
+        const o = raw as Record<string, unknown>;
+        const id = String(o.id_conductor ?? "").trim();
+        if (!id) continue;
+        byId.set(id, {
+          id_conductor: id,
+          solicitante_tm: normCellText(o.solicitante_tm),
+          solicitante_tt: normCellText(o.solicitante_tt),
+          observacion: normCellText(o.observacion),
+        });
+      }
+      const payload = ids.map((id) => {
+        const cur = byId.get(id) ?? {
+          id_conductor: id,
+          solicitante_tm: null as string | null,
+          solicitante_tt: null as string | null,
+          observacion: null as string | null,
+        };
+        return {
+          id_conductor: id,
+          solicitante_tm: cur.solicitante_tm,
+          solicitante_tt: cur.solicitante_tt,
+          observacion: cur.observacion,
+          [field]: value,
+        };
+      });
+      await upsertControlRowsMerged(sb, payload);
+      return NextResponse.json({ ok: true, bulk: true, updated: payload.length });
+    }
+
     const rows = Array.isArray(body.rows) ? body.rows : [];
     if (rows.length === 0) {
       return NextResponse.json({ error: "rows vacío" }, { status: 400 });
@@ -407,25 +571,22 @@ export async function POST(request: NextRequest) {
       .map((r) => {
         const id = String(r.id_conductor ?? "").trim();
         if (!id) return null;
-        const norm = (v: unknown) => {
-          if (v === undefined) return null;
-          if (v === null) return null;
-          const s = String(v).trim();
-          return s.length ? s : null;
-        };
         return {
           id_conductor: id,
-          solicitante: norm(r.solicitante),
-          observacion: norm(r.observacion),
+          solicitante_tm: normUnknown(r.solicitante_tm),
+          solicitante_tt: normUnknown(r.solicitante_tt),
+          observacion: normUnknown(r.observacion),
         };
       })
-      .filter(Boolean) as { id_conductor: string; solicitante: string | null; observacion: string | null }[];
+      .filter(Boolean) as {
+      id_conductor: string;
+      solicitante_tm: string | null;
+      solicitante_tt: string | null;
+      observacion: string | null;
+    }[];
 
     const sb = getSupabaseAdmin();
-    const { error } = await sb.from("control_operaciones").upsert(payload, {
-      onConflict: "id_conductor",
-    });
-    if (error) throw error;
+    await upsertControlRowsMerged(sb, payload);
     return NextResponse.json({ ok: true, upserted: payload.length });
   } catch (err) {
     const message = formatApiError(err);

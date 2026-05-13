@@ -148,6 +148,91 @@ async function fetchDriverLiveAvailabilityByIds(
   return out;
 }
 
+function normalizeFlNameValue(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  return s.length ? s : null;
+}
+
+function extractFlNameFromMoobizDriverRow(row: Record<string, unknown>): string | null {
+  const direct = normalizeFlNameValue(row.fl_name);
+  if (direct !== null) return direct;
+  const raw = row.raw_data;
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw === "string") {
+    try {
+      const p = JSON.parse(raw) as Record<string, unknown>;
+      return normalizeFlNameValue(p.fl_name ?? p.flName);
+    } catch {
+      return null;
+    }
+  }
+  if (typeof raw === "object" && !Array.isArray(raw)) {
+    const o = raw as Record<string, unknown>;
+    return normalizeFlNameValue(o.fl_name ?? o.flName);
+  }
+  return null;
+}
+
+/** fl_name por id_conductor (vista preferida; fallback public.moobiz_drivers.raw_data). */
+async function fetchFlNameMapByDriverIds(driverIds: string[]): Promise<Record<string, string | null>> {
+  const sb = getSupabaseAdmin();
+  const out: Record<string, string | null> = {};
+  const uniq = [...new Set(driverIds.map((id) => String(id).trim()).filter(Boolean))];
+
+  for (let i = 0; i < uniq.length; i += DRIVER_LIVE_AVAILABILITY_CHUNK) {
+    const part = uniq.slice(i, i + DRIVER_LIVE_AVAILABILITY_CHUNK);
+    if (part.length === 0) continue;
+
+    let flRows: Record<string, unknown>[] | null = null;
+
+    try {
+      const { data: dataFromView, error: errView } = await sb
+        .schema("vista")
+        .from("vw_moobiz_drivers_excel")
+        .select('id_conductor:"ID Conductor", fl_name')
+        .in("ID Conductor", part);
+
+      if (!errView && dataFromView != null) {
+        flRows = dataFromView as Record<string, unknown>[];
+      } else {
+        const { data: dataFromTable, error: errTable } = await sb
+          .from("moobiz_drivers")
+          .select("id, raw_data")
+          .in("id", part);
+        if (!errTable && dataFromTable != null) {
+          flRows = dataFromTable as Record<string, unknown>[];
+        } else {
+          console.warn("[control-operaciones] Unable to fetch fl_name for ids chunk", {
+            errView: errView?.message ?? errView,
+            errTable: errTable?.message ?? errTable,
+          });
+          continue;
+        }
+      }
+    } catch (e) {
+      console.warn("[control-operaciones] Exception fetching fl_name chunk", e);
+      continue;
+    }
+
+    for (const raw of flRows ?? []) {
+      if (!raw || typeof raw !== "object") continue;
+      const r = raw as Record<string, unknown>;
+      const idKey = String(r.id_conductor ?? r["ID Conductor"] ?? r.id ?? "").trim();
+      if (!idKey) continue;
+      let fl: string | null = null;
+      if (r.fl_name !== undefined && r.fl_name !== null) {
+        fl = normalizeFlNameValue(r.fl_name);
+      } else if (r.raw_data !== undefined) {
+        fl = extractFlNameFromMoobizDriverRow(r);
+      }
+      out[idKey] = fl;
+    }
+  }
+
+  return out;
+}
+
 async function fetchServCountsByDriverIds(drIds: string[]): Promise<Record<string, number>> {
   const sb = getSupabaseAdmin();
   const counts = new Map<string, number>();
@@ -440,10 +525,23 @@ export async function GET(request: NextRequest) {
       logBlock(`solicitante filter params=${solicitanteParams.length} drivers=${driversResponse.length}`, tSol);
     }
 
+    const tFlName = nowMs();
+    const flNameById = await fetchFlNameMapByDriverIds(
+      driversResponse.map((d) => String(d.id_conductor ?? "").trim()).filter(Boolean),
+    );
+    logBlock(`fl_name map drivers=${driversResponse.length}`, tFlName);
+
+    const driversWithFlName = driversResponse.map((row) => {
+      const idKey = String(
+        row.id_conductor ?? (row as Record<string, unknown>)["ID Conductor"] ?? (row as { id?: unknown }).id ?? "",
+      ).trim();
+      return { ...row, fl_name: flNameById[idKey] ?? null };
+    });
+
     logBlock("GET total (drivers aprobados + control)", tRequest);
 
     return NextResponse.json({
-      drivers: driversResponse,
+      drivers: driversWithFlName,
       gpsAvailabilityById: gpsAvailabilityResponse,
       controlById,
       total,

@@ -1,7 +1,7 @@
 /**
  * Sync Moobiz admin dispatcher → Supabase `moobiz_services` (reemplazo total).
  *
- * GET https://app.moobiz.pe/api/admin/dispatcher?limit=1000&offset=0 (+ segunda página si total > 1000).
+ * GET dispatcher: intento seguro `limit=2000` (una página); si falla/vacío/engaño → fallback 2×`limit=1000`.
  * Token: `MOOBIZ_SERVICES_TOKEN` o `getMoobizBearerForRequest()`; el GET usa `moobizFetchWithToken`
  * (401/403 o `not_logged` → login + `sync_state`, un reintento).
  */
@@ -12,6 +12,7 @@ import { formatApiError } from "@/lib/format-api-error";
 
 const DISPATCHER_URL_DEFAULT = "https://app.moobiz.pe/api/admin/dispatcher";
 const PAGE_LIMIT = 1000;
+const SINGLE_PAGE_LIMIT = 2000;
 const INSERT_BATCH = 1000;
 
 const CHROME_UA =
@@ -67,9 +68,11 @@ function extractTotal(body: DispatcherApiBody): number | null {
 async function fetchDispatcherPage(params: {
   token: string;
   offset: number;
+  limit?: number;
 }): Promise<DispatcherApiBody> {
+  const limit = params.limit ?? PAGE_LIMIT;
   const url = new URL(dispatcherUrl());
-  url.searchParams.set("limit", String(PAGE_LIMIT));
+  url.searchParams.set("limit", String(limit));
   url.searchParams.set("offset", String(params.offset));
 
   const init: RequestInit = {
@@ -117,15 +120,162 @@ export function mapServiceRow(raw: Record<string, unknown>): { id: string; state
   };
 }
 
+function mergeDispatcherItemsIntoById(
+  byId: Map<string, { id: string; state: string; raw: Record<string, unknown> }>,
+  items: Record<string, unknown>[],
+): number {
+  let rawMappedRows = 0;
+  for (const item of items) {
+    const row = mapServiceRow(item);
+    if (row) {
+      rawMappedRows += 1;
+      byId.set(row.id, row);
+    }
+  }
+  return rawMappedRows;
+}
+
+type DispatcherDownloadPack = {
+  rows: { id: string; state: string; raw: Record<string, unknown> }[];
+  uniqueCount: number;
+  rawMappedRows: number;
+  totalReported: number | null;
+  pages: number;
+  reachedFetchCap: boolean;
+  fetchMode: "single_2000" | "paged_1000";
+};
+
+async function downloadDispatcherServicesPaged1000(token: string): Promise<DispatcherDownloadPack> {
+  console.info("[services-sync] Descarga modo páginas de 1000 (fallback clásico)…");
+  const byId = new Map<string, { id: string; state: string; raw: Record<string, unknown> }>();
+  let rawMappedRows = 0;
+  let pages = 0;
+
+  const body1 = await fetchDispatcherPage({ token, offset: 0, limit: PAGE_LIMIT });
+  pages = 1;
+  const totalReported = extractTotal(body1);
+  const items1 = extractItems(body1) as Record<string, unknown>[];
+  console.log(`[services-sync][AUDIT] GET offset=0: limit=${PAGE_LIMIT}, ítems=${items1.length}`);
+  rawMappedRows += mergeDispatcherItemsIntoById(byId, items1);
+
+  if (typeof totalReported === "number" && totalReported > PAGE_LIMIT) {
+    const body2 = await fetchDispatcherPage({ token, offset: PAGE_LIMIT, limit: PAGE_LIMIT });
+    pages = 2;
+    const items2 = extractItems(body2) as Record<string, unknown>[];
+    console.log(`[services-sync][AUDIT] GET offset=${PAGE_LIMIT}: ítems=${items2.length}`);
+    rawMappedRows += mergeDispatcherItemsIntoById(byId, items2);
+  }
+
+  const rows = [...byId.values()];
+  const dupesRemoved = rawMappedRows - rows.length;
+  if (dupesRemoved > 0) {
+    console.log(
+      `[services-sync][AUDIT] Dedupe final: ${rawMappedRows} filas mapeadas → ${rows.length} únicos (eliminados ${dupesRemoved} duplicados por id).`,
+    );
+  }
+
+  const reachedFetchCap =
+    typeof totalReported === "number" && totalReported > PAGE_LIMIT * pages;
+
+  return {
+    rows,
+    uniqueCount: rows.length,
+    rawMappedRows,
+    totalReported,
+    pages,
+    reachedFetchCap,
+    fetchMode: "paged_1000",
+  };
+}
+
+async function tryDownloadSinglePage2000(
+  token: string,
+): Promise<{ ok: true; pack: DispatcherDownloadPack } | { ok: false; reason: string }> {
+  let body: DispatcherApiBody;
+  try {
+    body = await fetchDispatcherPage({ token, offset: 0, limit: SINGLE_PAGE_LIMIT });
+  } catch (e) {
+    const msg = formatApiError(e);
+    return { ok: false, reason: `fetch_error: ${msg}` };
+  }
+
+  if (!body || body.ok !== true) {
+    return { ok: false, reason: "ok_not_true" };
+  }
+
+  const totalReported = extractTotal(body);
+  const items = extractItems(body) as Record<string, unknown>[];
+  if (!Array.isArray(items) || items.length === 0) {
+    return { ok: false, reason: "empty_items" };
+  }
+
+  if (typeof totalReported === "number" && Number.isFinite(totalReported) && totalReported > SINGLE_PAGE_LIMIT) {
+    return { ok: false, reason: `total_gt_limit (${totalReported} > ${SINGLE_PAGE_LIMIT})` };
+  }
+
+  if (
+    typeof totalReported === "number" &&
+    Number.isFinite(totalReported) &&
+    totalReported > items.length
+  ) {
+    return {
+      ok: false,
+      reason: `api_total_exceeds_items (total=${totalReported} items_len=${items.length})`,
+    };
+  }
+
+  const byId = new Map<string, { id: string; state: string; raw: Record<string, unknown> }>();
+  const rawMappedRows = mergeDispatcherItemsIntoById(byId, items);
+  const rows = [...byId.values()];
+  if (rows.length === 0) {
+    return { ok: false, reason: "no_valid_rows_after_map" };
+  }
+
+  const dupesRemoved = rawMappedRows - rows.length;
+  if (dupesRemoved > 0) {
+    console.log(
+      `[services-sync][AUDIT] Dedupe (página única): ${rawMappedRows} filas mapeadas → ${rows.length} únicos (eliminados ${dupesRemoved} duplicados por id).`,
+    );
+  }
+
+  const reachedFetchCap =
+    typeof totalReported === "number" && Number.isFinite(totalReported) && totalReported > SINGLE_PAGE_LIMIT;
+
+  return {
+    ok: true,
+    pack: {
+      rows,
+      uniqueCount: rows.length,
+      rawMappedRows,
+      totalReported,
+      pages: 1,
+      reachedFetchCap,
+      fetchMode: "single_2000",
+    },
+  };
+}
+
+async function downloadDispatcherServicesSmart(token: string): Promise<DispatcherDownloadPack> {
+  console.info("[services-sync] Intentando página única de 2000 (limit=2000, offset=0)…");
+  const single = await tryDownloadSinglePage2000(token);
+  if (single.ok) {
+    console.info(
+      `[services-sync] Página única de 2000 aceptada: únicos=${single.pack.uniqueCount}, total API=${single.pack.totalReported ?? "null"}, rawMapped=${single.pack.rawMappedRows}`,
+    );
+    return single.pack;
+  }
+  console.warn(`[services-sync] Fallback activado: volviendo a páginas de 1000 — motivo: ${single.reason}`);
+  return downloadDispatcherServicesPaged1000(token);
+}
+
 export type MoobizServicesSyncResult =
   | {
-      ok: boolean;
+      ok: true;
       deleted: number;
       inserted: number;
       pages: number;
       validationErrors?: string[];
-      conflict?: undefined;
-      reason?: undefined;
+      fetchMode?: "single_2000" | "paged_1000";
     }
   | {
       ok: false;
@@ -262,33 +412,14 @@ export async function runMoobizServicesSync(): Promise<MoobizServicesSyncResult>
     console.log("[services-sync][AUDIT] inicio runMoobizServicesSync destino=public.moobiz_services");
     const { token } = await getTokenForServicesSync();
 
-    const body1 = await fetchDispatcherPage({ token, offset: 0 });
-    const totalReported = extractTotal(body1);
-    const items1 = extractItems(body1) as Record<string, unknown>[];
+    const dl = await downloadDispatcherServicesSmart(token);
+    pagesQueried = dl.pages;
+    const rows = dl.rows;
+    const totalReported = dl.totalReported;
+
     console.log(
-      `[services-sync][AUDIT] moobiz dispatcher page1 items=${items1.length} totalReported=${totalReported ?? "null"}`,
+      `[services-sync][AUDIT] modo=${dl.fetchMode} registros_validos=${rows.length} totalReported=${totalReported ?? "null"} rawMapped=${dl.rawMappedRows}`,
     );
-    pagesQueried = 1;
-
-    const byId = new Map<string, { id: string; state: string; raw: Record<string, unknown> }>();
-    for (const item of items1) {
-      const row = mapServiceRow(item);
-      if (row) byId.set(row.id, row);
-    }
-
-    if (typeof totalReported === "number" && totalReported > PAGE_LIMIT) {
-      const body2 = await fetchDispatcherPage({ token, offset: PAGE_LIMIT });
-      pagesQueried = 2;
-      const items2 = extractItems(body2) as Record<string, unknown>[];
-      console.log(`[services-sync][AUDIT] moobiz dispatcher page2 items=${items2.length}`);
-      for (const item of items2) {
-        const row = mapServiceRow(item);
-        if (row) byId.set(row.id, row);
-      }
-    }
-
-    const rows = [...byId.values()];
-    console.log(`[services-sync][AUDIT] registros validos recibidos=${rows.length}`);
 
     if (rows.length === 0) {
       throw new Error("MOOBIZ_SERVICES_SYNC: la API no devolvió ningún servicio válido (id requerido).");
@@ -306,6 +437,11 @@ export async function runMoobizServicesSync(): Promise<MoobizServicesSyncResult>
         `La API declaró total=${totalReported} pero se consolidaron ${rows.length} servicios únicos (Δ ${totalReported - rows.length}).`,
       );
     }
+    if (dl.rawMappedRows > dl.uniqueCount) {
+      validationErrors.push(
+        `Ítems mapeados: ${dl.rawMappedRows}; únicos tras dedupe: ${dl.uniqueCount} (ids repetidos en la API).`,
+      );
+    }
     if (inserted !== rows.length) {
       validationErrors.push(`Se insertaron ${inserted} filas; se esperaban ${rows.length}.`);
     }
@@ -314,24 +450,35 @@ export async function runMoobizServicesSync(): Promise<MoobizServicesSyncResult>
         `Conteo en Supabase tras reemplazo (${finalDbCount}) ≠ servicios únicos descargados (${rows.length}).`,
       );
     }
+    if (dl.reachedFetchCap) {
+      const maxR =
+        dl.fetchMode === "single_2000" ? SINGLE_PAGE_LIMIT * dl.pages : PAGE_LIMIT * dl.pages;
+      validationErrors.push(
+        `La API declara total=${totalReported} superior a ${maxR} filas descargables (${dl.fetchMode}).`,
+      );
+    }
 
     const validationOk = validationErrors.length === 0;
+    const warningText = validationErrors.length ? `[WARNING] ${validationErrors.join(" | ")}` : null;
+    const modeTag = dl.fetchMode === "single_2000" ? "single2000" : "paged1000";
+    const reasonStop = validationOk ? `full_replace_ok_${modeTag}` : `full_replace_ok_with_warnings_${modeTag}`;
 
     await writeServicesSyncMonitor({
-      status: validationOk ? "success" : "error",
+      status: "success",
       records_procesados: rows.length,
       records_inserted: inserted,
-      reason_for_stop: validationOk ? `full_replace_ok_${pagesQueried}p` : "full_replace_validation_failed",
+      reason_for_stop: reasonStop,
       pages_queried: pagesQueried,
-      error_message: validationOk ? null : validationErrors.join(" "),
+      error_message: warningText,
     });
 
     return {
-      ok: validationOk,
+      ok: true,
       deleted,
       inserted,
       pages: pagesQueried,
       validationErrors: validationOk ? undefined : validationErrors,
+      fetchMode: dl.fetchMode,
     };
   } catch (err) {
     const msg = formatApiError(err);

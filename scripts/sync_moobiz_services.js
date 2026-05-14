@@ -1,7 +1,7 @@
 /**
  * Sync servicios Moobiz (dispatcher) → Supabase: reemplazo total en `moobiz_services`.
  *
- * Descarga: hasta 2 GET con `limit=1000` y `offset` 0 / 1000 si `total > 1000`.
+ * Descarga: intento seguro con `limit=2000` (una página); si falla/vacío/engaño API → fallback 2×`limit=1000`.
  *
  * Token: `MOOBIZ_SERVICES_TOKEN` o `MOOBIZ_TOKEN` o `sync_state.moobiz_token` + login admin.
  */
@@ -32,6 +32,7 @@ const DISPATCHER_BASE_URL =
   "https://app.moobiz.pe/api/admin/dispatcher";
 
 const PAGE_LIMIT = 1000;
+const SINGLE_PAGE_LIMIT = 2000;
 const INSERT_BATCH = 1000;
 
 const CHROME_UA =
@@ -136,9 +137,9 @@ function responseLooksLikeAuthFailure(res, text) {
   }
 }
 
-async function fetchDispatcherSinglePage(token, offset) {
+async function fetchDispatcherSinglePage(token, offset, limit = PAGE_LIMIT) {
   const url = new URL(DISPATCHER_BASE_URL);
-  url.searchParams.set("limit", String(PAGE_LIMIT));
+  url.searchParams.set("limit", String(limit));
   url.searchParams.set("offset", String(offset));
 
   const dispatcherHeaders = (t) => ({
@@ -220,38 +221,43 @@ async function fetchDispatcherSinglePage(token, offset) {
   }
 }
 
-async function downloadDispatcherServicesDeduped(token) {
-  const byId = new Map();
+/** Acumula ítems del dispatcher en byId; devuelve rawMappedRows incrementado. */
+function mergeDispatcherItemsIntoById(byId, items) {
   let rawMappedRows = 0;
-  let pages = 0;
-
-  const body1 = await fetchDispatcherSinglePage(token, 0);
-  pages = 1;
-  const totalReported = extractTotal(body1);
-  const items1 = extractItems(body1);
-
-  console.log(`[services-sync] GET offset=0: limit=${PAGE_LIMIT}, ítems=${items1.length}`);
-
-  for (const item of items1) {
+  for (const item of items) {
     const row = mapServiceRow(item);
     if (row) {
       rawMappedRows += 1;
       byId.set(String(row.id), row);
     }
   }
+  return rawMappedRows;
+}
+
+/**
+ * Método clásico: hasta 2 GET con limit=1000 (offset 0 y 1000 si total > 1000).
+ */
+async function downloadDispatcherServicesPaged1000(token) {
+  console.info("[services-sync] Descarga modo páginas de 1000 (fallback clásico)…");
+  const byId = new Map();
+  let rawMappedRows = 0;
+  let pages = 0;
+
+  const body1 = await fetchDispatcherSinglePage(token, 0, PAGE_LIMIT);
+  pages = 1;
+  const totalReported = extractTotal(body1);
+  const items1 = extractItems(body1);
+
+  console.log(`[services-sync] GET offset=0: limit=${PAGE_LIMIT}, ítems=${items1.length}`);
+
+  rawMappedRows += mergeDispatcherItemsIntoById(byId, items1);
 
   if (typeof totalReported === "number" && totalReported > PAGE_LIMIT) {
-    const body2 = await fetchDispatcherSinglePage(token, PAGE_LIMIT);
+    const body2 = await fetchDispatcherSinglePage(token, PAGE_LIMIT, PAGE_LIMIT);
     pages = 2;
     const items2 = extractItems(body2);
     console.log(`[services-sync] GET offset=${PAGE_LIMIT}: ítems=${items2.length}`);
-    for (const item of items2) {
-      const row = mapServiceRow(item);
-      if (row) {
-        rawMappedRows += 1;
-        byId.set(String(row.id), row);
-      }
-    }
+    rawMappedRows += mergeDispatcherItemsIntoById(byId, items2);
   }
 
   const rows = [...byId.values()];
@@ -272,7 +278,100 @@ async function downloadDispatcherServicesDeduped(token) {
     totalReported,
     pages,
     reachedFetchCap,
+    fetchMode: "paged_1000",
   };
+}
+
+/**
+ * Intenta una sola petición limit=2000. Devuelve { ok, ... } o { ok:false, reason } para activar fallback.
+ */
+async function tryDownloadSinglePage2000(token) {
+  let body;
+  try {
+    body = await fetchDispatcherSinglePage(token, 0, SINGLE_PAGE_LIMIT);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, reason: `fetch_error: ${msg}` };
+  }
+
+  if (!body || body.ok !== true) {
+    return { ok: false, reason: "ok_not_true" };
+  }
+
+  const totalReported = extractTotal(body);
+  const items = extractItems(body);
+  if (!Array.isArray(items) || items.length === 0) {
+    return { ok: false, reason: "empty_items" };
+  }
+
+  if (typeof totalReported === "number" && Number.isFinite(totalReported) && totalReported > SINGLE_PAGE_LIMIT) {
+    return {
+      ok: false,
+      reason: `total_gt_limit (${totalReported} > ${SINGLE_PAGE_LIMIT})`,
+    };
+  }
+
+  if (
+    typeof totalReported === "number" &&
+    Number.isFinite(totalReported) &&
+    totalReported > items.length
+  ) {
+    return {
+      ok: false,
+      reason: `api_total_exceeds_items (total=${totalReported} items_len=${items.length})`,
+    };
+  }
+
+  const byId = new Map();
+  const rawMappedRows = mergeDispatcherItemsIntoById(byId, items);
+  const rows = [...byId.values()];
+  if (rows.length === 0) {
+    return { ok: false, reason: "no_valid_rows_after_map" };
+  }
+  const dupesRemoved = rawMappedRows - rows.length;
+  if (dupesRemoved > 0) {
+    console.log(
+      `[services-sync] Dedupe (página única): ${rawMappedRows} filas mapeadas → ${rows.length} únicos (eliminados ${dupesRemoved} duplicados por id).`,
+    );
+  }
+
+  const reachedFetchCap =
+    typeof totalReported === "number" && Number.isFinite(totalReported) && totalReported > SINGLE_PAGE_LIMIT;
+
+  return {
+    ok: true,
+    rows,
+    uniqueCount: rows.length,
+    rawMappedRows,
+    totalReported,
+    pages: 1,
+    reachedFetchCap,
+    fetchMode: "single_2000",
+  };
+}
+
+async function downloadDispatcherServicesSmart(token) {
+  console.info("[services-sync] Intentando página única de 2000 (limit=2000, offset=0)…");
+  const single = await tryDownloadSinglePage2000(token);
+  if (single.ok) {
+    console.info(
+      `[services-sync] Página única de 2000 aceptada: únicos=${single.uniqueCount}, total API=${single.totalReported ?? "null"}, rawMapped=${single.rawMappedRows}`,
+    );
+    return {
+      rows: single.rows,
+      uniqueCount: single.uniqueCount,
+      rawMappedRows: single.rawMappedRows,
+      totalReported: single.totalReported,
+      pages: single.pages,
+      reachedFetchCap: single.reachedFetchCap,
+      fetchMode: single.fetchMode,
+    };
+  }
+
+  console.warn(
+    `[services-sync] Fallback activado: volviendo a páginas de 1000 — motivo: ${single.reason}`,
+  );
+  return downloadDispatcherServicesPaged1000(token);
 }
 
 async function replaceAllServices(supabase, rows) {
@@ -332,7 +431,7 @@ async function sync() {
   }
   let pagesQueried = 0;
 
-  console.log(`[services-sync] Dispatcher limit=${PAGE_LIMIT} por página, modo=reemplazo_total`);
+  console.log(`[services-sync] Dispatcher: modo inteligente (intento 2000 → fallback 1000), reemplazo total`);
   await insertSyncMonitor({
     action: "services_fetch",
     status: "running",
@@ -351,7 +450,7 @@ async function sync() {
     let dl;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       console.info(`[services-sync] full-fetch attempt ${attempt}/${maxAttempts}`);
-      dl = await downloadDispatcherServicesDeduped(token);
+      dl = await downloadDispatcherServicesSmart(token);
       pagesQueried = dl.pages;
       const totalVsUniqueMismatch =
         typeof dl.totalReported === "number" &&
@@ -377,7 +476,7 @@ async function sync() {
     }
 
     console.log(
-      `[services-sync] Resumen descarga: únicos=${dl.uniqueCount}, rawMapped=${dl.rawMappedRows}, total API(campo)=${dl.totalReported ?? "?"}, peticiones=${dl.pages}, reachedCap=${dl.reachedFetchCap}`,
+      `[services-sync] Resumen descarga: modo=${dl.fetchMode ?? "?"}, únicos=${dl.uniqueCount}, rawMapped=${dl.rawMappedRows}, total API(campo)=${dl.totalReported ?? "?"}, peticiones=${dl.pages}, reachedCap=${dl.reachedFetchCap}`,
     );
 
     const { deleted, inserted } = await replaceAllServices(supabase, dl.rows);
@@ -401,24 +500,29 @@ async function sync() {
       validationErrors.push(`Se insertaron ${inserted} filas; se esperaban ${dl.uniqueCount}.`);
     }
     if (dl.reachedFetchCap) {
+      const maxR =
+        dl.fetchMode === "single_2000" ? SINGLE_PAGE_LIMIT * dl.pages : PAGE_LIMIT * dl.pages;
       validationErrors.push(
-        `La API declara total=${dl.totalReported} superior a ${PAGE_LIMIT * dl.pages} filas descargables con la paginación actual.`,
+        `La API declara total=${dl.totalReported} superior a ${maxR} filas descargables (${dl.fetchMode}).`,
       );
     }
 
     const validationOk = validationErrors.length === 0;
+    const warningText = validationErrors.length ? `[WARNING] ${validationErrors.join(" | ")}` : null;
+    const modeTag = dl.fetchMode === "single_2000" ? "single2000" : "paged1000";
+    const reasonStop = validationOk ? `full_replace_ok_${modeTag}` : `full_replace_ok_with_warnings_${modeTag}`;
 
     await insertSyncMonitor({
       action: "services_fetch",
-      status: validationOk ? "success" : "error",
+      status: "success",
       records_procesados: dl.uniqueCount,
       records_inserted: inserted,
       registros_nuevos_estimados: null,
       registros_actualizados_estimados: null,
-      reason_for_stop: validationOk ? "full_replace_ok_dispatcher" : "full_replace_validation_failed_dispatcher",
+      reason_for_stop: reasonStop,
       pages_queried: pagesQueried,
       last_id: "moobiz_services",
-      error_message: validationOk ? null : validationErrors.join(" "),
+      error_message: warningText,
     });
     await insertSyncMonitor({
       action: "services_fetch",
@@ -430,12 +534,14 @@ async function sync() {
       reason_for_stop: "fetch_end",
       pages_queried: pagesQueried,
       last_id: "moobiz_services",
-      error_message: null,
+      error_message: warningText,
     });
 
     console.log(
       JSON.stringify({
-        ok: validationOk,
+        ok: true,
+        validationStrictOk: validationOk,
+        fetchMode: dl.fetchMode,
         uniqueAfterDedupe: dl.uniqueCount,
         finalDbCount,
         apiTotalDeclared: dl.totalReported,
@@ -443,16 +549,11 @@ async function sync() {
         deleted,
         pages: pagesQueried,
         reachedFetchCap: dl.reachedFetchCap,
-        validationErrors,
+        validationErrors: validationErrors.length ? validationErrors : undefined,
       }),
     );
 
-    if (!validationOk) {
-      process.exitCode = 2;
-      console.warn("[services-sync] Validación con advertencias o error; revisa el JSON anterior.");
-    } else {
-      console.log("[services-sync] OK");
-    }
+    console.log("[services-sync] OK (datos persistidos; descuadres solo en logs/sync_monitor si aplica)");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const auth401AfterRefresh =

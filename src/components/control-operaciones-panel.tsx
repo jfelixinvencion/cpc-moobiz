@@ -568,6 +568,16 @@ function formatGpsDate(value: string): string {
   return format(d, "dd/MM/yyyy HH:mm");
 }
 
+/** Filtro cliente BASE: fl_name contiene «moobiz» (case-insensitive). Sin fl_name válido → no coincide. */
+function rowMatchesBaseFlNameFilter(row: MergedDriver, baseFilterEnabled: boolean): boolean {
+  if (!baseFilterEnabled) return true;
+  const v = (row as Record<string, unknown>)["fl_name"];
+  if (v === null || v === undefined) return false;
+  const fl = String(v).trim().toLowerCase();
+  if (!fl) return false;
+  return fl.includes("moobiz");
+}
+
 export function ControlOperacionesPanel() {
   const [rows, setRows] = useState<MergedDriver[]>([]);
   const [controlById, setControlById] = useState<Record<string, ControlSolicitanteCell>>({});
@@ -589,6 +599,7 @@ export function ControlOperacionesPanel() {
   const [region, setRegion] = useState(GLOBAL_ALL);
   /** Vacío = todos (equivalente a "Todos"). */
   const [gpsFilter, setGpsFilter] = useState<string[]>([]);
+  const [baseFilterEnabled, setBaseFilterEnabled] = useState(false);
   const [semaforoFilter, setSemaforoFilter] = useState<string[]>([]);
   const [distritoFilter, setDistritoFilter] = useState<string[]>([]);
   const [conductorQ, setConductorQ] = useState("");
@@ -661,12 +672,14 @@ export function ControlOperacionesPanel() {
       ) {
         return false;
       }
+      if (!rowMatchesBaseFlNameFilter(r, baseFilterEnabled)) return false;
       return true;
     });
   }, [
     rows,
     region,
     gpsFilter,
+    baseFilterEnabled,
     semaforoFilter,
     conductorQ,
     solicitanteFilter,
@@ -1444,6 +1457,17 @@ export function ControlOperacionesPanel() {
                   GPS
                 </span>
               )}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className={baseFilterEnabled ? TOOLBAR_BTN_PRIMARY : TOOLBAR_BTN_SECONDARY}
+              aria-pressed={baseFilterEnabled}
+              onClick={() => setBaseFilterEnabled((p) => !p)}
+              title="BASE — mostrar solo conductores cuyo fl_name contiene «moobiz» (sin distinguir mayúsculas)."
+            >
+              BASE
             </Button>
             <Button
               type="button"

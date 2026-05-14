@@ -347,8 +347,30 @@ async function sync() {
   });
 
   try {
-    const dl = await downloadDispatcherServicesDeduped(token);
-    pagesQueried = dl.pages;
+    const maxAttempts = 3;
+    let dl;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      console.info(`[services-sync] full-fetch attempt ${attempt}/${maxAttempts}`);
+      dl = await downloadDispatcherServicesDeduped(token);
+      pagesQueried = dl.pages;
+      const totalVsUniqueMismatch =
+        typeof dl.totalReported === "number" &&
+        Number.isFinite(dl.totalReported) &&
+        dl.uniqueCount !== dl.totalReported;
+      if (!totalVsUniqueMismatch) break;
+      if (attempt < maxAttempts) {
+        const backoff = 5000 * attempt + Math.floor(Math.random() * 2000);
+        console.warn(
+          `[services-sync] validation failed attempt ${attempt}: total vs unique (API total=${dl.totalReported} unique=${dl.uniqueCount})`,
+        );
+        console.info(`[services-sync] retrying in ${backoff}ms`);
+        await new Promise((r) => setTimeout(r, backoff));
+      } else {
+        console.error(
+          "[services-sync] validation failed after retries (total vs unique), will continue with last fetch (existing behavior)",
+        );
+      }
+    }
 
     if (dl.uniqueCount === 0) {
       throw new Error("MOOBIZ_SERVICES_SYNC: 0 servicios descargados; la tabla no se modifica.");

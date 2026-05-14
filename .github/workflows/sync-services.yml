@@ -5,6 +5,9 @@ on:
 
 jobs:
   sync-services:
+    concurrency:
+      group: sync-services
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

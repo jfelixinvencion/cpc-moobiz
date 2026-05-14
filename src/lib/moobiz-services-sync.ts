@@ -117,13 +117,26 @@ export function mapServiceRow(raw: Record<string, unknown>): { id: string; state
   };
 }
 
-export type MoobizServicesSyncResult = {
-  ok: boolean;
-  deleted: number;
-  inserted: number;
-  pages: number;
-  validationErrors?: string[];
-};
+export type MoobizServicesSyncResult =
+  | {
+      ok: boolean;
+      deleted: number;
+      inserted: number;
+      pages: number;
+      validationErrors?: string[];
+      conflict?: undefined;
+      reason?: undefined;
+    }
+  | {
+      ok: false;
+      conflict: true;
+      reason: "sync_already_running";
+      deleted: 0;
+      inserted: 0;
+      pages: 0;
+    };
+
+const SYNC_GUARD_REASON = "api_sync_guard_active" as const;
 
 async function replaceAllServices(
   supabase: SupabaseClient<any, "public", any>,
@@ -201,6 +214,47 @@ export async function runMoobizServicesSync(): Promise<MoobizServicesSyncResult>
   const supabase = createClient(supabaseUrl, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+
+  // -- START guard: abort if a recent run is still 'running' (narrow reason to avoid stale CI fetch_start rows) --
+  const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+  const { data: running, error: rErr } = await supabase
+    .from("sync_monitor")
+    .select("id,created_at")
+    .eq("last_id", "moobiz_services")
+    .eq("status", "running")
+    .eq("reason_for_stop", SYNC_GUARD_REASON)
+    .gte("created_at", since)
+    .limit(1);
+
+  if (rErr) {
+    console.warn("[services-sync] sync guard: could not check sync_monitor", rErr);
+  } else if (running && running.length > 0) {
+    console.info("[services-sync] sync guard: another moobiz_services sync is running — aborting this request");
+    return { ok: false, conflict: true, reason: "sync_already_running", deleted: 0, inserted: 0, pages: 0 };
+  }
+  // -- END guard --
+
+  let lockRowId: string | null = null;
+  const { data: lockIns, error: lockErr } = await supabase
+    .from("sync_monitor")
+    .insert({
+      status: "running",
+      records_procesados: 0,
+      records_inserted: 0,
+      registros_nuevos_estimados: null,
+      registros_actualizados_estimados: null,
+      reason_for_stop: SYNC_GUARD_REASON,
+      pages_queried: 0,
+      last_id: "moobiz_services",
+      error_message: null,
+    })
+    .select("id")
+    .maybeSingle();
+  if (lockErr) {
+    console.warn("[services-sync] sync guard: could not insert lock row", lockErr);
+  } else if (lockIns && typeof lockIns === "object" && "id" in lockIns) {
+    lockRowId = String((lockIns as { id: unknown }).id ?? "").trim() || null;
+  }
 
   let pagesQueried = 0;
 
@@ -293,5 +347,12 @@ export async function runMoobizServicesSync(): Promise<MoobizServicesSyncResult>
       error_message: authRenewalFailed ? "Error 401 tras intento de renovación" : msg,
     });
     throw err;
+  } finally {
+    if (lockRowId) {
+      const { error: delErr } = await supabase.from("sync_monitor").delete().eq("id", lockRowId);
+      if (delErr) {
+        console.warn("[services-sync] sync guard: could not delete lock row", delErr);
+      }
+    }
   }
 }

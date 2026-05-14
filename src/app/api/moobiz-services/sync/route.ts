@@ -31,6 +31,10 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await runMoobizServicesSync();
+    if ("conflict" in result && result.conflict) {
+      console.info("[services-sync][AUDIT] sync guard: aborted (409 sync_already_running)");
+      return NextResponse.json({ ok: false, reason: result.reason }, { status: 409 });
+    }
     const status = result.ok ? 200 : 422;
     console.log(
       `[services-sync][AUDIT] destino=public.moobiz_services processed=${result.inserted} inserted=${result.inserted} deleted=${result.deleted} ok=${result.ok} status=${status}`,

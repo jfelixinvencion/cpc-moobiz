@@ -15,6 +15,7 @@
     "sync:operators": "node scripts/sync_moobiz_operators.js",
     "sync:services": "node scripts/sync_moobiz_services.js",
     "sync:logs": "node scripts/sync_moobiz_logs_incremental.js",
+    "recover:fv-items": "node -r dotenv/config scripts/recover_moobiz_drivers_fv_items.js",
     "probe:drivers-pagination": "node scripts/probe_moobiz_drivers_pagination.js"
   },
   "dependencies": {

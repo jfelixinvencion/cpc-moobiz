@@ -765,11 +765,12 @@ export function ProductividadPanel() {
 
       {seriesLegend}
 
-      {/* md+: grid stretch — columna izquierda ocupa misma altura que derecha; scroll interno en usuario */}
+      {/* md+: izquierda crece (≈ flex-1); derecha cap min(520px,45%) — un solo bloque Acciones por usuario */}
       <div
         className={cn(
           "grid min-h-0 min-w-0 grid-cols-1 gap-6",
-          "md:grid-cols-2 md:grid-rows-[auto_auto_auto] md:items-stretch md:gap-x-6 md:gap-y-4",
+          "md:grid-rows-[auto_auto_auto] md:items-stretch md:gap-x-6 md:gap-y-4",
+          "md:[grid-template-columns:minmax(0,1fr)_minmax(0,min(520px,45%))]",
         )}
       >
         <div className="order-1 min-h-0 min-w-0 md:col-start-2 md:row-start-1 md:self-start">

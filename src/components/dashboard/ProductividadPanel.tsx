@@ -518,8 +518,8 @@ export function ProductividadPanel() {
   );
 
   const actionsByUserBlock = (
-    <div className="rounded-lg border border-slate-100 bg-white p-3 shadow-sm">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2">
+    <div className="flex min-h-[420px] flex-col rounded-lg border border-slate-100 bg-white p-3 shadow-sm md:h-full md:min-h-0">
+      <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2">
         <h3 className="text-sm font-semibold text-[#0f5666]">Acciones por usuario</h3>
         <div className="flex items-center gap-2">
           <span className="text-[10px] text-slate-500">
@@ -535,13 +535,18 @@ export function ProductividadPanel() {
       </div>
       {usersError ? <p className="text-xs text-red-600">{usersError}</p> : null}
       {usersLoading && chartUserData.length === 0 ? (
-        <PanelSkeleton className="h-[400px] w-full md:h-[600px]" />
+        <PanelSkeleton className="min-h-[320px] flex-1 md:min-h-[400px]" />
       ) : chartUserData.length === 0 ? (
-        <NoData />
+        <div className="flex min-h-[200px] flex-1 items-center justify-center">
+          <NoData />
+        </div>
       ) : (
         <div
           ref={scrollRef}
-          className="max-h-[400px] overflow-y-auto rounded-lg border border-slate-100 pr-1 md:max-h-[600px]"
+          className={cn(
+            "overflow-y-auto rounded-lg border border-slate-100 pr-1",
+            "max-h-[400px] md:max-h-none md:min-h-0 md:flex-1",
+          )}
           onScroll={onChartScroll}
         >
           <ResponsiveContainer width="100%" height={chartInnerH} minWidth={280}>
@@ -608,7 +613,7 @@ export function ProductividadPanel() {
   );
 
   const byDateBlock = (
-    <div className="flex min-h-0 min-w-0 flex-col rounded-lg border border-slate-100 bg-white p-3 shadow-sm md:min-h-[220px]">
+    <div className="flex min-h-0 min-w-0 shrink-0 flex-col rounded-lg border border-slate-100 bg-white p-3 shadow-sm">
       <div className="mb-2 flex shrink-0 flex-row items-center justify-between gap-2">
         <h3 className="text-xs font-semibold text-[#0f5666]">Por fecha</h3>
         <ExportBtn
@@ -617,11 +622,11 @@ export function ProductividadPanel() {
         />
       </div>
       {byDateLoading ? (
-        <PanelSkeleton className="h-[200px] w-full md:h-[min(360px,max(260px,40vh))]" />
+        <PanelSkeleton className="h-[200px] w-full md:h-56" />
       ) : byDate.length === 0 ? (
         <NoData />
       ) : (
-        <div className="h-[200px] w-full md:h-[min(360px,max(260px,40vh))] md:min-h-[260px]">
+        <div className="h-[200px] w-full shrink-0 md:h-56">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={byDate} margin={{ top: 8, right: 8, left: 0, bottom: 36 }}>
               <CartesianGrid stroke={CHART_GRID} vertical={false} />
@@ -645,7 +650,7 @@ export function ProductividadPanel() {
   );
 
   const byDateHourBlock = (
-    <div className="flex min-h-0 min-w-0 flex-col rounded-lg border border-slate-100 bg-white p-3 shadow-sm md:min-h-[220px]">
+    <div className="flex min-h-0 min-w-0 shrink-0 flex-col rounded-lg border border-slate-100 bg-white p-3 shadow-sm">
       <div className="mb-2 flex shrink-0 flex-row items-center justify-between gap-2">
         <h3 className="text-xs font-semibold text-[#0f5666]">Por fecha y hora</h3>
         <ExportBtn
@@ -656,11 +661,11 @@ export function ProductividadPanel() {
         />
       </div>
       {byDateHourLoading ? (
-        <PanelSkeleton className="h-[200px] w-full md:h-[min(360px,max(260px,40vh))]" />
+        <PanelSkeleton className="h-[200px] w-full md:h-56" />
       ) : byDateHour.length === 0 ? (
         <NoData />
       ) : (
-        <div className="h-[200px] w-full md:h-[min(360px,max(260px,40vh))] md:min-h-[260px]">
+        <div className="h-[200px] w-full shrink-0 md:h-56">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={byDateHour} margin={{ top: 8, right: 8, left: 0, bottom: 44 }}>
               <CartesianGrid stroke={CHART_GRID} vertical={false} />
@@ -760,22 +765,24 @@ export function ProductividadPanel() {
 
       {seriesLegend}
 
-      {/* <md: orden vertical — métricas, acciones/usuario, gráficas fecha. md+: 50% | 50% */}
+      {/* md+: grid stretch — columna izquierda ocupa misma altura que derecha; scroll interno en usuario */}
       <div
         className={cn(
-          "grid grid-cols-1 gap-6 min-w-0",
-          "md:grid-cols-2 md:grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)] md:gap-x-6 md:gap-y-4",
+          "grid min-h-0 min-w-0 grid-cols-1 gap-6",
+          "md:grid-cols-2 md:grid-rows-[auto_auto_auto] md:items-stretch md:gap-x-6 md:gap-y-4",
         )}
       >
-        <div className="order-1 min-w-0 md:col-start-2 md:row-start-1">{metricCardsRow}</div>
+        <div className="order-1 min-h-0 min-w-0 md:col-start-2 md:row-start-1 md:self-start">
+          {metricCardsRow}
+        </div>
 
-        <div className="order-2 min-w-0 md:col-start-1 md:row-start-1 md:row-span-3 md:self-start md:pr-2 xl:pr-4">
+        <div className="order-2 flex min-h-0 min-w-0 md:col-start-1 md:row-span-3 md:row-start-1 md:h-full md:pr-2 xl:pr-4">
           {actionsByUserBlock}
         </div>
 
-        <div className="order-3 min-w-0 md:col-start-2 md:row-start-2 md:min-h-0">{byDateBlock}</div>
+        <div className="order-3 min-h-0 min-w-0 md:col-start-2 md:row-start-2">{byDateBlock}</div>
 
-        <div className="order-4 min-w-0 md:col-start-2 md:row-start-3 md:min-h-0">{byDateHourBlock}</div>
+        <div className="order-4 min-h-0 min-w-0 md:col-start-2 md:row-start-3">{byDateHourBlock}</div>
       </div>
     </div>
   );

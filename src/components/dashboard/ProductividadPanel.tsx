@@ -33,12 +33,18 @@ import {
   type ProductividadParsedParams,
 } from "@/lib/productividad-logs-params";
 import type { ProductividadCardMetrics } from "@/lib/productividad-logs-query";
+import {
+  formatPerHour,
+  pivotAndSortUserChartRows,
+  resolveSortTypes,
+  type UserChartPivotRow,
+  type UserChartRawRow,
+} from "@/lib/productividad-user-chart-transform";
 import { cn } from "@/lib/utils";
 
 const DEBOUNCE_MS = 400;
 const USER_PAGE = 20;
 const BAR_ROW_H = 34;
-const CHART_SCROLL_MAX = 600;
 const CHART_GRID = "rgba(148, 163, 184, 0.35)";
 
 const PETROLEO = "#0f5666";
@@ -94,9 +100,20 @@ function useDebounced<T>(value: T, ms: number): T {
 
 function filtersToParams(
   f: FilterState,
-  opts?: { limit?: number; offset?: number; skipTypeLogName?: boolean },
+  opts?: {
+    limit?: number;
+    offset?: number;
+    skipTypeLogName?: boolean;
+    sortTypes?: ProductividadLogType[] | null;
+  },
 ): ProductividadParsedParams {
   const nullIf = (a: string[]) => (a.length === 0 ? null : a);
+  const sortTypes =
+    opts?.sortTypes == null
+      ? null
+      : opts.sortTypes.length === 0
+        ? null
+        : [...opts.sortTypes];
   return {
     global: nullIf(f.global),
     estado: nullIf(f.estado),
@@ -108,12 +125,18 @@ function filtersToParams(
     usName: nullIf(f.usName),
     limit: opts?.limit ?? USER_PAGE,
     offset: opts?.offset ?? 0,
+    sortTypes,
   };
 }
 
 function buildQuery(
   f: FilterState,
-  opts?: { limit?: number; offset?: number; skipTypeLogName?: boolean },
+  opts?: {
+    limit?: number;
+    offset?: number;
+    skipTypeLogName?: boolean;
+    sortTypes?: ProductividadLogType[] | null;
+  },
 ): string {
   const p = new URLSearchParams();
   appendProductividadParams(p, filtersToParams(f, opts), {
@@ -122,27 +145,38 @@ function buildQuery(
   return p.toString();
 }
 
-type UserRow = {
-  us_name: string;
-  type_log_name: string;
-  cnt: number;
-  total_per_user: number;
-};
-
-type ChartUserDatum = Record<string, string | number> & { us_name: string; total: number };
-
-function pivotUserRows(rows: UserRow[]): ChartUserDatum[] {
-  const byUser = new Map<string, ChartUserDatum>();
-  for (const r of rows) {
-    let row = byUser.get(r.us_name);
-    if (!row) {
-      row = { us_name: r.us_name, total: r.total_per_user };
-      for (const t of PRODUCTIVIDAD_LOG_TYPES) row[t] = 0;
-      byUser.set(r.us_name, row);
-    }
-    row[r.type_log_name] = r.cnt;
-  }
-  return Array.from(byUser.values()).sort((a, b) => (b.total as number) - (a.total as number));
+function UserChartTooltip({
+  row,
+  typesToShow,
+}: {
+  row: UserChartPivotRow;
+  typesToShow: ProductividadLogType[];
+}) {
+  const total = row.total_per_user || row.total;
+  return (
+    <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs shadow-md">
+      <p className="mb-1.5 font-semibold text-[#0f5666]">{row.us_name}</p>
+      <div className="space-y-1">
+        {typesToShow.map((type) => {
+          const cnt = row.totals[type] ?? 0;
+          const pct = total > 0 ? ((cnt / total) * 100).toFixed(1) : "0.0";
+          const ph = formatPerHour(cnt, row.buckets[type] ?? 0);
+          return (
+            <p key={type} className="flex items-center gap-1.5 text-slate-700">
+              <span
+                className="inline-block h-2 w-2 shrink-0 rounded-full"
+                style={{ backgroundColor: TYPE_COLORS[type] }}
+                aria-hidden
+              />
+              <span>
+                {type}: {cnt.toLocaleString("es-PE")} ({pct}%) — {ph}
+              </span>
+            </p>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 function downloadCsv(url: string) {
@@ -192,7 +226,7 @@ export function ProductividadPanel() {
   const [filterOptions, setFilterOptions] = useState<Record<string, string[]>>({});
   const [filterLoading, setFilterLoading] = useState(false);
 
-  const [userRows, setUserRows] = useState<UserRow[]>([]);
+  const [userRows, setUserRows] = useState<UserChartRawRow[]>([]);
   const [userTotal, setUserTotal] = useState(0);
   const [userOffset, setUserOffset] = useState(0);
   const [usersLoading, setUsersLoading] = useState(false);
@@ -249,17 +283,24 @@ export function ProductividadPanel() {
     }
   }, []);
 
+  const userSortTypes = useMemo(() => resolveSortTypes(visibleTypes), [visibleTypes]);
+
   const loadUsers = useCallback(
-    async (f: FilterState, offset: number, append: boolean) => {
+    async (
+      f: FilterState,
+      offset: number,
+      append: boolean,
+      sortTypes: ProductividadLogType[] | null,
+    ) => {
       setUsersLoading(true);
       setUsersError(null);
       try {
-        const qs = buildQuery(f, { limit: USER_PAGE, offset });
+        const qs = buildQuery(f, { limit: USER_PAGE, offset, sortTypes });
         const res = await fetch(`/api/dashboard/productividad/users?${qs}`, {
           cache: "no-store",
         });
         const body = (await res.json()) as {
-          rows?: UserRow[];
+          rows?: UserChartRawRow[];
           totalUsers?: number;
           error?: string;
         };
@@ -344,16 +385,35 @@ export function ProductividadPanel() {
   }, [debouncedFilters, loadFilterOptions]);
 
   useEffect(() => {
-    void loadUsers(debouncedFilters, 0, false);
+    setUserRows([]);
+    setUserOffset(0);
+    void loadUsers(debouncedFilters, 0, false, userSortTypes);
+  }, [debouncedFilters, userSortTypes, loadUsers]);
+
+  useEffect(() => {
     void loadCards(debouncedFilters);
     void loadByDate(debouncedFilters);
     void loadByDateHour(debouncedFilters);
-  }, [debouncedFilters, loadUsers, loadCards, loadByDate, loadByDateHour]);
+  }, [debouncedFilters, loadCards, loadByDate, loadByDateHour]);
 
-  const chartUserData = useMemo(() => pivotUserRows(userRows), [userRows]);
+  const loadedUserCount = useMemo(
+    () => new Set(userRows.map((r) => r.us_name)).size,
+    [userRows],
+  );
+
+  const chartUserData = useMemo(
+    () => pivotAndSortUserChartRows(userRows, visibleTypes),
+    [userRows, visibleTypes],
+  );
+
   const activeTypes = useMemo(
     () => PRODUCTIVIDAD_LOG_TYPES.filter((t) => visibleTypes[t]),
     [visibleTypes],
+  );
+
+  const tooltipTypes = useMemo(
+    () => (activeTypes.length > 0 ? activeTypes : [...PRODUCTIVIDAD_LOG_TYPES]),
+    [activeTypes],
   );
 
   const chartInnerH = Math.max(chartUserData.length * BAR_ROW_H + 48, 120);
@@ -361,18 +421,267 @@ export function ProductividadPanel() {
   const onChartScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el || usersLoading || loadingMoreRef.current) return;
-    if (userRows.length >= userTotal) return;
+    if (loadedUserCount >= userTotal) return;
     const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 80;
     if (!nearBottom) return;
     loadingMoreRef.current = true;
     const nextOffset = userOffset + USER_PAGE;
-    void loadUsers(debouncedFilters, nextOffset, true);
-  }, [debouncedFilters, loadUsers, userOffset, userRows.length, userTotal, usersLoading]);
+    void loadUsers(debouncedFilters, nextOffset, true, userSortTypes);
+  }, [
+    debouncedFilters,
+    loadUsers,
+    userOffset,
+    loadedUserCount,
+    userTotal,
+    usersLoading,
+    userSortTypes,
+  ]);
 
-  const qsBase = buildQuery(debouncedFilters);
+  const qsBase = buildQuery(debouncedFilters, { sortTypes: userSortTypes });
+
+  const seriesLegend = (
+    <div
+      role="group"
+      aria-label="Mostrar u ocultar series en el gráfico de acciones por usuario"
+      className="flex flex-wrap items-center justify-center gap-2 px-1 py-2 md:justify-start"
+    >
+      {PRODUCTIVIDAD_LOG_TYPES.map((type) => {
+        const on = visibleTypes[type];
+        return (
+          <button
+            key={type}
+            type="button"
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition",
+              on ? "border-transparent text-white" : "border-slate-200 bg-white text-slate-400",
+            )}
+            style={on ? { backgroundColor: TYPE_COLORS[type] } : undefined}
+            onClick={() => {
+              setVisibleTypes((prev) => ({ ...prev, [type]: !prev[type] }));
+              if (scrollRef.current) scrollRef.current.scrollTop = 0;
+            }}
+            aria-pressed={on}
+            aria-label={
+              on
+                ? `Ocultar serie ${type}. Actualmente visible.`
+                : `Mostrar serie ${type}. Actualmente oculto.`
+            }
+          >
+            <span
+              className="h-2 w-2 shrink-0 rounded-full"
+              style={{ backgroundColor: TYPE_COLORS[type] }}
+              aria-hidden
+            />
+            {type}
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  const metricCardsRow = (
+    <div className="-mx-1 mb-1 flex shrink-0 items-start gap-3 overflow-x-auto pb-2 md:mb-4">
+      {PRODUCTIVIDAD_LOG_TYPES.map((type) => {
+        const card = cards.find((c) => c.type === type);
+        return (
+          <Card
+            key={type}
+            className={cn(
+              "min-w-[120px] max-w-[160px] shrink-0 overflow-hidden rounded-lg border-slate-200 bg-white p-0 shadow-sm",
+            )}
+          >
+            <CardHeader className="space-y-0 bg-[#0f5666] px-2 py-2">
+              <CardTitle className="text-center text-[11px] font-semibold tracking-wide text-white">
+                {type}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-3 text-center">
+              {cardsLoading ? (
+                <PanelSkeleton className="mx-auto h-10 w-16" />
+              ) : (
+                <>
+                  <p className="text-2xl font-semibold tabular-nums text-[#2fb6b0]">
+                    {(card?.ratio ?? 0).toFixed(2)}
+                  </p>
+                  <p className="text-xs leading-tight text-slate-500">por hora</p>
+                  <p className="mt-1 text-sm font-semibold tabular-nums text-slate-800">
+                    {(card?.total ?? 0).toLocaleString("es-PE")}
+                  </p>
+                  <p className="text-xs leading-tight text-gray-500">total</p>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        );
+      })}
+    </div>
+  );
+
+  const actionsByUserBlock = (
+    <div className="rounded-lg border border-slate-100 bg-white p-3 shadow-sm">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2">
+        <h3 className="text-sm font-semibold text-[#0f5666]">Acciones por usuario</h3>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-slate-500">
+            {chartUserData.length} / {userTotal} usuarios
+          </span>
+          <ExportBtn
+            disabled={usersLoading}
+            onClick={() =>
+              downloadCsv(`/api/dashboard/productividad/users?export=csv&${qsBase}`)
+            }
+          />
+        </div>
+      </div>
+      {usersError ? <p className="text-xs text-red-600">{usersError}</p> : null}
+      {usersLoading && chartUserData.length === 0 ? (
+        <PanelSkeleton className="h-[400px] w-full md:h-[600px]" />
+      ) : chartUserData.length === 0 ? (
+        <NoData />
+      ) : (
+        <div
+          ref={scrollRef}
+          className="max-h-[400px] overflow-y-auto rounded-lg border border-slate-100 pr-1 md:max-h-[600px]"
+          onScroll={onChartScroll}
+        >
+          <ResponsiveContainer width="100%" height={chartInnerH} minWidth={280}>
+            <BarChart
+              key={userSortTypes?.join("|") ?? "total"}
+              layout="vertical"
+              data={chartUserData}
+              margin={{ top: 4, right: 16, left: 4, bottom: 4 }}
+              barCategoryGap={6}
+              onMouseMove={(state) => {
+                const label = state?.activeLabel;
+                setHoveredUser(label != null ? String(label) : null);
+              }}
+              onMouseLeave={() => setHoveredUser(null)}
+            >
+              <CartesianGrid stroke={CHART_GRID} horizontal={false} />
+              <XAxis type="number" tick={{ fontSize: 10 }} allowDecimals={false} />
+              <YAxis
+                type="category"
+                dataKey="us_name"
+                width={120}
+                tick={{ fontSize: 10, fill: PETROLEO }}
+                tickLine={false}
+              />
+              <Tooltip
+                content={({ active, label }) => {
+                  if (!active || label == null) return null;
+                  const row = chartUserData.find((d) => d.us_name === label);
+                  if (!row) return null;
+                  return <UserChartTooltip row={row} typesToShow={tooltipTypes} />;
+                }}
+              />
+              {activeTypes.map((type) => (
+                <Bar
+                  key={type}
+                  dataKey={type}
+                  name={type}
+                  stackId="a"
+                  fill={TYPE_COLORS[type]}
+                  isAnimationActive
+                  animationDuration={350}
+                  animationEasing="ease-out"
+                >
+                  {chartUserData.map((entry) => (
+                    <Cell
+                      key={`${type}-${entry.us_name}`}
+                      fillOpacity={
+                        hoveredUser && hoveredUser !== entry.us_name ? 0.35 : 1
+                      }
+                    />
+                  ))}
+                </Bar>
+              ))}
+            </BarChart>
+          </ResponsiveContainer>
+          {usersLoading ? (
+            <div className="flex justify-center py-2">
+              <Loader2 className="h-4 w-4 animate-spin text-[#2fb6b0]" />
+            </div>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+
+  const byDateBlock = (
+    <div className="flex min-h-0 min-w-0 flex-col rounded-lg border border-slate-100 bg-white p-3 shadow-sm md:min-h-[220px]">
+      <div className="mb-2 flex shrink-0 flex-row items-center justify-between gap-2">
+        <h3 className="text-xs font-semibold text-[#0f5666]">Por fecha</h3>
+        <ExportBtn
+          disabled={byDateLoading}
+          onClick={() => downloadCsv(`/api/dashboard/productividad/by-date?export=csv&${qsBase}`)}
+        />
+      </div>
+      {byDateLoading ? (
+        <PanelSkeleton className="h-[200px] w-full md:h-[min(360px,max(260px,40vh))]" />
+      ) : byDate.length === 0 ? (
+        <NoData />
+      ) : (
+        <div className="h-[200px] w-full md:h-[min(360px,max(260px,40vh))] md:min-h-[260px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={byDate} margin={{ top: 8, right: 8, left: 0, bottom: 36 }}>
+              <CartesianGrid stroke={CHART_GRID} vertical={false} />
+              <XAxis
+                dataKey="fecha"
+                tick={{ fontSize: 9, angle: -30, textAnchor: "end" }}
+                height={44}
+                interval="preserveStartEnd"
+              />
+              <YAxis tick={{ fontSize: 10 }} width={36} allowDecimals={false} />
+              <Tooltip
+                formatter={(v: number) => [v.toLocaleString("es-PE"), "Conteo"]}
+                labelFormatter={(l) => `Fecha: ${l}`}
+              />
+              <Bar dataKey="cnt" name="Conteo" fill={TURQUESA} radius={[3, 3, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+    </div>
+  );
+
+  const byDateHourBlock = (
+    <div className="flex min-h-0 min-w-0 flex-col rounded-lg border border-slate-100 bg-white p-3 shadow-sm md:min-h-[220px]">
+      <div className="mb-2 flex shrink-0 flex-row items-center justify-between gap-2">
+        <h3 className="text-xs font-semibold text-[#0f5666]">Por fecha y hora</h3>
+        <ExportBtn
+          disabled={byDateHourLoading}
+          onClick={() =>
+            downloadCsv(`/api/dashboard/productividad/by-date-hour?export=csv&${qsBase}`)
+          }
+        />
+      </div>
+      {byDateHourLoading ? (
+        <PanelSkeleton className="h-[200px] w-full md:h-[min(360px,max(260px,40vh))]" />
+      ) : byDateHour.length === 0 ? (
+        <NoData />
+      ) : (
+        <div className="h-[200px] w-full md:h-[min(360px,max(260px,40vh))] md:min-h-[260px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={byDateHour} margin={{ top: 8, right: 8, left: 0, bottom: 44 }}>
+              <CartesianGrid stroke={CHART_GRID} vertical={false} />
+              <XAxis
+                dataKey="label"
+                tick={{ fontSize: 8, angle: -40, textAnchor: "end" }}
+                height={48}
+                interval="preserveStartEnd"
+              />
+              <YAxis tick={{ fontSize: 10 }} width={36} allowDecimals={false} />
+              <Tooltip formatter={(v: number) => [v.toLocaleString("es-PE"), "Conteo"]} />
+              <Bar dataKey="cnt" name="Conteo" fill={PETROLEO} radius={[3, 3, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+    </div>
+  );
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-6">
       <div
         className={cn(
           "max-sm:static sticky z-40 -mx-1 overflow-visible",
@@ -449,254 +758,24 @@ export function ProductividadPanel() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,7fr)_minmax(0,3fr)]">
-        <Card className="border-slate-200 bg-white shadow-sm">
-          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 border-b border-slate-100 py-2.5">
-            <CardTitle className="text-sm font-semibold text-[#0f5666]">
-              Acciones por usuario
-            </CardTitle>
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] text-slate-500">
-                {chartUserData.length} / {userTotal} usuarios
-              </span>
-              <ExportBtn
-                disabled={usersLoading}
-                onClick={() =>
-                  downloadCsv(
-                    `/api/dashboard/productividad/users?export=csv&${qsBase}`,
-                  )
-                }
-              />
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-2 pb-4">
-            <div className="flex flex-wrap gap-2">
-              {PRODUCTIVIDAD_LOG_TYPES.map((type) => {
-                const on = visibleTypes[type];
-                return (
-                  <button
-                    key={type}
-                    type="button"
-                    className={cn(
-                      "inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[10px] font-medium transition",
-                      on ? "border-transparent text-white" : "border-slate-200 bg-white text-slate-400",
-                    )}
-                    style={on ? { backgroundColor: TYPE_COLORS[type] } : undefined}
-                    onClick={() =>
-                      setVisibleTypes((prev) => ({ ...prev, [type]: !prev[type] }))
-                    }
-                    aria-pressed={on}
-                  >
-                    <span
-                      className="h-2 w-2 rounded-full"
-                      style={{ backgroundColor: TYPE_COLORS[type] }}
-                    />
-                    {type}
-                  </button>
-                );
-              })}
-            </div>
-            {usersError ? (
-              <p className="text-xs text-red-600">{usersError}</p>
-            ) : null}
-            {usersLoading && chartUserData.length === 0 ? (
-              <PanelSkeleton className="h-[400px] w-full" />
-            ) : chartUserData.length === 0 ? (
-              <NoData />
-            ) : (
-              <div
-                ref={scrollRef}
-                className="overflow-y-auto rounded-lg border border-slate-100 pr-1"
-                style={{ maxHeight: CHART_SCROLL_MAX }}
-                onScroll={onChartScroll}
-              >
-                <ResponsiveContainer width="100%" height={chartInnerH} minWidth={320}>
-                  <BarChart
-                    layout="vertical"
-                    data={chartUserData}
-                    margin={{ top: 4, right: 16, left: 4, bottom: 4 }}
-                    barCategoryGap={6}
-                    onMouseMove={(state) => {
-                      const label = state?.activeLabel;
-                      setHoveredUser(label != null ? String(label) : null);
-                    }}
-                    onMouseLeave={() => setHoveredUser(null)}
-                  >
-                    <CartesianGrid stroke={CHART_GRID} horizontal={false} />
-                    <XAxis type="number" tick={{ fontSize: 10 }} allowDecimals={false} />
-                    <YAxis
-                      type="category"
-                      dataKey="us_name"
-                      width={120}
-                      tick={{ fontSize: 10, fill: PETROLEO }}
-                      tickLine={false}
-                    />
-                    <Tooltip
-                      content={({ active, payload, label }) => {
-                        if (!active || !payload?.length) return null;
-                        const total = Number(
-                          chartUserData.find((d) => d.us_name === label)?.total ?? 0,
-                        );
-                        return (
-                          <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs shadow-md">
-                            <p className="mb-1 font-semibold text-[#0f5666]">{label}</p>
-                            {payload.map((entry) => {
-                              const v = Number(entry.value ?? 0);
-                              const pct = total > 0 ? ((v / total) * 100).toFixed(1) : "0";
-                              return (
-                                <p key={String(entry.dataKey)} className="text-slate-700">
-                                  <span style={{ color: entry.color }}>{entry.name}: </span>
-                                  {v.toLocaleString("es-PE")} ({pct}%)
-                                </p>
-                              );
-                            })}
-                          </div>
-                        );
-                      }}
-                    />
-                    {activeTypes.map((type) => (
-                      <Bar
-                        key={type}
-                        dataKey={type}
-                        name={type}
-                        stackId="a"
-                        fill={TYPE_COLORS[type]}
-                        isAnimationActive={false}
-                      >
-                        {chartUserData.map((entry) => (
-                          <Cell
-                            key={`${type}-${entry.us_name}`}
-                            fillOpacity={
-                              hoveredUser && hoveredUser !== entry.us_name ? 0.35 : 1
-                            }
-                          />
-                        ))}
-                      </Bar>
-                    ))}
-                  </BarChart>
-                </ResponsiveContainer>
-                {usersLoading ? (
-                  <div className="flex justify-center py-2">
-                    <Loader2 className="h-4 w-4 animate-spin text-[#2fb6b0]" />
-                  </div>
-                ) : null}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+      {seriesLegend}
 
-        <div className="flex flex-col gap-4">
-          <div className="grid grid-cols-2 gap-2">
-            {PRODUCTIVIDAD_LOG_TYPES.map((type) => {
-              const card = cards.find((c) => c.type === type);
-              return (
-                <Card
-                  key={type}
-                  className="border-slate-200 bg-white shadow-sm"
-                >
-                  <CardHeader className="space-y-0 bg-[#0f5666] px-2.5 py-2">
-                    <CardTitle className="text-[10px] font-semibold uppercase tracking-wide text-white">
-                      {type}
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="px-2.5 py-2.5 text-center">
-                    {cardsLoading ? (
-                      <PanelSkeleton className="mx-auto h-10 w-16" />
-                    ) : (
-                      <>
-                        <p className="text-lg font-bold tabular-nums text-[#2fb6b0]">
-                          {(card?.ratio ?? 0).toFixed(2)}
-                        </p>
-                        <p className="text-[10px] text-slate-500">por hora</p>
-                        <p className="mt-1 text-sm font-semibold tabular-nums text-slate-800">
-                          {(card?.total ?? 0).toLocaleString("es-PE")}
-                        </p>
-                        <p className="text-[10px] text-slate-400">total</p>
-                      </>
-                    )}
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
+      {/* <md: orden vertical — métricas, acciones/usuario, gráficas fecha. md+: 50% | 50% */}
+      <div
+        className={cn(
+          "grid grid-cols-1 gap-6 min-w-0",
+          "md:grid-cols-2 md:grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)] md:gap-x-6 md:gap-y-4",
+        )}
+      >
+        <div className="order-1 min-w-0 md:col-start-2 md:row-start-1">{metricCardsRow}</div>
 
-          <Card className="border-slate-200 bg-white shadow-sm">
-            <CardHeader className="flex flex-row items-center justify-between py-2">
-              <CardTitle className="text-xs font-semibold text-[#0f5666]">Por fecha</CardTitle>
-              <ExportBtn
-                disabled={byDateLoading}
-                onClick={() =>
-                  downloadCsv(`/api/dashboard/productividad/by-date?export=csv&${qsBase}`)
-                }
-              />
-            </CardHeader>
-            <CardContent className="pb-3">
-              {byDateLoading ? (
-                <PanelSkeleton className="h-40 w-full" />
-              ) : byDate.length === 0 ? (
-                <NoData />
-              ) : (
-                <ResponsiveContainer width="100%" height={160}>
-                  <BarChart data={byDate} margin={{ top: 4, right: 4, left: 0, bottom: 32 }}>
-                    <CartesianGrid stroke={CHART_GRID} vertical={false} />
-                    <XAxis
-                      dataKey="fecha"
-                      tick={{ fontSize: 8, angle: -35, textAnchor: "end" }}
-                      height={48}
-                      interval="preserveStartEnd"
-                    />
-                    <YAxis tick={{ fontSize: 9 }} width={32} allowDecimals={false} />
-                    <Tooltip
-                      formatter={(v: number) => [v.toLocaleString("es-PE"), "Conteo"]}
-                      labelFormatter={(l) => `Fecha: ${l}`}
-                    />
-                    <Bar dataKey="cnt" name="Conteo" fill={TURQUESA} radius={[3, 3, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card className="border-slate-200 bg-white shadow-sm">
-            <CardHeader className="flex flex-row items-center justify-between py-2">
-              <CardTitle className="text-xs font-semibold text-[#0f5666]">
-                Por fecha y hora
-              </CardTitle>
-              <ExportBtn
-                disabled={byDateHourLoading}
-                onClick={() =>
-                  downloadCsv(
-                    `/api/dashboard/productividad/by-date-hour?export=csv&${qsBase}`,
-                  )
-                }
-              />
-            </CardHeader>
-            <CardContent className="pb-3">
-              {byDateHourLoading ? (
-                <PanelSkeleton className="h-40 w-full" />
-              ) : byDateHour.length === 0 ? (
-                <NoData />
-              ) : (
-                <ResponsiveContainer width="100%" height={160}>
-                  <BarChart data={byDateHour} margin={{ top: 4, right: 4, left: 0, bottom: 40 }}>
-                    <CartesianGrid stroke={CHART_GRID} vertical={false} />
-                    <XAxis
-                      dataKey="label"
-                      tick={{ fontSize: 7, angle: -45, textAnchor: "end" }}
-                      height={52}
-                      interval="preserveStartEnd"
-                    />
-                    <YAxis tick={{ fontSize: 9 }} width={32} allowDecimals={false} />
-                    <Tooltip
-                      formatter={(v: number) => [v.toLocaleString("es-PE"), "Conteo"]}
-                    />
-                    <Bar dataKey="cnt" name="Conteo" fill={PETROLEO} radius={[3, 3, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              )}
-            </CardContent>
-          </Card>
+        <div className="order-2 min-w-0 md:col-start-1 md:row-start-1 md:row-span-3 md:self-start md:pr-2 xl:pr-4">
+          {actionsByUserBlock}
         </div>
+
+        <div className="order-3 min-w-0 md:col-start-2 md:row-start-2 md:min-h-0">{byDateBlock}</div>
+
+        <div className="order-4 min-w-0 md:col-start-2 md:row-start-3 md:min-h-0">{byDateHourBlock}</div>
       </div>
     </div>
   );

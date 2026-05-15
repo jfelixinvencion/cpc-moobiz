@@ -480,7 +480,7 @@ export function ProductividadPanel() {
   );
 
   const metricCardsRow = (
-    <div className="-mx-1 mb-1 flex shrink-0 items-start gap-3 overflow-x-auto pb-2 md:mb-4">
+    <div className="-mx-1 mb-1 flex w-full min-w-0 shrink-0 items-start gap-3 overflow-x-auto pb-2 md:mb-4">
       {PRODUCTIVIDAD_LOG_TYPES.map((type) => {
         const card = cards.find((c) => c.type === type);
         return (
@@ -518,7 +518,7 @@ export function ProductividadPanel() {
   );
 
   const actionsByUserBlock = (
-    <div className="flex min-h-[420px] flex-col rounded-lg border border-slate-100 bg-white p-3 shadow-sm md:h-full md:min-h-0">
+    <div className="flex min-h-[420px] w-full min-w-0 flex-col rounded-lg border border-slate-100 bg-white p-3 shadow-sm md:h-full md:min-h-0 md:flex-1">
       <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2">
         <h3 className="text-sm font-semibold text-[#0f5666]">Acciones por usuario</h3>
         <div className="flex items-center gap-2">
@@ -549,7 +549,7 @@ export function ProductividadPanel() {
           )}
           onScroll={onChartScroll}
         >
-          <ResponsiveContainer width="100%" height={chartInnerH} minWidth={280}>
+          <ResponsiveContainer width="100%" height={chartInnerH} minWidth={0}>
             <BarChart
               key={userSortTypes?.join("|") ?? "total"}
               layout="vertical"
@@ -613,7 +613,7 @@ export function ProductividadPanel() {
   );
 
   const byDateBlock = (
-    <div className="flex min-h-0 min-w-0 shrink-0 flex-col rounded-lg border border-slate-100 bg-white p-3 shadow-sm">
+    <div className="flex min-h-0 w-full min-w-0 shrink-0 flex-col rounded-lg border border-slate-100 bg-white p-3 shadow-sm">
       <div className="mb-2 flex shrink-0 flex-row items-center justify-between gap-2">
         <h3 className="text-xs font-semibold text-[#0f5666]">Por fecha</h3>
         <ExportBtn
@@ -650,7 +650,7 @@ export function ProductividadPanel() {
   );
 
   const byDateHourBlock = (
-    <div className="flex min-h-0 min-w-0 shrink-0 flex-col rounded-lg border border-slate-100 bg-white p-3 shadow-sm">
+    <div className="flex min-h-0 w-full min-w-0 shrink-0 flex-col rounded-lg border border-slate-100 bg-white p-3 shadow-sm">
       <div className="mb-2 flex shrink-0 flex-row items-center justify-between gap-2">
         <h3 className="text-xs font-semibold text-[#0f5666]">Por fecha y hora</h3>
         <ExportBtn
@@ -686,7 +686,7 @@ export function ProductividadPanel() {
   );
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex min-w-0 w-full max-w-none flex-col gap-6">
       <div
         className={cn(
           "max-sm:static sticky z-40 -mx-1 overflow-visible",
@@ -765,25 +765,24 @@ export function ProductividadPanel() {
 
       {seriesLegend}
 
-      {/* md+: izquierda crece (≈ flex-1); derecha cap min(520px,45%) — un solo bloque Acciones por usuario */}
+      {/* md+: 50/50 (grid-cols-2), sin gutter horizontal; móvil: métricas → acciones → gráficas */}
       <div
         className={cn(
-          "grid min-h-0 min-w-0 grid-cols-1 gap-6",
-          "md:grid-rows-[auto_auto_auto] md:items-stretch md:gap-x-6 md:gap-y-4",
-          "md:[grid-template-columns:minmax(0,1fr)_minmax(0,min(520px,45%))]",
+          "grid min-h-0 w-full max-w-none grid-cols-1 gap-6",
+          "md:grid-cols-2 md:grid-rows-[auto_auto_auto] md:items-stretch md:gap-x-0 md:gap-y-4",
         )}
       >
-        <div className="order-1 min-h-0 min-w-0 md:col-start-2 md:row-start-1 md:self-start">
+        <div className="order-1 min-h-0 w-full min-w-0 md:col-start-2 md:row-start-1 md:self-start">
           {metricCardsRow}
         </div>
 
-        <div className="order-2 flex min-h-0 min-w-0 md:col-start-1 md:row-span-3 md:row-start-1 md:h-full md:pr-2 xl:pr-4">
+        <div className="order-2 flex min-h-0 w-full min-w-0 flex-col md:col-start-1 md:row-span-3 md:row-start-1 md:h-full">
           {actionsByUserBlock}
         </div>
 
-        <div className="order-3 min-h-0 min-w-0 md:col-start-2 md:row-start-2">{byDateBlock}</div>
+        <div className="order-3 min-h-0 w-full min-w-0 md:col-start-2 md:row-start-2">{byDateBlock}</div>
 
-        <div className="order-4 min-h-0 min-w-0 md:col-start-2 md:row-start-3">{byDateHourBlock}</div>
+        <div className="order-4 min-h-0 w-full min-w-0 md:col-start-2 md:row-start-3">{byDateHourBlock}</div>
       </div>
     </div>
   );

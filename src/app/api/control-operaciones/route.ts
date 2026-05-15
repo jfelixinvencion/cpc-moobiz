@@ -22,6 +22,7 @@ const DRIVER_SELECT = [
   `status_col:"Status"`,
   `online_col:"Online"`,
   `gps_col:"GPS"`,
+  `fecha_activacion:"Fecha Activacion"`,
 ].join(",");
 
 const DRIVERS_INTERNAL_CHUNK = 150;

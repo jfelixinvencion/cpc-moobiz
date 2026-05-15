@@ -10,6 +10,8 @@ export type ControlDriverExcelRow = {
   estado_conductor: "Aprobado" | "Rechazado" | "Nuevo";
   /** Encendido | Apagado desde columna Online o GPS. */
   gps_label: "Encendido" | "Apagado";
+  /** Vista `vw_moobiz_drivers_excel` — típicamente DD/MM/YYYY; null si vacío. */
+  fecha_activacion: string | null;
 };
 
 function pickText(row: Record<string, unknown>, keys: string[]): string {
@@ -56,6 +58,14 @@ export function mapExcelRowToControlDriver(row: Record<string, unknown>): Contro
     null;
   const gps_label: "Encendido" | "Apagado" = isGpsOff(onlineRaw) ? "Apagado" : "Encendido";
 
+  const fechaActivacionRaw = pickText(row, [
+    "fecha_activacion",
+    "Fecha Activacion",
+    "fecha activacion",
+    "FECHA_ACTIVACION",
+  ]);
+  const fecha_activacion = fechaActivacionRaw.length > 0 ? fechaActivacionRaw : null;
+
   return {
     id_conductor,
     nombre_conductor,
@@ -64,6 +74,7 @@ export function mapExcelRowToControlDriver(row: Record<string, unknown>): Contro
     global,
     estado_conductor,
     gps_label,
+    fecha_activacion,
   };
 }
 

@@ -150,6 +150,7 @@ function toBoolNullable(v: unknown): boolean | null {
 export function mapDriverRow(raw: Record<string, unknown>): Record<string, unknown> | null {
   const id = toTextId(raw.id);
   if (!id) return null;
+  /** Objeto API completo en JSONB (sin truncamiento en app; persistencia vía RPC + columna jsonb). */
   return {
     id,
     id_branch: toTextNullable(raw.id_branch),

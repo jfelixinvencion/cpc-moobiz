@@ -20,25 +20,19 @@ BEGIN
 
   TRUNCATE TABLE public.moobiz_drivers;
 
+  -- Insert desde elementos del array JSON (evita jsonb_to_recordset → conversiones que en algunos
+  -- despliegues truncaban sub-cadenas largas dentro de raw_data, p. ej. fv_items).
   INSERT INTO public.moobiz_drivers (id, id_branch, id_role, id_company, id_company_area, show_data_fleets, raw_data)
   SELECT
-    NULLIF(trim(both x.id), ''),
-    NULLIF(trim(both x.id_branch), ''),
-    NULLIF(trim(both x.id_role), ''),
-    NULLIF(trim(both x.id_company), ''),
-    NULLIF(trim(both x.id_company_area), ''),
-    x.show_data_fleets,
-    COALESCE(x.raw_data, '{}'::jsonb)
-  FROM jsonb_to_recordset(p_rows) AS x(
-    id text,
-    id_branch text,
-    id_role text,
-    id_company text,
-    id_company_area text,
-    show_data_fleets boolean,
-    raw_data jsonb
-  )
-  WHERE NULLIF(trim(both x.id), '') IS NOT NULL;
+    NULLIF(trim(both elem->>'id'), ''),
+    NULLIF(trim(both elem->>'id_branch'), ''),
+    NULLIF(trim(both elem->>'id_role'), ''),
+    NULLIF(trim(both elem->>'id_company'), ''),
+    NULLIF(trim(both elem->>'id_company_area'), ''),
+    (elem->'show_data_fleets')::boolean,
+    COALESCE(elem->'raw_data', '{}'::jsonb)
+  FROM jsonb_array_elements(p_rows) AS elem
+  WHERE NULLIF(trim(both elem->>'id'), '') IS NOT NULL;
 
   GET DIAGNOSTICS inserted = ROW_COUNT;
   RETURN inserted;

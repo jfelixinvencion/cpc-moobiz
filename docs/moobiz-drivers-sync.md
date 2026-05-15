@@ -22,6 +22,7 @@ Ejecutar en Supabase el SQL:
 
 - `sql/20260426_create_moobiz_drivers.sql`
 - `sql/20260427_moobiz_drivers_full_replace_rpc.sql` (**obligatorio** para el sync actual)
+- `sql/20260513_moobiz_drivers_raw_data_unbounded.sql` (**recomendado** si `raw_data` o campos internos como `fv_items` llegaron truncados por un tipo legacy `varchar(n)` en `raw_data`)
 
 ## Sync por CLI
 

@@ -125,6 +125,7 @@ function mapDriverRow(raw) {
   if (!raw || typeof raw !== "object") return null;
   const id = toTextId(raw.id);
   if (!id) return null;
+  /** Objeto API completo en raw_data (sin truncar en script; columna DB debe ser jsonb). */
   return {
     id,
     id_branch: toTextNullable(raw.id_branch),

@@ -638,8 +638,15 @@ export function ProductividadPanel() {
               />
               <YAxis tick={{ fontSize: 10 }} width={36} allowDecimals={false} />
               <Tooltip
-                formatter={(v: number) => [v.toLocaleString("es-PE"), "Conteo"]}
-                labelFormatter={(l) => `Fecha: ${l}`}
+                formatter={(value: any) => {
+                  if (value == null) return ["", "Conteo"];
+                  const num = typeof value === "number" ? value : Number(value);
+                  return [
+                    Number.isFinite(num) ? num.toLocaleString("es-PE") : "",
+                    "Conteo",
+                  ];
+                }}
+                labelFormatter={(label) => `Fecha: ${label}`}
               />
               <Bar dataKey="cnt" name="Conteo" fill={TURQUESA} radius={[3, 3, 0, 0]} />
             </BarChart>
@@ -676,7 +683,16 @@ export function ProductividadPanel() {
                 interval="preserveStartEnd"
               />
               <YAxis tick={{ fontSize: 10 }} width={36} allowDecimals={false} />
-              <Tooltip formatter={(v: number) => [v.toLocaleString("es-PE"), "Conteo"]} />
+              <Tooltip
+                formatter={(value: any) => {
+                  if (value == null) return ["", "Conteo"];
+                  const num = typeof value === "number" ? value : Number(value);
+                  return [
+                    Number.isFinite(num) ? num.toLocaleString("es-PE") : "",
+                    "Conteo",
+                  ];
+                }}
+              />
               <Bar dataKey="cnt" name="Conteo" fill={PETROLEO} radius={[3, 3, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>

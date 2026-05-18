@@ -14,6 +14,8 @@ import {
 } from "react";
 
 import { LiveDriverGpsDialog } from "@/components/LiveDriverGpsDialog";
+import { OperacionesDriverModeSwitch } from "@/components/operaciones-driver-mode-switch";
+import { useOperacionesDriverFilters } from "@/context/operaciones-driver-filters-context";
 import type { NearbyServiceMarker } from "@/components/LiveDriverMap";
 import { gpsIconColorFromAvailability } from "@/lib/live-driver-gps-ui";
 import {
@@ -303,6 +305,12 @@ export function SeguimientoOperaciones({
   endDate = "",
   dataRevision = 0,
 }: SeguimientoOperacionesProps) {
+  const {
+    baseFilterEnabled,
+    activated8dEnabled,
+    conductorMatchesFilters,
+    ensureDriverMetaLoaded,
+  } = useOperacionesDriverFilters();
   const parentRef = useRef<HTMLDivElement>(null);
 
   const [rows, setRows] = useState<SeguimientoMatrixRow[]>([]);
@@ -375,6 +383,11 @@ export function SeguimientoOperaciones({
   useEffect(() => {
     void load();
   }, [load, dataRevision]);
+
+  useEffect(() => {
+    if (!baseFilterEnabled && !activated8dEnabled) return;
+    void ensureDriverMetaLoaded();
+  }, [baseFilterEnabled, activated8dEnabled, ensureDriverMetaLoaded]);
 
   const rowsByConductor = useMemo(() => {
     const m = new Map<string, SeguimientoMatrixRow[]>();
@@ -613,6 +626,7 @@ export function SeguimientoOperaciones({
       if (q && !name.toLowerCase().includes(q)) return false;
       const total = conductorTotals.get(name) ?? 0;
       if (selectedRowCounts.size > 0 && !selectedRowCounts.has(total)) return false;
+      if (!conductorMatchesFilters(name)) return false;
       return true;
     });
   }, [
@@ -625,6 +639,7 @@ export function SeguimientoOperaciones({
     conductorsWithLevel1,
     conductorsWithLevel2,
     conductorsWithLevel3,
+    conductorMatchesFilters,
   ]);
 
   const rowCount = filteredConductors.length;
@@ -706,9 +721,12 @@ export function SeguimientoOperaciones({
     <>
       <Card className="border-slate-200 bg-white shadow-sm">
       <CardHeader className="border-b border-slate-100 py-2">
-        <CardTitle className="text-base font-semibold text-slate-800">
-          Seguimiento operaciones
-        </CardTitle>
+        <div className="flex items-start justify-between gap-3">
+          <CardTitle className="text-base font-semibold text-slate-800">
+            Seguimiento operaciones
+          </CardTitle>
+          <OperacionesDriverModeSwitch />
+        </div>
       </CardHeader>
       <CardContent className="space-y-3 pt-2">
         {legendEstados.length > 0 && (

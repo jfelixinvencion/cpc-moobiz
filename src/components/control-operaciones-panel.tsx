@@ -69,6 +69,13 @@ import {
   type DriverLiveLocationItem,
   type DriverLiveServiceDestination,
 } from "@/lib/moobiz-live-driver-location-client";
+import { OperacionesDriverModeSwitch } from "@/components/operaciones-driver-mode-switch";
+import { useOperacionesDriverFilters } from "@/context/operaciones-driver-filters-context";
+import {
+  parseFechaActivacionLocalDay,
+  rowMatchesActivated8dFilter,
+  rowMatchesBaseFlNameFilter,
+} from "@/lib/control-operaciones-driver-filters";
 
 const ROW_H = 44;
 const CHUNK_NAMES = 55;
@@ -568,85 +575,9 @@ function formatGpsDate(value: string): string {
   return format(d, "dd/MM/yyyy HH:mm");
 }
 
-/** Devuelve Date a medianoche local para YYYY-MM-DD o strings ISO (con o sin T), o null si no es parseable. */
-function parseFechaActivacionIsoToLocalDay(raw: string): Date | null {
-  const s = String(raw).trim();
-  if (!s) return null;
-  const d = new Date(s);
-  if (Number.isNaN(d.getTime())) return null;
-  const y = d.getFullYear();
-  const m = d.getMonth();
-  const day = d.getDate();
-  return new Date(y, m, day);
-}
-
-/** DD/MM/YYYY en calendario local; null si no coincide o es inválida. */
-function parseFechaActivacionDdMmYyyy(raw: string): Date | null {
-  if (!raw) return null;
-  const s = String(raw).trim();
-  const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (!m) return null;
-  const dd = Number(m[1]);
-  const mm = Number(m[2]);
-  const yyyy = Number(m[3]);
-  if (mm < 1 || mm > 12 || dd < 1 || dd > 31) return null;
-  const d = new Date(yyyy, mm - 1, dd);
-  if (d.getFullYear() !== yyyy || d.getMonth() !== mm - 1 || d.getDate() !== dd) return null;
-  return d;
-}
-
-/** Normaliza cualquier string admitido a Date (medianoche local) o null.
- *  - Si contiene '-' se intenta parse ISO/YYY-MM-DD via new Date.
- *  - Si contiene '/' se intenta DD/MM/YYYY.
- */
-function parseFechaActivacionLocalDay(raw: unknown): Date | null {
-  if (raw === null || raw === undefined) return null;
-  const s = String(raw).trim();
-  if (!s) return null;
-  if (s.includes("-")) {
-    return parseFechaActivacionIsoToLocalDay(s);
-  }
-  if (s.includes("/")) {
-    return parseFechaActivacionDdMmYyyy(s);
-  }
-  return null;
-}
-
-/** Filtro: si activated8dEnabled === false -> true. Si true -> sólo pasa si la fecha está entre hoy−7 y hoy inclusive (medianoche local). */
-function rowMatchesActivated8dFilter(row: Record<string, unknown>, activated8dEnabled: boolean): boolean {
-  if (!activated8dEnabled) return true;
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- candidatos alineados con payload vista/API
-  const r = row as any;
-  const candidate =
-    r.fecha_activacion ??
-    r["fecha_activacion"] ??
-    r["Fecha Activacion"] ??
-    r["Fecha Activación"] ??
-    null;
-
-  const d = parseFechaActivacionLocalDay(candidate);
-  if (!d) return false;
-
-  const today = new Date();
-  const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  const oldest = new Date(todayMidnight);
-  oldest.setDate(oldest.getDate() - 7); // hoy - 7 días
-
-  return d.getTime() >= oldest.getTime() && d.getTime() <= todayMidnight.getTime();
-}
-
-/** Filtro cliente BASE: fl_name contiene «moobiz» (case-insensitive). Sin fl_name válido → no coincide. */
-function rowMatchesBaseFlNameFilter(row: MergedDriver, baseFilterEnabled: boolean): boolean {
-  if (!baseFilterEnabled) return true;
-  const v = (row as Record<string, unknown>)["fl_name"];
-  if (v === null || v === undefined) return false;
-  const fl = String(v).trim().toLowerCase();
-  if (!fl) return false;
-  return fl.includes("moobiz");
-}
-
 export function ControlOperacionesPanel() {
+  const { baseFilterEnabled, activated8dEnabled, registerDriverMetas } =
+    useOperacionesDriverFilters();
   const [rows, setRows] = useState<MergedDriver[]>([]);
   const [controlById, setControlById] = useState<Record<string, ControlSolicitanteCell>>({});
   const [operatorOptions, setOperatorOptions] = useState<{ value: string; label: string }[]>([]);
@@ -667,8 +598,6 @@ export function ControlOperacionesPanel() {
   const [region, setRegion] = useState(GLOBAL_ALL);
   /** Vacío = todos (equivalente a "Todos"). */
   const [gpsFilter, setGpsFilter] = useState<string[]>([]);
-  const [baseFilterEnabled, setBaseFilterEnabled] = useState(false);
-  const [activated8dEnabled, setActivated8dEnabled] = useState(false);
   const [semaforoFilter, setSemaforoFilter] = useState<string[]>([]);
   const [distritoFilter, setDistritoFilter] = useState<string[]>([]);
   const [conductorQ, setConductorQ] = useState("");
@@ -742,7 +671,8 @@ export function ControlOperacionesPanel() {
         return false;
       }
       if (!rowMatchesBaseFlNameFilter(r, baseFilterEnabled)) return false;
-      if (!rowMatchesActivated8dFilter(r as Record<string, unknown>, activated8dEnabled)) return false;
+      if (!rowMatchesActivated8dFilter(r as Record<string, unknown>, activated8dEnabled))
+        return false;
       return true;
     });
   }, [
@@ -870,6 +800,13 @@ export function ControlOperacionesPanel() {
 
       const merged = withPendingHeavy(drivers);
       setRows(merged);
+      registerDriverMetas(
+        merged.map((d) => ({
+          nombre_conductor: d.nombre_conductor,
+          fl_name: (d as MergedDriver & { fl_name?: string | null }).fl_name ?? null,
+          fecha_activacion: d.fecha_activacion,
+        })),
+      );
       // DEBUG TEMPORAL - eliminar después de verificar
       for (const id of ["130880", "130912", "130913"]) {
         const r = merged.find((x) => String(x.id_conductor) === id);
@@ -885,7 +822,7 @@ export function ControlOperacionesPanel() {
     } finally {
       setLoading(false);
     }
-  }, [enrichHeavyForSlice, solicitanteFilter]);
+  }, [enrichHeavyForSlice, registerDriverMetas, solicitanteFilter]);
 
   const reloadTable = useCallback(() => {
     setSelected(new Set());
@@ -1556,30 +1493,7 @@ export function ControlOperacionesPanel() {
               {heavyBusy ? " · Sincronizando viajes/semáforo…" : ""}
               {saving ? " · Guardando…" : ""}
             </span>
-            <div className="flex gap-2 ml-auto">
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className={baseFilterEnabled ? TOOLBAR_BTN_PRIMARY : TOOLBAR_BTN_SECONDARY}
-                aria-pressed={baseFilterEnabled}
-                onClick={() => setBaseFilterEnabled((p) => !p)}
-                title="BASE — mostrar solo conductores cuyo fl_name contiene «moobiz» (sin distinguir mayúsculas)."
-              >
-                BASE
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className={activated8dEnabled ? TOOLBAR_BTN_PRIMARY : TOOLBAR_BTN_SECONDARY}
-                aria-pressed={activated8dEnabled}
-                onClick={() => setActivated8dEnabled((p) => !p)}
-                title="NUEVOS — mostrar solo conductores activados en los últimos 8 días (hoy incluido)."
-              >
-                NUEVOS
-              </Button>
-            </div>
+            <OperacionesDriverModeSwitch className="ml-auto" />
           </div>
 
           <div className="overflow-hidden rounded-lg border border-slate-200">

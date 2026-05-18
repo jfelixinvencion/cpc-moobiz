@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
 
 import {
+  PRODUCTIVIDAD_IMPLICIT_TYPE_USER,
   PRODUCTIVIDAD_LOG_TYPES,
   type ProductividadFilterField,
   type ProductividadParsedParams,
@@ -13,13 +14,24 @@ export type FilterSql = {
   params: unknown[];
 };
 
+function productividadImplicitWhereParts(): string[] {
+  const logTypesSql = PRODUCTIVIDAD_LOG_TYPES.map(
+    (t) => `'${t.replace(/'/g, "''")}'`,
+  ).join(", ");
+  const operador = PRODUCTIVIDAD_IMPLICIT_TYPE_USER.replace(/'/g, "''");
+  return [
+    `type_user::text = '${operador}'`,
+    `type_log_name::text = ANY(ARRAY[${logTypesSql}]::text[])`,
+  ];
+}
+
 /** WHERE compartido; `omit` excluye un filtro al poblar opciones en cascada. */
 export function buildProductividadWhere(
   parsed: ProductividadParsedParams,
   omit?: ProductividadFilterField,
 ): FilterSql {
   const params: unknown[] = [];
-  const parts: string[] = [];
+  const parts: string[] = [...productividadImplicitWhereParts()];
 
   const addArray = (col: string, values: string[] | null, field: ProductividadFilterField) => {
     if (omit === field) return;
@@ -31,8 +43,6 @@ export function buildProductividadWhere(
   addArray("global", parsed.global, "global");
   addArray("estado", parsed.estado, "estado");
   addArray("n_semana", parsed.nSemana?.map(String) ?? null, "n_semana");
-  addArray("type_user", parsed.typeUser, "type_user");
-  addArray("type_log_name", parsed.typeLogName, "type_log_name");
   addArray("us_name", parsed.usName, "us_name");
 
   if (omit !== "fecha") {

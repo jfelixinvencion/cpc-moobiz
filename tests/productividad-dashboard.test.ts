@@ -58,6 +58,18 @@ test("buildProductividadWhere omite filtro en cascada", () => {
   assert.match(omitGlobal.sql, /estado/);
 });
 
+test("buildProductividadWhere aplica filtros implícitos Operador + 5 tipos", () => {
+  const p = parseProductividadParams(
+    new URLSearchParams("type_user=Admin&type_log_name=Otro"),
+  );
+  const { sql } = buildProductividadWhere(p);
+  assert.match(sql, /type_user::text = 'Operador'/);
+  assert.match(sql, /type_log_name::text = ANY\(ARRAY\[/);
+  assert.match(sql, /'Creó'/);
+  assert.match(sql, /'Quitó'/);
+  assert.doesNotMatch(sql, /\$1::text\[\].*type_user/);
+});
+
 test("smoke: runProductividadUserChart con pool mock (0+ filas)", async () => {
   const pool = mockPool([]);
   const parsed = parseProductividadParams(new URLSearchParams());

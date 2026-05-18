@@ -58,12 +58,11 @@ const TYPE_COLORS: Record<ProductividadLogType, string> = {
   Quitó: "#f43f5e",
 };
 
+/** Opciones en cascada; type_user / type_log_name son implícitos en SQL (no UI). */
 const FILTER_FIELDS: ProductividadFilterField[] = [
   "global",
   "estado",
   "n_semana",
-  "type_user",
-  "type_log_name",
   "us_name",
 ];
 
@@ -730,20 +729,6 @@ export function ProductividadPanel() {
             options={filterOptions.n_semana ?? []}
             selected={filters.nSemana}
             onChange={(v) => setFilter("nSemana", v)}
-            loading={filterLoading}
-          />
-          <ProductividadFilterMulti
-            label="Tipo usuario"
-            options={filterOptions.type_user ?? []}
-            selected={filters.typeUser}
-            onChange={(v) => setFilter("typeUser", v)}
-            loading={filterLoading}
-          />
-          <ProductividadFilterMulti
-            label="Tipo log"
-            options={filterOptions.type_log_name ?? []}
-            selected={filters.typeLogName}
-            onChange={(v) => setFilter("typeLogName", v)}
             loading={filterLoading}
           />
           <ProductividadFilterMulti

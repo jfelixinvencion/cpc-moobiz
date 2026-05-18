@@ -8,6 +8,9 @@ export const PRODUCTIVIDAD_LOG_TYPES = [
 
 export type ProductividadLogType = (typeof PRODUCTIVIDAD_LOG_TYPES)[number];
 
+/** Filtro fijo en Productividad (subpestaña); no expuesto en UI. */
+export const PRODUCTIVIDAD_IMPLICIT_TYPE_USER = "Operador" as const;
+
 export type ProductividadFilterField =
   | "global"
   | "estado"

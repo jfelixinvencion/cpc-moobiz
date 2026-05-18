@@ -37,13 +37,25 @@ import {
   formatPerHour,
   pivotAndSortUserChartRows,
   resolveSortTypes,
+  visibleTypesToLogNameParam,
   type UserChartPivotRow,
   type UserChartRawRow,
 } from "@/lib/productividad-user-chart-transform";
 import { cn } from "@/lib/utils";
 
 const DEBOUNCE_MS = 400;
+const WEEKDAY_DEBOUNCE_MS = 250;
 const USER_PAGE = 20;
+
+const WEEKDAY_TOGGLES = [
+  { iso: 1, label: "Lun", aria: "Lunes" },
+  { iso: 2, label: "Mar", aria: "Martes" },
+  { iso: 3, label: "Mie", aria: "Miércoles" },
+  { iso: 4, label: "Jue", aria: "Jueves" },
+  { iso: 5, label: "Vie", aria: "Viernes" },
+  { iso: 6, label: "Sab", aria: "Sábado" },
+  { iso: 7, label: "Dom", aria: "Domingo" },
+] as const;
 const BAR_ROW_H = 34;
 const CHART_GRID = "rgba(148, 163, 184, 0.35)";
 
@@ -58,12 +70,11 @@ const TYPE_COLORS: Record<ProductividadLogType, string> = {
   Quitó: "#f43f5e",
 };
 
+/** Opciones en cascada; type_user / type_log_name son implícitos en SQL (no UI). */
 const FILTER_FIELDS: ProductividadFilterField[] = [
   "global",
   "estado",
   "n_semana",
-  "type_user",
-  "type_log_name",
   "us_name",
 ];
 
@@ -98,15 +109,15 @@ function useDebounced<T>(value: T, ms: number): T {
   return debounced;
 }
 
-function filtersToParams(
-  f: FilterState,
-  opts?: {
-    limit?: number;
-    offset?: number;
-    skipTypeLogName?: boolean;
-    sortTypes?: ProductividadLogType[] | null;
-  },
-): ProductividadParsedParams {
+type QueryOpts = {
+  limit?: number;
+  offset?: number;
+  sortTypes?: ProductividadLogType[] | null;
+  weekdays?: number[];
+  typeLogName?: string[] | null;
+};
+
+function filtersToParams(f: FilterState, opts?: QueryOpts): ProductividadParsedParams {
   const nullIf = (a: string[]) => (a.length === 0 ? null : a);
   const sortTypes =
     opts?.sortTypes == null
@@ -114,6 +125,8 @@ function filtersToParams(
       : opts.sortTypes.length === 0
         ? null
         : [...opts.sortTypes];
+  const weekdays =
+    opts?.weekdays != null && opts.weekdays.length > 0 ? [...opts.weekdays].sort((a, b) => a - b) : null;
   return {
     global: nullIf(f.global),
     estado: nullIf(f.estado),
@@ -121,8 +134,9 @@ function filtersToParams(
     fechaFrom: isoInputToFechaParam(f.fechaFrom),
     fechaTo: isoInputToFechaParam(f.fechaTo),
     typeUser: nullIf(f.typeUser),
-    typeLogName: opts?.skipTypeLogName ? null : nullIf(f.typeLogName),
+    typeLogName: opts?.typeLogName !== undefined ? opts.typeLogName : nullIf(f.typeLogName),
     usName: nullIf(f.usName),
+    weekdays,
     limit: opts?.limit ?? USER_PAGE,
     offset: opts?.offset ?? 0,
     sortTypes,
@@ -131,18 +145,24 @@ function filtersToParams(
 
 function buildQuery(
   f: FilterState,
-  opts?: {
-    limit?: number;
-    offset?: number;
-    skipTypeLogName?: boolean;
-    sortTypes?: ProductividadLogType[] | null;
-  },
+  opts?: QueryOpts,
 ): string {
   const p = new URLSearchParams();
-  appendProductividadParams(p, filtersToParams(f, opts), {
-    skipTypeLogName: opts?.skipTypeLogName,
-  });
+  appendProductividadParams(p, filtersToParams(f, opts));
   return p.toString();
+}
+
+function buildQueryFromPanel(
+  f: FilterState,
+  weekdays: number[],
+  visibleTypes: Record<ProductividadLogType, boolean>,
+  opts?: Omit<QueryOpts, "weekdays" | "typeLogName">,
+): string {
+  return buildQuery(f, {
+    ...opts,
+    weekdays,
+    typeLogName: visibleTypesToLogNameParam(visibleTypes),
+  });
 }
 
 function UserChartTooltip({
@@ -221,7 +241,9 @@ function NoData({ children }: { children?: ReactNode }) {
 
 export function ProductividadPanel() {
   const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
+  const [weekdays, setWeekdays] = useState<number[]>([]);
   const debouncedFilters = useDebounced(filters, DEBOUNCE_MS);
+  const debouncedWeekdays = useDebounced(weekdays, WEEKDAY_DEBOUNCE_MS);
 
   const [filterOptions, setFilterOptions] = useState<Record<string, string[]>>({});
   const [filterLoading, setFilterLoading] = useState(false);
@@ -260,10 +282,20 @@ export function ProductividadPanel() {
     setUserRows([]);
   }, []);
 
-  const loadFilterOptions = useCallback(async (f: FilterState) => {
+  const toggleWeekday = useCallback((iso: number) => {
+    setWeekdays((prev) => {
+      const next = prev.includes(iso) ? prev.filter((d) => d !== iso) : [...prev, iso];
+      return next.sort((a, b) => a - b);
+    });
+    setUserOffset(0);
+    setUserRows([]);
+  }, []);
+
+  const loadFilterOptions = useCallback(
+    async (f: FilterState, wd: number[], visible: Record<ProductividadLogType, boolean>) => {
     setFilterLoading(true);
     try {
-      const q = buildQuery(f);
+      const q = buildQueryFromPanel(f, wd, visible);
       const entries = await Promise.all(
         FILTER_FIELDS.map(async (field) => {
           const res = await fetch(
@@ -281,13 +313,17 @@ export function ProductividadPanel() {
     } finally {
       setFilterLoading(false);
     }
-  }, []);
+  },
+    [],
+  );
 
   const userSortTypes = useMemo(() => resolveSortTypes(visibleTypes), [visibleTypes]);
 
   const loadUsers = useCallback(
     async (
       f: FilterState,
+      wd: number[],
+      visible: Record<ProductividadLogType, boolean>,
       offset: number,
       append: boolean,
       sortTypes: ProductividadLogType[] | null,
@@ -295,7 +331,7 @@ export function ProductividadPanel() {
       setUsersLoading(true);
       setUsersError(null);
       try {
-        const qs = buildQuery(f, { limit: USER_PAGE, offset, sortTypes });
+        const qs = buildQueryFromPanel(f, wd, visible, { limit: USER_PAGE, offset, sortTypes });
         const res = await fetch(`/api/dashboard/productividad/users?${qs}`, {
           cache: "no-store",
         });
@@ -320,10 +356,10 @@ export function ProductividadPanel() {
     [],
   );
 
-  const loadCards = useCallback(async (f: FilterState) => {
+  const loadCards = useCallback(async (f: FilterState, wd: number[]) => {
     setCardsLoading(true);
     try {
-      const qs = buildQuery(f, { skipTypeLogName: true });
+      const qs = buildQuery(f, { weekdays: wd, typeLogName: null });
       const res = await fetch(`/api/dashboard/productividad/cards?${qs}`, {
         cache: "no-store",
       });
@@ -335,12 +371,15 @@ export function ProductividadPanel() {
     } finally {
       setCardsLoading(false);
     }
-  }, []);
+  },
+    [],
+  );
 
-  const loadByDate = useCallback(async (f: FilterState) => {
+  const loadByDate = useCallback(
+    async (f: FilterState, wd: number[], visible: Record<ProductividadLogType, boolean>) => {
     setByDateLoading(true);
     try {
-      const qs = buildQuery(f);
+      const qs = buildQueryFromPanel(f, wd, visible);
       const res = await fetch(`/api/dashboard/productividad/by-date?${qs}`, {
         cache: "no-store",
       });
@@ -352,12 +391,15 @@ export function ProductividadPanel() {
     } finally {
       setByDateLoading(false);
     }
-  }, []);
+  },
+    [],
+  );
 
-  const loadByDateHour = useCallback(async (f: FilterState) => {
+  const loadByDateHour = useCallback(
+    async (f: FilterState, wd: number[], visible: Record<ProductividadLogType, boolean>) => {
     setByDateHourLoading(true);
     try {
-      const qs = buildQuery(f);
+      const qs = buildQueryFromPanel(f, wd, visible);
       const res = await fetch(`/api/dashboard/productividad/by-date-hour?${qs}`, {
         cache: "no-store",
       });
@@ -378,23 +420,28 @@ export function ProductividadPanel() {
     } finally {
       setByDateHourLoading(false);
     }
-  }, []);
+  },
+    [],
+  );
 
   useEffect(() => {
-    void loadFilterOptions(debouncedFilters);
-  }, [debouncedFilters, loadFilterOptions]);
+    void loadFilterOptions(debouncedFilters, debouncedWeekdays, visibleTypes);
+  }, [debouncedFilters, debouncedWeekdays, visibleTypes, loadFilterOptions]);
 
   useEffect(() => {
     setUserRows([]);
     setUserOffset(0);
-    void loadUsers(debouncedFilters, 0, false, userSortTypes);
-  }, [debouncedFilters, userSortTypes, loadUsers]);
+    void loadUsers(debouncedFilters, debouncedWeekdays, visibleTypes, 0, false, userSortTypes);
+  }, [debouncedFilters, debouncedWeekdays, visibleTypes, userSortTypes, loadUsers]);
 
   useEffect(() => {
-    void loadCards(debouncedFilters);
-    void loadByDate(debouncedFilters);
-    void loadByDateHour(debouncedFilters);
-  }, [debouncedFilters, loadCards, loadByDate, loadByDateHour]);
+    void loadCards(debouncedFilters, debouncedWeekdays);
+  }, [debouncedFilters, debouncedWeekdays, loadCards]);
+
+  useEffect(() => {
+    void loadByDate(debouncedFilters, debouncedWeekdays, visibleTypes);
+    void loadByDateHour(debouncedFilters, debouncedWeekdays, visibleTypes);
+  }, [debouncedFilters, debouncedWeekdays, visibleTypes, loadByDate, loadByDateHour]);
 
   const loadedUserCount = useMemo(
     () => new Set(userRows.map((r) => r.us_name)).size,
@@ -426,9 +473,18 @@ export function ProductividadPanel() {
     if (!nearBottom) return;
     loadingMoreRef.current = true;
     const nextOffset = userOffset + USER_PAGE;
-    void loadUsers(debouncedFilters, nextOffset, true, userSortTypes);
+    void loadUsers(
+      debouncedFilters,
+      debouncedWeekdays,
+      visibleTypes,
+      nextOffset,
+      true,
+      userSortTypes,
+    );
   }, [
     debouncedFilters,
+    debouncedWeekdays,
+    visibleTypes,
     loadUsers,
     userOffset,
     loadedUserCount,
@@ -437,7 +493,40 @@ export function ProductividadPanel() {
     userSortTypes,
   ]);
 
-  const qsBase = buildQuery(debouncedFilters, { sortTypes: userSortTypes });
+  const qsBase = buildQueryFromPanel(debouncedFilters, debouncedWeekdays, visibleTypes, {
+    sortTypes: userSortTypes,
+  });
+
+  const weekdayToggles = (
+    <div
+      role="group"
+      aria-label="Filtrar por día de la semana"
+      title="Filtrar por día de la semana"
+      className="flex flex-wrap items-center justify-center gap-1.5 md:justify-end"
+    >
+      {WEEKDAY_TOGGLES.map(({ iso, label, aria }) => {
+        const on = weekdays.includes(iso);
+        return (
+          <button
+            key={iso}
+            type="button"
+            className={cn(
+              "h-7 min-w-[2.25rem] rounded border px-2 text-[11px] font-semibold transition",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0f5666]",
+              on
+                ? "border-[#991b1b] bg-[#dc2626] text-white shadow-md"
+                : "border-red-200/90 bg-red-50 text-red-900",
+            )}
+            onClick={() => toggleWeekday(iso)}
+            aria-pressed={on}
+            aria-label={`Filtrar por ${aria}`}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
 
   const seriesLegend = (
     <div
@@ -458,6 +547,8 @@ export function ProductividadPanel() {
             style={on ? { backgroundColor: TYPE_COLORS[type] } : undefined}
             onClick={() => {
               setVisibleTypes((prev) => ({ ...prev, [type]: !prev[type] }));
+              setUserOffset(0);
+              setUserRows([]);
               if (scrollRef.current) scrollRef.current.scrollTop = 0;
             }}
             aria-pressed={on}
@@ -733,20 +824,6 @@ export function ProductividadPanel() {
             loading={filterLoading}
           />
           <ProductividadFilterMulti
-            label="Tipo usuario"
-            options={filterOptions.type_user ?? []}
-            selected={filters.typeUser}
-            onChange={(v) => setFilter("typeUser", v)}
-            loading={filterLoading}
-          />
-          <ProductividadFilterMulti
-            label="Tipo log"
-            options={filterOptions.type_log_name ?? []}
-            selected={filters.typeLogName}
-            onChange={(v) => setFilter("typeLogName", v)}
-            loading={filterLoading}
-          />
-          <ProductividadFilterMulti
             label="Usuario"
             options={filterOptions.us_name ?? []}
             selected={filters.usName}
@@ -779,7 +856,10 @@ export function ProductividadPanel() {
         </div>
       </div>
 
-      {seriesLegend}
+      <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+        {seriesLegend}
+        {weekdayToggles}
+      </div>
 
       {/* md+: 50/50 (grid-cols-2), sin gutter horizontal; móvil: métricas → acciones → gráficas */}
       <div

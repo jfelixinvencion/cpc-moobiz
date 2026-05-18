@@ -48,6 +48,7 @@ import { FlotaPendientesCard } from "@/components/flota-pendientes-card";
 import { ProductividadPanel } from "@/components/dashboard/ProductividadPanel";
 import { ServiciosMoobizCard } from "@/components/dashboard/ServiciosMoobizCard";
 import { ControlOperacionesPanel } from "@/components/control-operaciones-panel";
+import { OperacionesDriverFiltersProvider } from "@/context/operaciones-driver-filters-context";
 import {
   SCHEDULE_PRODUCT_COLORS,
   SCHEDULE_STACK_ORDER,
@@ -938,6 +939,7 @@ function DashboardContent() {
           </TabsContent>
 
           <TabsContent value="operaciones" className="mt-0 outline-none">
+            <OperacionesDriverFiltersProvider>
             <Tabs value={operacionesSubTab} onValueChange={handleOperacionesSubTabChange} className="w-full">
               <TabsList className="mb-3 grid h-auto min-h-10 w-full max-w-2xl grid-cols-1 gap-1 bg-slate-200/90 p-1 sm:grid-cols-2 sm:gap-0">
                 <TabsTrigger
@@ -970,6 +972,7 @@ function DashboardContent() {
                 </div>
               </div>
             </Tabs>
+            </OperacionesDriverFiltersProvider>
           </TabsContent>
 
           <TabsContent value="logs" className="mt-0 space-y-4 outline-none">

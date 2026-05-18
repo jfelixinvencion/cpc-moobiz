@@ -356,11 +356,10 @@ export function ProductividadPanel() {
     [],
   );
 
-  const loadCards = useCallback(
-    async (f: FilterState, wd: number[], visible: Record<ProductividadLogType, boolean>) => {
+  const loadCards = useCallback(async (f: FilterState, wd: number[]) => {
     setCardsLoading(true);
     try {
-      const qs = buildQueryFromPanel(f, wd, visible);
+      const qs = buildQuery(f, { weekdays: wd, typeLogName: null });
       const res = await fetch(`/api/dashboard/productividad/cards?${qs}`, {
         cache: "no-store",
       });
@@ -436,10 +435,13 @@ export function ProductividadPanel() {
   }, [debouncedFilters, debouncedWeekdays, visibleTypes, userSortTypes, loadUsers]);
 
   useEffect(() => {
-    void loadCards(debouncedFilters, debouncedWeekdays, visibleTypes);
+    void loadCards(debouncedFilters, debouncedWeekdays);
+  }, [debouncedFilters, debouncedWeekdays, loadCards]);
+
+  useEffect(() => {
     void loadByDate(debouncedFilters, debouncedWeekdays, visibleTypes);
     void loadByDateHour(debouncedFilters, debouncedWeekdays, visibleTypes);
-  }, [debouncedFilters, debouncedWeekdays, visibleTypes, loadCards, loadByDate, loadByDateHour]);
+  }, [debouncedFilters, debouncedWeekdays, visibleTypes, loadByDate, loadByDateHour]);
 
   const loadedUserCount = useMemo(
     () => new Set(userRows.map((r) => r.us_name)).size,

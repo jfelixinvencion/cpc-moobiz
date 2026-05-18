@@ -10,7 +10,7 @@ export const runtime = "nodejs";
 export async function GET(req: NextRequest) {
   try {
     const url = new URL(req.url);
-    const parsed = parseProductividadParams(url.searchParams, { skipTypeLogName: true });
+    const parsed = parseProductividadParams(url.searchParams);
     const pool = getMoobizViewsPool();
     const cards = await runProductividadCards(pool, parsed);
     return productividadJson({ cards });

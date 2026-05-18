@@ -45,6 +45,21 @@ export function buildProductividadWhere(
   addArray("n_semana", parsed.nSemana?.map(String) ?? null, "n_semana");
   addArray("us_name", parsed.usName, "us_name");
 
+  if (parsed.typeLogName != null) {
+    if (parsed.typeLogName.length === 0) {
+      parts.push("FALSE");
+    } else if (omit !== "type_log_name") {
+      addArray("type_log_name", parsed.typeLogName, "type_log_name");
+    }
+  }
+
+  if (parsed.weekdays != null && parsed.weekdays.length > 0) {
+    params.push(parsed.weekdays);
+    parts.push(
+      `(to_char(to_date(fecha,'DD/MM/YYYY'), 'ID')::int = ANY($${params.length}::int[]))`,
+    );
+  }
+
   if (omit !== "fecha") {
     if (parsed.fechaFrom) {
       params.push(parsed.fechaFrom);
@@ -225,7 +240,7 @@ export async function runProductividadCards(
   pool: Pool,
   parsed: ProductividadParsedParams,
 ): Promise<ProductividadCardMetrics[]> {
-  const { sql: whereSql, params } = buildProductividadWhere(parsed, "type_log_name");
+  const { sql: whereSql, params } = buildProductividadWhere(parsed);
 
   const cases = PRODUCTIVIDAD_LOG_TYPES.map(
     (t) => `

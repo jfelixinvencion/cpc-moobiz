@@ -29,11 +29,23 @@ export type ProductividadParsedParams = {
   typeUser: string[] | null;
   typeLogName: string[] | null;
   usName: string[] | null;
+  /** ISO weekday 1..7 (lun..dom); null = sin filtro de día. */
+  weekdays: number[] | null;
   limit: number;
   offset: number;
   /** Orden dinámico del chart de usuarios; null = por total_per_user. */
   sortTypes: string[] | null;
 };
+
+function parseWeekdaysParam(sp: URLSearchParams): number[] | null {
+  const seen = new Set<number>();
+  for (const raw of sp.getAll("weekday")) {
+    const n = Number.parseInt(raw, 10);
+    if (Number.isFinite(n) && n >= 1 && n <= 7) seen.add(n);
+  }
+  const arr = [...seen].sort((a, b) => a - b);
+  return arr.length === 0 ? null : arr;
+}
 
 const MAX_MULTI = 80;
 const DD_MM_YYYY = /^(\d{2})\/(\d{2})\/(\d{4})$/;
@@ -87,6 +99,7 @@ export function parseProductividadParams(
     typeUser: nullIfEmpty(multi("type_user")),
     typeLogName: opts?.skipTypeLogName ? null : nullIfEmpty(multi("type_log_name")),
     usName: nullIfEmpty(multi("us_name")),
+    weekdays: parseWeekdaysParam(sp),
     limit: Number.isFinite(limitRaw) ? Math.min(200, Math.max(1, limitRaw)) : 20,
     offset: Number.isFinite(offsetRaw) ? Math.max(0, offsetRaw) : 0,
     sortTypes: nullIfEmpty(multi("sort_types")),
@@ -106,6 +119,7 @@ export function appendProductividadParams(
     for (const v of filters.typeLogName ?? []) p.append("type_log_name", v);
   }
   for (const v of filters.usName ?? []) p.append("us_name", v);
+  for (const d of filters.weekdays ?? []) p.append("weekday", String(d));
   if (filters.fechaFrom) p.set("fecha_from", filters.fechaFrom);
   if (filters.fechaTo) p.set("fecha_to", filters.fechaTo);
   for (const v of filters.sortTypes ?? []) p.append("sort_types", v);

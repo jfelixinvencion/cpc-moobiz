@@ -30,6 +30,15 @@ export function formatPerHour(cnt: number, buckets: number): string {
   return `${perHourFromCntBuckets(cnt, buckets).toFixed(2)}/h`;
 }
 
+/** Tipos visibles para filtro SQL; null = los 5 implícitos; [] = sin filas. */
+export function visibleTypesToLogNameParam(
+  visibleTypes: Record<ProductividadLogType, boolean>,
+): string[] | null {
+  const active = PRODUCTIVIDAD_LOG_TYPES.filter((t) => visibleTypes[t]);
+  if (active.length === PRODUCTIVIDAD_LOG_TYPES.length) return null;
+  return [...active];
+}
+
 /** Tipos visibles para ordenar; null/[]/todos → orden por total. */
 export function resolveSortTypes(
   visibleTypes: Record<ProductividadLogType, boolean>,

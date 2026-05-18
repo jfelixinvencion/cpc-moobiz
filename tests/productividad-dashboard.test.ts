@@ -21,6 +21,7 @@ import {
   perHourFromCntBuckets,
   pivotAndSortUserChartRows,
   resolveSortTypes,
+  visibleTypesToLogNameParam,
 } from "../src/lib/productividad-user-chart-transform.ts";
 
 function mockPool(rows: unknown[] = []): Pool {
@@ -56,6 +57,28 @@ test("buildProductividadWhere omite filtro en cascada", () => {
   assert.match(all.sql, /global/);
   assert.doesNotMatch(omitGlobal.sql, /global/);
   assert.match(omitGlobal.sql, /estado/);
+});
+
+test("parseProductividadParams weekdays ISO 1..7", () => {
+  const p = parseProductividadParams(
+    new URLSearchParams("weekday=1&weekday=3&weekday=9&weekday=2"),
+  );
+  assert.deepEqual(p.weekdays, [1, 2, 3]);
+});
+
+test("buildProductividadWhere aplica weekday y type_log_name opcionales", () => {
+  const p = parseProductividadParams(
+    new URLSearchParams("weekday=1&type_log_name=Creó&type_log_name=Asignó"),
+  );
+  const { sql, params } = buildProductividadWhere(p);
+  assert.match(sql, /to_char\(to_date\(fecha/);
+  assert.match(sql, /'ID'\)::int = ANY/);
+  assert.ok(params.some((x) => Array.isArray(x) && x.includes(1)));
+  assert.ok(
+    params.some(
+      (x) => Array.isArray(x) && (x as string[]).includes("Creó"),
+    ),
+  );
 });
 
 test("buildProductividadWhere aplica filtros implícitos Operador + 5 tipos", () => {
@@ -152,6 +175,15 @@ test("orden dinámico: solo Asignó vs suma Asignó+Modificó", () => {
 
   const byTotal = pivotAndSortUserChartRows(raw, allVisible as never);
   assert.equal(byTotal[0].us_name, "A");
+});
+
+test("visibleTypesToLogNameParam: todos null, subset array", () => {
+  const all = Object.fromEntries(
+    ["Creó", "Solicitó", "Asignó", "Modificó", "Quitó"].map((t) => [t, true]),
+  ) as Record<string, boolean>;
+  assert.equal(visibleTypesToLogNameParam(all as never), null);
+  const one = { ...all, "Solicitó": false, "Asignó": false, Modificó: false, Quitó: false };
+  assert.deepEqual(visibleTypesToLogNameParam(one as never), ["Creó"]);
 });
 
 test("resolveSortTypes: ninguno activo equivale a orden por total", () => {

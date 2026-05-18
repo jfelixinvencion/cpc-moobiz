@@ -64,6 +64,10 @@ import {
   runRefreshGpsRawAndRefetch,
 } from "@/lib/control-operaciones-refresh-gps";
 import {
+  rowMatchesSemaforoMultiFilter,
+  SEMAFORO_MULTI_SIN,
+} from "@/lib/control-operaciones-semaforo-filter";
+import {
   fetchLiveDriverLocationByConductorName,
   type DriverLiveLocationApiResponse,
   type DriverLiveLocationItem,
@@ -106,9 +110,6 @@ type LiveDriverMapProps = {
   serviceDestination?: DriverLiveServiceDestination | null;
 };
 
-/** Valores internos del multi-filtro de semáforo (cada fila se clasifica a un bucket). */
-const SEMAFORO_MULTI_SIN = "__sin__";
-
 const SEMAFORO_MULTI_OPTIONS: { value: string; label: string }[] = [
   { value: SEMAFORO_MULTI_SIN, label: "Sin semáforo" },
   { value: "verde", label: "Verde" },
@@ -116,28 +117,6 @@ const SEMAFORO_MULTI_OPTIONS: { value: string; label: string }[] = [
   { value: "naranja", label: "Naranja" },
   { value: "rojo", label: "Rojo" },
 ];
-
-function rowSemaforoBucket(raw: string | null | undefined): string {
-  if (raw === undefined) return SEMAFORO_MULTI_SIN;
-  const s = String(raw).trim();
-  if (!s) return SEMAFORO_MULTI_SIN;
-  const lower = s.toLowerCase();
-  if (lower.includes("verde") || lower === "v" || lower === "1") return "verde";
-  if (lower.includes("amar")) return "amarillo";
-  if (lower.includes("naranj")) return "naranja";
-  if (lower.includes("rojo") || lower === "r" || lower === "3") return "rojo";
-  return "";
-}
-
-function rowMatchesSemaforoMultiFilter(
-  row: { semaforo?: string | null },
-  selected: string[],
-): boolean {
-  if (selected.length === 0) return true;
-  const bucket = rowSemaforoBucket(row.semaforo);
-  if (bucket === "") return false;
-  return selected.includes(bucket);
-}
 
 type MergedDriver = ControlDriverExcelRow & {
   /** undefined = aún no cargado (mostrar "-"). */

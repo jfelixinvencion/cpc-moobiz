@@ -9,25 +9,14 @@ import { cn } from "@/lib/utils";
 const fetchPanel: typeof fetch = (input, init) =>
   fetch(input, { ...init, credentials: "same-origin" });
 
-function isHttpUrl(value: string): boolean {
-  return /^https?:\/\//i.test(value.trim());
-}
-
-function fileLabel(value: string, index: number): string {
-  const trimmed = value.trim();
+function fileLabelFromPath(path: string, index: number): string {
+  const trimmed = path.trim();
   if (!trimmed) return `Foto ${index + 1}`;
-  try {
-    if (isHttpUrl(trimmed)) {
-      const u = new URL(trimmed);
-      const last = u.pathname.split("/").filter(Boolean).pop();
-      return last || `Foto ${index + 1}`;
-    }
-  } catch {
-    /* ignore */
-  }
   const parts = trimmed.split("/").filter(Boolean);
   return parts[parts.length - 1] ?? `Foto ${index + 1}`;
 }
+
+type SignedEntry = { path: string; url?: string; error?: string };
 
 type Props = {
   open: boolean;
@@ -38,81 +27,65 @@ type Props = {
 
 export function FotosGalleryModal({ open, onClose, fotos = [], quejaId }: Props) {
   const [urls, setUrls] = useState<string[] | null>(null);
+  const [pathLabels, setPathLabels] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pathNotice, setPathNotice] = useState<string | null>(null);
+  const [fetchFailed, setFetchFailed] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [copyMsg, setCopyMsg] = useState<string | null>(null);
 
   const loadUrls = useCallback(async () => {
+    setLoading(true);
     setError(null);
+    setPathNotice(null);
+    setFetchFailed(false);
     setUrls(null);
+    setPathLabels([]);
     setLightboxIndex(null);
     setCopyMsg(null);
 
-    const items = fotos.map((f) => String(f ?? "").trim()).filter(Boolean);
-    const httpItems = items.filter(isHttpUrl);
-    const pathItems = items.filter((item) => !isHttpUrl(item));
-
-    if (items.length === 0 && !quejaId) {
-      setUrls([]);
-      return;
-    }
-
-    if (items.length > 0 && httpItems.length === items.length) {
-      setUrls(httpItems);
-      return;
-    }
-
-    setLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (quejaId != null) params.set("quejaId", String(quejaId));
-      for (const p of pathItems) params.append("paths[]", p);
-
-      if (!params.toString()) {
-        setUrls(httpItems);
-        return;
+      let endpoint = "";
+      if (quejaId != null) {
+        endpoint = `/api/comercial/fotos?quejaId=${encodeURIComponent(String(quejaId))}`;
+      } else {
+        const items = fotos.map((f) => String(f ?? "").trim()).filter(Boolean);
+        if (items.length === 0) {
+          setUrls([]);
+          return;
+        }
+        const params = new URLSearchParams();
+        for (const f of items) params.append("paths[]", f);
+        endpoint = `/api/comercial/fotos?${params.toString()}`;
       }
 
-      const res = await fetchPanel(`/api/comercial/fotos?${params.toString()}`);
+      const res = await fetchPanel(endpoint);
       const json = (await res.json()) as {
-        urls?: Array<{ path: string; url?: string; error?: string }>;
+        urls?: SignedEntry[];
         error?: string;
       };
       if (!res.ok) {
-        throw new Error(json.error ?? "Error al cargar fotos");
+        throw new Error(json.error ?? "Error fetching signed urls");
       }
 
-      const pathToUrl = new Map<string, string>();
-      for (const entry of json.urls ?? []) {
-        if (entry.url) pathToUrl.set(entry.path, entry.url);
+      const entries = json.urls ?? [];
+      const okEntries = entries.filter((r) => r.url);
+      const okUrls = okEntries.map((r) => r.url as string);
+      setUrls(okUrls);
+      setPathLabels(okEntries.map((r) => r.path));
+
+      const errs = entries
+        .filter((r) => r.error)
+        .map((r) => `${r.path}: ${r.error}`);
+      if (errs.length) {
+        setPathNotice(`Algunas fotos no se pudieron cargar: ${errs.join("; ")}`);
       }
-
-      const signedFromServer = (json.urls ?? [])
-        .map((e) => e.url)
-        .filter((u): u is string => Boolean(u));
-
-      const resolvedFromItems = items
-        .map((item) => (isHttpUrl(item) ? item : pathToUrl.get(item)))
-        .filter((u): u is string => Boolean(u));
-
-      const merged =
-        resolvedFromItems.length > 0
-          ? resolvedFromItems
-          : items.length === 0
-            ? signedFromServer
-            : [];
-
-      if (merged.length === 0) {
-        setError("No se encontraron fotos");
-        setUrls([]);
-        return;
-      }
-      setUrls(merged);
-    } catch (err) {
-      console.error("FotosGalleryModal load error", err);
-      setError(err instanceof Error ? err.message : "Error al cargar fotos");
-      if (httpItems.length > 0) setUrls(httpItems);
+    } catch (e) {
+      console.error("FotosGalleryModal load error", e);
+      setFetchFailed(true);
+      setError("Error al cargar fotos. Reintenta.");
+      setUrls(null);
     } finally {
       setLoading(false);
     }
@@ -156,30 +129,42 @@ export function FotosGalleryModal({ open, onClose, fotos = [], quejaId }: Props)
                 Cargando fotos…
               </div>
             ) : null}
-            {error && !loading ? (
-              <p className="py-6 text-center text-sm text-red-600">{error}</p>
+
+            {fetchFailed && !loading ? (
+              <div className="flex flex-col items-center gap-3 py-8">
+                <p className="text-center text-sm text-red-600">{error}</p>
+                <Button type="button" variant="outline" size="sm" onClick={() => void loadUrls()}>
+                  Reintentar
+                </Button>
+              </div>
             ) : null}
-            {!loading && urls && urls.length === 0 ? (
+
+            {!loading && !fetchFailed && pathNotice ? (
+              <p className="mb-3 text-center text-xs text-amber-700">{pathNotice}</p>
+            ) : null}
+
+            {!loading && !fetchFailed && urls && urls.length === 0 ? (
               <p className="py-6 text-center text-sm text-slate-500">Sin fotos</p>
             ) : null}
-            {!loading && urls && urls.length > 0 ? (
+
+            {!loading && !fetchFailed && urls && urls.length > 0 ? (
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
                 {urls.map((u, i) => (
                   <button
                     key={`${u}-${i}`}
                     type="button"
                     className="group relative overflow-hidden rounded-lg border border-slate-200 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-[#00e676]"
-                    title={fileLabel(fotos[i] ?? u, i)}
+                    title={fileLabelFromPath(pathLabels[i] ?? "", i)}
                     onClick={() => setLightboxIndex(i)}
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={u}
-                      alt={fileLabel(fotos[i] ?? u, i)}
+                      alt={fileLabelFromPath(pathLabels[i] ?? "", i)}
                       className="h-24 w-full object-cover transition-transform group-hover:scale-105"
                     />
                     <span className="absolute bottom-0 left-0 right-0 truncate bg-black/50 px-1 py-0.5 text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100">
-                      {fileLabel(fotos[i] ?? u, i)}
+                      {fileLabelFromPath(pathLabels[i] ?? "", i)}
                     </span>
                   </button>
                 ))}

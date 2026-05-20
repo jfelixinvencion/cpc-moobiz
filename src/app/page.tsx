@@ -887,43 +887,43 @@ function DashboardContent() {
             <TabsList className="h-8 w-full max-w-2xl flex-wrap bg-white/10 p-0.5 md:h-9">
               <TabsTrigger
                 value="dashboard"
-                className="flex-1 text-xs data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
+                className="flex-1 text-xs text-slate-200 data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
               >
                 Dashboard
               </TabsTrigger>
               <TabsTrigger
                 value="operaciones"
-                className="flex-1 text-xs data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
+                className="flex-1 text-xs text-slate-200 data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
               >
                 Operaciones
               </TabsTrigger>
               <TabsTrigger
                 value="datos"
-                className="flex-1 text-xs data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
+                className="flex-1 text-xs text-slate-200 data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
               >
                 Flota
               </TabsTrigger>
               <TabsTrigger
                 value="logs"
-                className="flex-1 text-xs data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
+                className="flex-1 text-xs text-slate-200 data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
               >
                 Logs
               </TabsTrigger>
               <TabsTrigger
                 value="historial"
-                className="flex-1 text-xs data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
+                className="flex-1 text-xs text-slate-200 data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
               >
                 Historial
               </TabsTrigger>
               <TabsTrigger
                 value="calidad"
-                className="flex-1 text-xs data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
+                className="flex-1 text-xs text-slate-200 data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
               >
                 Calidad
               </TabsTrigger>
               <TabsTrigger
                 value="comercial"
-                className="flex-1 text-xs data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
+                className="flex-1 text-xs text-slate-200 data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
               >
                 Comercial
               </TabsTrigger>

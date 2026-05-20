@@ -355,6 +355,8 @@ function DashboardContent() {
   const [dashboardV2Loading, setDashboardV2Loading] = useState(false);
   const [dashboardV2Error, setDashboardV2Error] = useState<string | null>(null);
   const [dashboardV2Data, setDashboardV2Data] = useState<DashboardResponse | null>(null);
+  const [pendientesEmpresa, setPendientesEmpresa] = useState<string | null>(null);
+  const [pendientesEmpresasOptions, setPendientesEmpresasOptions] = useState<string[]>([]);
   const [syncingServices, setSyncingServices] = useState(false);
   const [syncingServicesError, setSyncingServicesError] = useState<string | null>(null);
   const [visibleProductsV2, setVisibleProductsV2] = useState<Record<ScheduleV2ProductKey, boolean>>(
@@ -586,18 +588,27 @@ function DashboardContent() {
     setDashboardV2Loading(true);
     setDashboardV2Error(null);
     try {
-      const res = await fetch("/api/dashboard-v2/reservas", {
-        cache: "no-store",
-      });
+      const params = new URLSearchParams();
+      if (pendientesEmpresa) params.set("empresa", pendientesEmpresa);
+      const qs = params.toString();
+      const url = qs ? `/api/dashboard-v2/reservas?${qs}` : "/api/dashboard-v2/reservas";
+      const res = await fetch(url, { cache: "no-store" });
       const data = (await res.json()) as DashboardResponse & { error?: string };
       if (!res.ok) throw new Error(data?.error || "No se pudo cargar servicios pendientes.");
       setDashboardV2Data(data);
+      const empresas = data.filters?.empresas ?? [];
+      if (empresas.length > 0) {
+        setPendientesEmpresasOptions((prev) => {
+          const merged = new Set([...prev, ...empresas]);
+          return Array.from(merged).sort((a, b) => a.localeCompare(b, "es"));
+        });
+      }
     } catch (err) {
       setDashboardV2Error(err instanceof Error ? err.message : "Error inesperado en servicios pendientes.");
     } finally {
       setDashboardV2Loading(false);
     }
-  }, []);
+  }, [pendientesEmpresa]);
 
   const handleSyncServicesV2 = useCallback(async () => {
     setSyncingServices(true);
@@ -625,7 +636,7 @@ function DashboardContent() {
   useEffect(() => {
     if (mainTab !== "dashboard" || dashboardSubTab !== "reservas") return;
     void loadDashboardV2();
-  }, [mainTab, dashboardSubTab, loadDashboardV2, refreshKey]);
+  }, [mainTab, dashboardSubTab, loadDashboardV2, refreshKey, pendientesEmpresa]);
 
   const visibleScheduleKeysV2 = useMemo(
     () => SCHEDULE_V2_STACK_ORDER.filter((k) => visibleProductsV2[k]),
@@ -738,6 +749,14 @@ function DashboardContent() {
         0,
       ),
     [scheduleV2TimelineData, visibleProductsV2],
+  );
+  const pendientesSinDatosEmpresa = useMemo(
+    () =>
+      Boolean(pendientesEmpresa) &&
+      !dashboardV2Loading &&
+      !dashboardV2Error &&
+      scheduleV2PendingTotalVisible === 0,
+    [pendientesEmpresa, dashboardV2Loading, dashboardV2Error, scheduleV2PendingTotalVisible],
   );
 
   const toggleScheduleProductV2 = useCallback((key: ScheduleV2ProductKey) => {
@@ -1168,8 +1187,33 @@ function DashboardContent() {
               <TabsContent value="reservas" className="mt-0 space-y-4 outline-none">
             <Card className="border-slate-200 bg-white shadow-sm">
               <CardHeader className="space-y-1 py-3">
-                <div className="flex items-start justify-between gap-2">
-                  <CardTitle className="text-sm font-semibold text-slate-800">Servicios pendientes</CardTitle>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="flex min-w-0 flex-col gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Label htmlFor="pendientes-empresa-filter" className="text-sm font-medium text-slate-700">
+                        Empresa
+                      </Label>
+                      <select
+                        id="pendientes-empresa-filter"
+                        value={pendientesEmpresa ?? "Todas"}
+                        onChange={(e) => {
+                          const v = e.target.value === "Todas" ? null : e.target.value;
+                          setPendientesEmpresa(v);
+                        }}
+                        disabled={dashboardV2Loading}
+                        className="h-8 rounded-md border border-slate-200 bg-white px-3 py-1 text-sm text-slate-800 shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-400"
+                        aria-label="Filtrar servicios pendientes por empresa"
+                      >
+                        <option value="Todas">Todas</option>
+                        {pendientesEmpresasOptions.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <CardTitle className="text-sm font-semibold text-slate-800">Servicios pendientes</CardTitle>
+                  </div>
                   <div className="flex flex-col items-end gap-1 sm:flex-row sm:items-center">
                     <Button
                       type="button"
@@ -1233,15 +1277,32 @@ function DashboardContent() {
                 {dashboardV2Error ? (
                   <p className="text-xs text-red-600">{dashboardV2Error}</p>
                 ) : dashboardV2Loading ? (
-                  <p className="text-xs text-slate-500">Cargando servicios pendientes...</p>
+                  <p className="flex items-center gap-1.5 text-xs text-slate-500">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                    Cargando servicios pendientes...
+                  </p>
+                ) : pendientesSinDatosEmpresa ? (
+                  <p className="text-xs text-slate-600">Sin datos para esta empresa</p>
                 ) : null}
                 {syncingServicesError ? (
                   <p className="text-xs text-red-600">{syncingServicesError}</p>
                 ) : null}
               </CardHeader>
               <CardContent className="pb-4">
-                <div className="overflow-x-auto overflow-y-hidden rounded-lg border border-slate-100 bg-slate-50/50 [-webkit-overflow-scrolling:touch]">
-                  <div className="relative" style={{ width: scheduleV2ChartWidth, height: 350 }}>
+                <div className="relative overflow-x-auto overflow-y-hidden rounded-lg border border-slate-100 bg-slate-50/50 [-webkit-overflow-scrolling:touch]">
+                  {dashboardV2Loading ? (
+                    <div
+                      className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-slate-50/80"
+                      aria-live="polite"
+                      aria-busy="true"
+                    >
+                      <Loader2 className="h-6 w-6 animate-spin text-slate-500" aria-label="Cargando gráfica" />
+                    </div>
+                  ) : null}
+                  <div
+                    className={`relative ${dashboardV2Loading ? "pointer-events-none opacity-50" : ""}`}
+                    style={{ width: scheduleV2ChartWidth, height: 350 }}
+                  >
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart
                         data={scheduleV2TimelineData}

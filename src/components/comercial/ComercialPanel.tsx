@@ -10,6 +10,7 @@ import {
   useState,
 } from "react";
 
+import { FotosGalleryModal } from "@/components/comercial/FotosGalleryModal";
 import { MoobizServiceLink } from "@/components/comercial/moobiz-service-link";
 import { QuejaModal } from "@/components/comercial/QuejaModal";
 import { ReviewModal } from "@/components/comercial/ReviewModal";
@@ -133,6 +134,11 @@ export function ComercialPanel({
   const [reviewOpen, setReviewOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ComercialQuejaRow | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [fotosOpen, setFotosOpen] = useState(false);
+  const [fotosTarget, setFotosTarget] = useState<{
+    fotos: string[];
+    quejaId: number;
+  } | null>(null);
 
   useEffect(() => {
     const t = window.setTimeout(() => setDebouncedSearch(search.trim()), 300);
@@ -250,7 +256,12 @@ export function ComercialPanel({
   }
 
   const gridCols =
-    "grid grid-cols-[3.5rem_minmax(5rem,6rem)_5.5rem_minmax(7rem,9rem)_5rem_minmax(6.5rem,8rem)_minmax(5rem,6rem)_minmax(5rem,6rem)_minmax(5rem,6rem)_4rem_4.5rem_minmax(5rem,1fr)_4rem_minmax(11rem,13rem)] items-center gap-1";
+    "grid grid-cols-[3.5rem_minmax(5rem,6rem)_5.5rem_minmax(7rem,9rem)_5rem_minmax(6.5rem,8rem)_minmax(5rem,6rem)_minmax(5rem,6rem)_minmax(5rem,6rem)_4rem_4.5rem_minmax(5rem,1fr)_4rem_minmax(14rem,17rem)] items-center gap-1";
+
+  function openFotos(row: ComercialQuejaRow) {
+    setFotosTarget({ fotos: row.fotos_revision ?? [], quejaId: row.id });
+    setFotosOpen(true);
+  }
 
   return (
     <div className="space-y-4">
@@ -315,7 +326,7 @@ export function ComercialPanel({
         <div
           className={cn(
             gridCols,
-            "min-w-[1240px] border-b border-slate-200 bg-slate-50 px-2 py-2 text-[10px] font-semibold uppercase tracking-wide text-slate-600",
+            "min-w-[1280px] border-b border-slate-200 bg-slate-50 px-2 py-2 text-[10px] font-semibold uppercase tracking-wide text-slate-600",
           )}
         >
           <span>Item</span>
@@ -347,7 +358,7 @@ export function ComercialPanel({
 
         <div
           ref={parentRef}
-          className="max-h-[calc(100vh-16rem)] min-w-[1240px] overflow-y-auto"
+          className="max-h-[calc(100vh-16rem)] min-w-[1280px] overflow-y-auto"
           onScroll={onScroll}
         >
           <div
@@ -426,7 +437,21 @@ export function ComercialPanel({
                     {row.descripcion ?? "—"}
                   </span>
                   <span className="min-w-0 truncate py-2">{row.fuente ?? "—"}</span>
-                  <div className="flex shrink-0 items-center justify-end gap-2 py-1">
+                  <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 py-1">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 shrink-0 px-2 text-[10px]"
+                      title={
+                        (row.fotos_revision?.length ?? 0) > 0
+                          ? `Ver ${row.fotos_revision!.length} foto(s)`
+                          : "Sin fotos"
+                      }
+                      onClick={() => openFotos(row)}
+                    >
+                      Fotos
+                    </Button>
                     <Button
                       type="button"
                       size="sm"
@@ -515,6 +540,16 @@ export function ComercialPanel({
           refresh();
         }}
         onError={onErrorToast}
+      />
+
+      <FotosGalleryModal
+        open={fotosOpen}
+        fotos={fotosTarget?.fotos}
+        quejaId={fotosTarget?.quejaId}
+        onClose={() => {
+          setFotosOpen(false);
+          setFotosTarget(null);
+        }}
       />
 
       {deleteTarget ? (

@@ -28,8 +28,31 @@ import { cn } from "@/lib/utils";
 const BATCH = 100;
 const ROW_H = 44;
 
+const ESTADO_REGISTRO_OPTIONS = ["Pendiente", "En revision", "Completado"] as const;
+
+type PanelSortCol = ComercialQuejasSortCol | "estado_registro";
+
 const fetchPanel: typeof fetch = (input, init) =>
   fetch(input, { ...init, credentials: "same-origin" });
+
+function estadoRegistroBadgeClass(value: string | null | undefined): string {
+  const base =
+    "inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium";
+  const v = value ?? "";
+  if (v === "Pendiente") return `${base} border-yellow-200 bg-yellow-100 text-yellow-800`;
+  if (v === "En revision") return `${base} bg-blue-100 text-blue-800`;
+  if (v === "Completado") return `${base} bg-green-100 text-green-800`;
+  return `${base} bg-gray-100 text-gray-800`;
+}
+
+function EstadoRegistroBadge({ value }: { value: string | null | undefined }) {
+  const label = value?.trim() || "—";
+  return (
+    <span className={estadoRegistroBadgeClass(value)} title={value ?? undefined}>
+      {label}
+    </span>
+  );
+}
 
 type Props = {
   createOpen?: boolean;
@@ -64,7 +87,8 @@ export function ComercialPanel({
 
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [sortCol, setSortCol] = useState<ComercialQuejasSortCol>("created_at");
+  const [estadoRegistroFilter, setEstadoRegistroFilter] = useState("");
+  const [sortCol, setSortCol] = useState<PanelSortCol>("created_at");
   const [sortDir, setSortDir] = useState<ComercialQuejasSortDir>("desc");
 
   const [rows, setRows] = useState<ComercialQuejaRow[]>([]);
@@ -92,18 +116,28 @@ export function ComercialPanel({
   }, [search]);
 
   const listParams = useMemo((): ComercialQuejasListParams => {
+    const apiSortCol: ComercialQuejasSortCol =
+      sortCol === "estado_registro" ? "created_at" : sortCol;
     return {
       limit: BATCH,
       offset: 0,
       search: debouncedSearch || null,
       idServicio: null,
-      estadoRegistro: null,
+      estadoRegistro: estadoRegistroFilter || null,
       fechaFrom: null,
       fechaTo: null,
-      sortCol,
+      sortCol: apiSortCol,
       sortDir,
     };
-  }, [debouncedSearch, sortCol, sortDir]);
+  }, [debouncedSearch, estadoRegistroFilter, sortCol, sortDir]);
+
+  const displayRows = useMemo(() => {
+    if (sortCol !== "estado_registro") return rows;
+    return [...rows].sort((a, b) => {
+      const cmp = (a.estado_registro ?? "").localeCompare(b.estado_registro ?? "", "es");
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+  }, [rows, sortCol, sortDir]);
 
   const loadRows = useCallback(
     async (append: boolean, offset: number) => {
@@ -146,7 +180,7 @@ export function ComercialPanel({
   }, [loadRows]);
 
   const rowVirtualizer = useVirtualizer({
-    count: rows.length,
+    count: displayRows.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => ROW_H,
     overscan: 10,
@@ -161,12 +195,12 @@ export function ComercialPanel({
     void loadRows(true, rows.length);
   }, [loadRows, loading, rows.length, total]);
 
-  const toggleSort = (col: ComercialQuejasSortCol) => {
+  const toggleSort = (col: PanelSortCol) => {
     if (sortCol === col) {
       setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     } else {
       setSortCol(col);
-      setSortDir(col === "fecha_queja" ? "desc" : "desc");
+      setSortDir("desc");
     }
   };
 
@@ -192,7 +226,7 @@ export function ComercialPanel({
   }
 
   const gridCols =
-    "grid grid-cols-[3.5rem_minmax(5rem,6rem)_5.5rem_minmax(7rem,9rem)_5rem_minmax(5rem,6rem)_minmax(5rem,6rem)_minmax(5rem,6rem)_4rem_4.5rem_minmax(5rem,1fr)_4rem_minmax(11rem,13rem)] items-center gap-1";
+    "grid grid-cols-[3.5rem_minmax(5rem,6rem)_5.5rem_minmax(7rem,9rem)_5rem_minmax(6.5rem,8rem)_minmax(5rem,6rem)_minmax(5rem,6rem)_minmax(5rem,6rem)_4rem_4.5rem_minmax(5rem,1fr)_4rem_minmax(11rem,13rem)] items-center gap-1";
 
   return (
     <div className="space-y-4">
@@ -232,6 +266,23 @@ export function ComercialPanel({
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
+        <div className="min-w-[10rem] space-y-1">
+          <label className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+            Estado registro
+          </label>
+          <select
+            className="flex h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-xs"
+            value={estadoRegistroFilter}
+            onChange={(e) => setEstadoRegistroFilter(e.target.value)}
+          >
+            <option value="">Todos</option>
+            {ESTADO_REGISTRO_OPTIONS.map((opt) => (
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {loadError ? <p className="text-sm text-red-600">{loadError}</p> : null}
@@ -240,7 +291,7 @@ export function ComercialPanel({
         <div
           className={cn(
             gridCols,
-            "min-w-[1150px] border-b border-slate-200 bg-slate-50 px-2 py-2 text-[10px] font-semibold uppercase tracking-wide text-slate-600",
+            "min-w-[1240px] border-b border-slate-200 bg-slate-50 px-2 py-2 text-[10px] font-semibold uppercase tracking-wide text-slate-600",
           )}
         >
           <span>Item</span>
@@ -251,6 +302,15 @@ export function ComercialPanel({
           </button>
           <span>ID Servicio</span>
           <span>Estado</span>
+          <button
+            type="button"
+            className="flex items-center text-left"
+            onClick={() => toggleSort("estado_registro")}
+          >
+            <span className="hidden sm:inline">Estado registro</span>
+            <span className="sm:hidden">Est. reg.</span>
+            <SortIcon active={sortCol === "estado_registro"} dir={sortDir} />
+          </button>
           <span>Usuario</span>
           <span>Pasajero</span>
           <span>Conductor</span>
@@ -263,7 +323,7 @@ export function ComercialPanel({
 
         <div
           ref={parentRef}
-          className="max-h-[calc(100vh-16rem)] min-w-[1150px] overflow-y-auto"
+          className="max-h-[calc(100vh-16rem)] min-w-[1240px] overflow-y-auto"
           onScroll={onScroll}
         >
           <div
@@ -274,7 +334,7 @@ export function ComercialPanel({
             }}
           >
             {rowVirtualizer.getVirtualItems().map((vi) => {
-              const row = rows[vi.index];
+              const row = displayRows[vi.index];
               if (!row) return null;
               return (
                 <div
@@ -316,6 +376,9 @@ export function ComercialPanel({
                   >
                     {row.estado_servicio ?? "—"}
                   </span>
+                  <div className="flex items-center py-2">
+                    <EstadoRegistroBadge value={row.estado_registro} />
+                  </div>
                   <span className="min-w-0 truncate py-2" title={row.usuario ?? ""}>
                     {row.usuario ?? "—"}
                   </span>

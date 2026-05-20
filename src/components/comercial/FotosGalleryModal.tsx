@@ -50,58 +50,73 @@ export function FotosGalleryModal({ open, onClose, fotos = [], quejaId }: Props)
     setCopyMsg(null);
 
     const items = fotos.map((f) => String(f ?? "").trim()).filter(Boolean);
-    if (items.length === 0) {
+    const httpItems = items.filter(isHttpUrl);
+    const pathItems = items.filter((item) => !isHttpUrl(item));
+
+    if (items.length === 0 && !quejaId) {
       setUrls([]);
       return;
     }
 
-    const paths = items.filter((item) => !isHttpUrl(item));
-    const pathToUrl = new Map<string, string>();
+    if (items.length > 0 && httpItems.length === items.length) {
+      setUrls(httpItems);
+      return;
+    }
 
-    if (paths.length > 0) {
-      setLoading(true);
-      try {
-        const params = new URLSearchParams();
-        for (const p of paths) params.append("paths[]", p);
-        const res = await fetchPanel(`/api/comercial/fotos?${params.toString()}`);
-        const json = (await res.json()) as {
-          urls?: Array<{ path: string; url?: string; error?: string }>;
-          error?: string;
-        };
-        if (!res.ok) {
-          throw new Error(json.error ?? "Error al cargar fotos");
-        }
-        for (const entry of json.urls ?? []) {
-          if (entry.url) pathToUrl.set(entry.path, entry.url);
-        }
-      } catch (err) {
-        console.error("FotosGalleryModal load error", err);
-        setError(err instanceof Error ? err.message : "Error al cargar fotos");
-        setLoading(false);
-        const partial = items
-          .map((item) => (isHttpUrl(item) ? item : pathToUrl.get(item)))
-          .filter((u): u is string => Boolean(u));
-        if (partial.length > 0) setUrls(partial);
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (quejaId != null) params.set("quejaId", String(quejaId));
+      for (const p of pathItems) params.append("paths[]", p);
+
+      if (!params.toString()) {
+        setUrls(httpItems);
         return;
       }
+
+      const res = await fetchPanel(`/api/comercial/fotos?${params.toString()}`);
+      const json = (await res.json()) as {
+        urls?: Array<{ path: string; url?: string; error?: string }>;
+        error?: string;
+      };
+      if (!res.ok) {
+        throw new Error(json.error ?? "Error al cargar fotos");
+      }
+
+      const pathToUrl = new Map<string, string>();
+      for (const entry of json.urls ?? []) {
+        if (entry.url) pathToUrl.set(entry.path, entry.url);
+      }
+
+      const signedFromServer = (json.urls ?? [])
+        .map((e) => e.url)
+        .filter((u): u is string => Boolean(u));
+
+      const resolvedFromItems = items
+        .map((item) => (isHttpUrl(item) ? item : pathToUrl.get(item)))
+        .filter((u): u is string => Boolean(u));
+
+      const merged =
+        resolvedFromItems.length > 0
+          ? resolvedFromItems
+          : items.length === 0
+            ? signedFromServer
+            : [];
+
+      if (merged.length === 0) {
+        setError("No se encontraron fotos");
+        setUrls([]);
+        return;
+      }
+      setUrls(merged);
+    } catch (err) {
+      console.error("FotosGalleryModal load error", err);
+      setError(err instanceof Error ? err.message : "Error al cargar fotos");
+      if (httpItems.length > 0) setUrls(httpItems);
+    } finally {
       setLoading(false);
     }
-
-    const resolved = items
-      .map((item) => {
-        if (isHttpUrl(item)) return item;
-        return pathToUrl.get(item);
-      })
-      .filter((u): u is string => Boolean(u));
-
-    if (resolved.length === 0) {
-      setError("No se encontraron fotos");
-      setUrls([]);
-      return;
-    }
-    setUrls(resolved);
-    return;
-  }, [fotos]);
+  }, [fotos, quejaId]);
 
   useEffect(() => {
     if (!open) return;

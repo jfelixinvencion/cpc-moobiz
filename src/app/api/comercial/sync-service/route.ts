@@ -18,6 +18,63 @@ function asString(v: unknown): string | null {
   return s || null;
 }
 
+/** Normaliza nombre de columna: sin acentos, minúsculas, solo alfanumérico. */
+function normalizeColumnKey(key: string): string {
+  return key
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function getFieldNormalized(
+  obj: Record<string, unknown>,
+  exactCandidates: string[],
+  normalizedTargets: string[],
+): unknown {
+  const exact = getField(obj, exactCandidates);
+  if (exact !== null && exact !== undefined) return exact;
+
+  const targetSet = new Set(normalizedTargets.map(normalizeColumnKey));
+  for (const [key, value] of Object.entries(obj)) {
+    if (value === null || value === undefined) continue;
+    if (targetSet.has(normalizeColumnKey(key))) return value;
+  }
+  return null;
+}
+
+function resolveEstado(data: Record<string, unknown>): string | null {
+  const fromCandidates = asString(
+    getField(data, [
+      "Estado",
+      "estado",
+      "Estado Servicio",
+      "estado_servicio",
+      "ESTADO",
+      "Estado del Servicio",
+      "Status",
+      "status",
+    ]),
+  );
+  if (fromCandidates) return fromCandidates;
+
+  const fromNormalized = asString(
+    getFieldNormalized(data, [], ["estado", "estadoservicio", "estadodelservicio", "status"]),
+  );
+  if (fromNormalized) return fromNormalized;
+
+  for (const [key, value] of Object.entries(data)) {
+    if (value === null || value === undefined) continue;
+    const nk = normalizeColumnKey(key);
+    if (nk.includes("estado") && !nk.includes("conductor") && !nk.includes("usuario")) {
+      const s = asString(value);
+      if (s) return s;
+    }
+  }
+
+  return null;
+}
+
 export async function GET(request: NextRequest) {
   try {
     assertQualityReadAccess(request);
@@ -59,50 +116,61 @@ export async function GET(request: NextRequest) {
 
     const data = rows[0].data;
 
-    const estado = getField(data, ["Estado", "estado", "Estado Servicio", "estado_servicio"]);
-    const empresa = getField(data, ["Empresa", "empresa"]);
-    const nombreUsuario = getField(data, [
-      "Nombre Usuario",
-      "nombre_usuario",
-      "Nombre_Usuario",
-    ]);
-    const apellidoUsuario = getField(data, [
-      "Apellido Usuario",
-      "apellido_usuario",
-      "Apellido_Usuario",
-    ]);
+    const estado = resolveEstado(data);
+    const empresa = asString(
+      getFieldNormalized(data, ["Empresa", "empresa"], ["empresa"]),
+    );
+    const nombreUsuario = getFieldNormalized(
+      data,
+      ["Nombre Usuario", "nombre_usuario", "Nombre_Usuario"],
+      ["nombreusuario"],
+    );
+    const apellidoUsuario = getFieldNormalized(
+      data,
+      ["Apellido Usuario", "apellido_usuario", "Apellido_Usuario"],
+      ["apellidousuario"],
+    );
     const usuario =
       [nombreUsuario, apellidoUsuario]
         .filter((v) => v !== null && v !== undefined)
         .map(String)
         .join(" ")
         .trim() || null;
-    const invitado = getField(data, ["Nombre Invitado", "nombre_invitado", "Nombre_Invitado"]);
-    const nombreConductor = getField(data, [
-      "Nombre Conductor",
-      "nombre_conductor",
-      "Nombre_Conductor",
-    ]);
-    const apellidoConductor = getField(data, [
-      "Apellido Conductor",
-      "apellido_conductor",
-      "Apellido_Conductor",
-    ]);
+    const invitado = asString(
+      getFieldNormalized(
+        data,
+        ["Nombre Invitado", "nombre_invitado", "Nombre_Invitado"],
+        ["nombreinvitado"],
+      ),
+    );
+    const nombreConductor = getFieldNormalized(
+      data,
+      ["Nombre Conductor", "nombre_conductor", "Nombre_Conductor"],
+      ["nombreconductor"],
+    );
+    const apellidoConductor = getFieldNormalized(
+      data,
+      ["Apellido Conductor", "apellido_conductor", "Apellido_Conductor"],
+      ["apellidoconductor"],
+    );
     const conductor =
       [nombreConductor, apellidoConductor]
         .filter((v) => v !== null && v !== undefined)
         .map(String)
         .join(" ")
         .trim() || null;
-    const turno = getField(data, ["Turno", "turno", "TURNO"]);
+    const turno = asString(
+      getFieldNormalized(data, ["Turno", "turno", "TURNO"], ["turno"]),
+    );
 
     return NextResponse.json({
-      estado: asString(estado),
-      empresa: asString(empresa),
+      estado,
+      estado_servicio: estado,
+      empresa,
       usuario,
-      invitado: asString(invitado),
+      invitado,
       conductor,
-      turno: asString(turno),
+      turno,
       raw: data,
     });
   } catch (err) {

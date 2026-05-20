@@ -14,12 +14,17 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  LabelList,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
 
+import {
+  ProductividadHorizontalBarLabel,
+  ProductividadVerticalBarLabel,
+} from "@/components/dashboard/productividad-chart-bar-labels";
 import { ProductividadFilterMulti } from "@/components/dashboard/productividad-filter-multi";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -689,6 +694,10 @@ export function ProductividadPanel() {
                       }
                     />
                   ))}
+                  <LabelList
+                    dataKey={type}
+                    content={(props) => ProductividadHorizontalBarLabel(props)}
+                  />
                 </Bar>
               ))}
             </BarChart>
@@ -739,7 +748,14 @@ export function ProductividadPanel() {
                 }}
                 labelFormatter={(label) => `Fecha: ${label}`}
               />
-              <Bar dataKey="cnt" name="Conteo" fill={TURQUESA} radius={[3, 3, 0, 0]} />
+              <Bar dataKey="cnt" name="Conteo" fill={TURQUESA} radius={[3, 3, 0, 0]}>
+                <LabelList
+                  dataKey="cnt"
+                  content={(props) => (
+                    <ProductividadVerticalBarLabel {...props} barCount={byDate.length} />
+                  )}
+                />
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -784,7 +800,14 @@ export function ProductividadPanel() {
                   ];
                 }}
               />
-              <Bar dataKey="cnt" name="Conteo" fill={PETROLEO} radius={[3, 3, 0, 0]} />
+              <Bar dataKey="cnt" name="Conteo" fill={PETROLEO} radius={[3, 3, 0, 0]}>
+                <LabelList
+                  dataKey="cnt"
+                  content={(props) => (
+                    <ProductividadVerticalBarLabel {...props} barCount={byDateHour.length} />
+                  )}
+                />
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
         </div>

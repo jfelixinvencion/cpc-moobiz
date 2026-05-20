@@ -54,6 +54,30 @@ function EstadoRegistroBadge({ value }: { value: string | null | undefined }) {
   );
 }
 
+function normalizeEstadoRegistro(s?: string | null): string {
+  return (s ?? "").toLowerCase().replace(/\s+/g, "").trim();
+}
+
+function getAccionesState(estadoRegistro?: string | null) {
+  const estadoNorm = normalizeEstadoRegistro(estadoRegistro);
+  const isCompletado = estadoNorm === "completado";
+  const isEnRevision = estadoNorm === "enrevision";
+  const disabledEditar = isEnRevision || isCompletado;
+  const disabledRevisar = isCompletado;
+  return {
+    disabledEditar,
+    disabledRevisar,
+    editarTitle: disabledEditar
+      ? isCompletado
+        ? "Registro completado — solo visualización"
+        : "No se puede editar mientras está en revisión"
+      : "Editar",
+    revisarTitle: disabledRevisar
+      ? "Registro completado — no se puede revisar"
+      : "Revisar",
+  };
+}
+
 type Props = {
   createOpen?: boolean;
   onCreateOpenChange?: (open: boolean) => void;
@@ -336,6 +360,12 @@ export function ComercialPanel({
             {rowVirtualizer.getVirtualItems().map((vi) => {
               const row = displayRows[vi.index];
               if (!row) return null;
+              const {
+                disabledEditar,
+                disabledRevisar,
+                editarTitle,
+                revisarTitle,
+              } = getAccionesState(row.estado_registro);
               return (
                 <div
                   key={row.id}
@@ -401,8 +431,16 @@ export function ComercialPanel({
                       type="button"
                       size="sm"
                       variant="outline"
-                      className="h-7 shrink-0 px-2 text-[10px]"
+                      disabled={disabledEditar}
+                      aria-disabled={disabledEditar}
+                      tabIndex={disabledEditar ? -1 : 0}
+                      title={editarTitle}
+                      className={cn(
+                        "h-7 shrink-0 px-2 text-[10px]",
+                        disabledEditar && "cursor-not-allowed opacity-50",
+                      )}
                       onClick={() => {
+                        if (disabledEditar) return;
                         setSelected(row);
                         setModalMode("edit");
                       }}
@@ -413,8 +451,16 @@ export function ComercialPanel({
                       type="button"
                       size="sm"
                       variant="outline"
-                      className="h-7 shrink-0 px-2 text-[10px]"
+                      disabled={disabledRevisar}
+                      aria-disabled={disabledRevisar}
+                      tabIndex={disabledRevisar ? -1 : 0}
+                      title={revisarTitle}
+                      className={cn(
+                        "h-7 shrink-0 px-2 text-[10px]",
+                        disabledRevisar && "cursor-not-allowed opacity-50",
+                      )}
                       onClick={() => {
+                        if (disabledRevisar) return;
                         setSelected(row);
                         setReviewOpen(true);
                       }}

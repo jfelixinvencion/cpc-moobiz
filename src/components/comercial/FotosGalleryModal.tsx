@@ -69,15 +69,21 @@ export function FotosGalleryModal({ open, onClose, fotos = [], quejaId }: Props)
         throw new Error(json.error ?? "Error fetching signed urls");
       }
 
-      const entries = json.urls ?? [];
-      const okEntries = entries.filter((r) => r.url);
-      const okUrls = okEntries.map((r) => r.url as string);
-      setUrls(okUrls);
-      setPathLabels(okEntries.map((r) => r.path));
+      const results = json.urls ?? [];
+      const okUrls = results.map((item) => item.url).filter((u): u is string => Boolean(u));
 
-      const errs = entries
-        .filter((r) => r.error)
-        .map((r) => `${r.path}: ${r.error}`);
+      if (okUrls.length === 0) {
+        console.log("API devolvió vacío para id:", quejaId, "respuesta:", results);
+      }
+
+      setUrls(okUrls);
+      setPathLabels(
+        results.filter((item) => item.url).map((item) => item.path),
+      );
+
+      const errs = results
+        .filter((item) => item.error)
+        .map((item) => `${item.path}: ${item.error}`);
       if (errs.length) {
         setPathNotice(`Algunas fotos no se pudieron cargar: ${errs.join("; ")}`);
       }

@@ -414,6 +414,10 @@ function DashboardContent() {
         router.push("/calidad");
         return;
       }
+      if (value === "comercial") {
+        router.push("/comercial");
+        return;
+      }
       setMainTab(value);
       const p = new URLSearchParams(searchParams.toString());
       let changed = false;
@@ -916,6 +920,12 @@ function DashboardContent() {
                 className="flex-1 text-xs data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
               >
                 Calidad
+              </TabsTrigger>
+              <TabsTrigger
+                value="comercial"
+                className="flex-1 text-xs data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
+              >
+                Comercial
               </TabsTrigger>
             </TabsList>
 

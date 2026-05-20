@@ -8,6 +8,7 @@ import { assertQualityReadAccess } from "@/lib/panel-session";
 export const runtime = "nodejs";
 
 const SIGNED_TTL_SEC = 60 * 60;
+const BUCKET = process.env.STORAGE_BUCKET?.trim() || STORAGE_BUCKET;
 
 if (!process.env.SUPABASE_URL?.trim() && !process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) {
   console.error("Missing SUPABASE_URL for signed URLs endpoint");
@@ -16,31 +17,41 @@ if (!process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()) {
   console.error("Missing SUPABASE_SERVICE_ROLE_KEY for signed URLs endpoint");
 }
 
-function sanitizeStoragePath(raw: string): string | null {
-  const trimmed = raw.trim();
+/** Convierte URL pública/firmada de Supabase o path relativo al path dentro del bucket. */
+function extractPath(item: string): string | null {
+  const trimmed = item.trim();
   if (!trimmed || trimmed.includes("..")) return null;
+
+  if (trimmed.includes(`/public/${BUCKET}/`)) {
+    const part = trimmed.split(`/public/${BUCKET}/`)[1];
+    return part.split("?")[0].replace(/^\/+/, "") || null;
+  }
+  if (trimmed.includes(`/sign/${BUCKET}/`)) {
+    const part = trimmed.split(`/sign/${BUCKET}/`)[1];
+    return part.split("?")[0].replace(/^\/+/, "") || null;
+  }
+
+  const objectPublic = `/object/public/${BUCKET}/`;
+  if (trimmed.includes(objectPublic)) {
+    const part = trimmed.split(objectPublic)[1];
+    return part.split("?")[0].replace(/^\/+/, "") || null;
+  }
+
   if (/^https?:\/\//i.test(trimmed)) {
     try {
       const u = new URL(trimmed);
       const segments = u.pathname.split("/").filter(Boolean);
-      const bucketIdx = segments.indexOf(STORAGE_BUCKET);
+      const bucketIdx = segments.indexOf(BUCKET);
       if (bucketIdx >= 0 && bucketIdx < segments.length - 1) {
         return segments.slice(bucketIdx + 1).join("/");
-      }
-      const objectIdx = segments.indexOf("object");
-      if (
-        objectIdx >= 0 &&
-        segments[objectIdx + 1] === "public" &&
-        segments[objectIdx + 2] === STORAGE_BUCKET
-      ) {
-        return segments.slice(objectIdx + 3).join("/");
       }
     } catch {
       return null;
     }
     return null;
   }
-  return trimmed.replace(/^\/+/, "");
+
+  return trimmed.replace(/^\/+/, "") || null;
 }
 
 async function pathsFromQuejaId(quejaId: string): Promise<string[]> {
@@ -55,8 +66,7 @@ async function pathsFromQuejaId(quejaId: string): Promise<string[]> {
     const arr = rows[0]?.fotos_revision;
     if (!Array.isArray(arr)) return [];
     return arr
-      .filter((p) => typeof p === "string" && p.trim() && !/^https?:\/\//i.test(p))
-      .map((p) => sanitizeStoragePath(p))
+      .map((p) => (typeof p === "string" ? extractPath(p) : null))
       .filter((p): p is string => Boolean(p));
   } catch (err) {
     console.error("fotos quejaId DB read error", err);
@@ -79,7 +89,7 @@ export async function GET(request: NextRequest) {
 
     if (pathsQuery.length) {
       paths = paths.concat(
-        pathsQuery.map((p) => sanitizeStoragePath(p)).filter((p): p is string => Boolean(p)),
+        pathsQuery.map((p) => extractPath(p)).filter((p): p is string => Boolean(p)),
       );
     }
 
@@ -95,7 +105,7 @@ export async function GET(request: NextRequest) {
     for (const path of paths) {
       try {
         const { data, error } = await supabase.storage
-          .from(STORAGE_BUCKET)
+          .from(BUCKET)
           .createSignedUrl(path, SIGNED_TTL_SEC);
         if (error || !data?.signedUrl) {
           results.push({ path, error: error?.message ?? "No se pudo firmar la URL." });

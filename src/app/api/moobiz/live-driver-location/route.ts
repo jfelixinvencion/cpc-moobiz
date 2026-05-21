@@ -7,6 +7,7 @@ import {
   writeMoobizTokenToDb,
 } from "@/lib/moobiz-auth";
 import { assertQualityReadAccess } from "@/lib/panel-session";
+import { getMoobizViewsPool } from "@/lib/pg-moobiz-dashboard-pool";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 
 export const runtime = "nodejs";
@@ -35,6 +36,10 @@ export type NearbyMoobizServiceForMap = {
   pr_name: string;
   dst_zone: string;
   prioridad_mapa: 1 | 2 | 3;
+  /** Estado del servicio (p. ej. desde `live_driver_location` o maestra). */
+  status: string;
+  /** Nombre de producto (`pr_name` vía JOIN con maestra). */
+  product_name: string;
 };
 
 function asText(v: unknown): string {
@@ -56,6 +61,7 @@ type MaestraNearbyRow = {
   pr_name?: unknown;
   dst_zone?: unknown;
   prioridad_mapa?: unknown;
+  state_color_name?: unknown;
 };
 
 /**
@@ -108,45 +114,124 @@ async function fetchServiceDestinationFromFlat(idUserRaw: string): Promise<{
   }
 }
 
+type LiveDriverLocationMapRow = {
+  id?: unknown;
+  org_lat?: unknown;
+  org_lng?: unknown;
+  alt_date?: unknown;
+  pr_name?: unknown;
+  dst_zone?: unknown;
+  prioridad_mapa?: unknown;
+  status?: unknown;
+  product_name?: unknown;
+};
+
+function mapRowToNearbyService(row: LiveDriverLocationMapRow): NearbyMoobizServiceForMap | null {
+  const lat = asNumber(row.org_lat);
+  const lng = asNumber(row.org_lng);
+  if (lat === null || lng === null) return null;
+  const rawId = row.id;
+  if (rawId === null || rawId === undefined) return null;
+  if (typeof rawId !== "string" && typeof rawId !== "number") return null;
+  if (rawId === "") return null;
+  const priority = asNumber(row.prioridad_mapa);
+  if (priority !== 1 && priority !== 2 && priority !== 3) return null;
+  const productName = asText(row.product_name) || asText(row.pr_name);
+  return {
+    id: rawId,
+    lat,
+    lng,
+    alt_date: asText(row.alt_date),
+    pr_name: productName,
+    dst_zone: asText(row.dst_zone),
+    prioridad_mapa: priority,
+    status: asText(row.status),
+    product_name: productName,
+  };
+}
+
+/** Marcadores del mapa: posiciones en `live_driver_location` + `product_name` desde maestra. */
+async function fetchNearbyServicesFromLiveDriverLocationJoin(): Promise<NearbyMoobizServiceForMap[]> {
+  const pool = getMoobizViewsPool();
+  const sql = `
+    SELECT
+      COALESCE(m.id::text, l.se_id::text) AS id,
+      COALESCE(l.lat, l.org_lat, m.org_lat) AS org_lat,
+      COALESCE(l.lng, l.org_lng, m.org_lng) AS org_lng,
+      COALESCE(l.alt_date::text, m.alt_date::text, '') AS alt_date,
+      COALESCE(l.dst_zone::text, m.dst_zone::text, '') AS dst_zone,
+      COALESCE(l.prioridad_mapa, m.prioridad_mapa) AS prioridad_mapa,
+      COALESCE(NULLIF(trim(l.status::text), ''), NULLIF(trim(m.state_color_name::text), ''), '') AS status,
+      COALESCE(NULLIF(trim(m.pr_name::text), ''), '') AS product_name
+    FROM public.live_driver_location l
+    LEFT JOIN vista.moobiz_services_maestra m ON m.id::text = l.se_id::text
+    WHERE COALESCE(l.prioridad_mapa, m.prioridad_mapa, 0) > 0
+    LIMIT 500
+  `;
+  const { rows } = await pool.query<LiveDriverLocationMapRow>(sql);
+  const out: NearbyMoobizServiceForMap[] = [];
+  for (const row of rows) {
+    const mapped = mapRowToNearbyService(row);
+    if (mapped) out.push(mapped);
+  }
+  return out;
+}
+
+async function fetchNearbyServicesForMapFromMaestra(): Promise<NearbyMoobizServiceForMap[]> {
+  const { client } = getSupabaseServerClient();
+  const { data, error } = await client
+    .schema("vista")
+    .from("moobiz_services_maestra")
+    .select("id, org_lat, org_lng, alt_date, pr_name, dst_zone, prioridad_mapa, state_color_name")
+    .gt("prioridad_mapa", 0)
+    .limit(500);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const rows = (data ?? []) as MaestraNearbyRow[];
+  const out: NearbyMoobizServiceForMap[] = [];
+  for (const row of rows) {
+    const mapped = mapRowToNearbyService({
+      id: row.id,
+      org_lat: row.org_lat,
+      org_lng: row.org_lng,
+      alt_date: row.alt_date,
+      pr_name: row.pr_name,
+      dst_zone: row.dst_zone,
+      prioridad_mapa: row.prioridad_mapa,
+      status: row.state_color_name,
+      product_name: row.pr_name,
+    });
+    if (mapped) out.push(mapped);
+  }
+  return out;
+}
+
 async function fetchNearbyServicesForMap(): Promise<NearbyMoobizServiceForMap[]> {
   try {
-    const { client } = getSupabaseServerClient();
-    const { data, error } = await client
-      .schema("vista")
-      .from("moobiz_services_maestra")
-      .select("id, org_lat, org_lng, alt_date, pr_name, dst_zone, prioridad_mapa")
-      .gt("prioridad_mapa", 0)
-      .limit(500);
-
-    if (error) {
-      console.warn("[live-driver-location] Supabase nearby services:", error.message);
-      return [];
+    const joined = await fetchNearbyServicesFromLiveDriverLocationJoin();
+    if (joined.length > 0) {
+      console.log(
+        `[live-driver-location] nearbyServices via live_driver_location JOIN: ${joined.length}`,
+      );
+      return joined;
     }
+    console.warn(
+      "[live-driver-location] JOIN live_driver_location devolvió 0 filas; fallback maestra",
+    );
+  } catch (e) {
+    console.warn(
+      "[live-driver-location] fetchNearbyServicesFromLiveDriverLocationJoin:",
+      e instanceof Error ? e.message : e,
+    );
+  }
 
-    const rows = (data ?? []) as MaestraNearbyRow[];
-    const out: NearbyMoobizServiceForMap[] = [];
-    for (const row of rows) {
-      const lat = asNumber(row.org_lat);
-      const lng = asNumber(row.org_lng);
-      if (lat === null || lng === null) continue;
-      const rawId = row.id;
-      if (rawId === null || rawId === undefined) continue;
-      if (typeof rawId !== "string" && typeof rawId !== "number") continue;
-      if (rawId === "") continue;
-      const priority = asNumber(row.prioridad_mapa);
-      if (priority !== 1 && priority !== 2 && priority !== 3) continue;
-      const id = rawId;
-      out.push({
-        id,
-        lat,
-        lng,
-        alt_date: asText(row.alt_date),
-        pr_name: asText(row.pr_name),
-        dst_zone: asText(row.dst_zone),
-        prioridad_mapa: priority,
-      });
-    }
-    return out;
+  try {
+    const fallback = await fetchNearbyServicesForMapFromMaestra();
+    console.log(`[live-driver-location] nearbyServices fallback maestra: ${fallback.length}`);
+    return fallback;
   } catch (e) {
     console.warn(
       "[live-driver-location] fetchNearbyServicesForMap:",

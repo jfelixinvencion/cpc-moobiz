@@ -23,7 +23,21 @@ export type NearbyServiceMarker = {
   pr_name: string;
   dst_zone: string;
   prioridad_mapa: 1 | 2 | 3;
+  status?: string;
+  product_name?: string;
 };
+
+function nearbyServiceTooltipLabel(marker: NearbyServiceMarker): string {
+  const date = formatAltDate(marker.alt_date);
+  const zone = String(marker.dst_zone || "").trim() || "—";
+  const status = String(marker.status ?? "").trim();
+  const productName = String(marker.product_name ?? "").trim();
+  const statusProduct = `${status}${productName ? ` - (${productName})` : ""}`.trim();
+  if (statusProduct) return `${date} - ${statusProduct} - ${zone}`;
+  const legacyProduct = String(marker.pr_name || "").trim();
+  if (legacyProduct) return `${date} - ${legacyProduct} - ${zone}`;
+  return `${date} - ${zone}`;
+}
 
 type Props = {
   lat: number;
@@ -150,7 +164,7 @@ export default function LiveDriverMap(props: Props) {
             }}
           >
             <Tooltip direction="top" offset={[0, -4]} opacity={1}>
-              {`${formatAltDate(s.alt_date)} - ${s.pr_name || "—"} - ${s.dst_zone || "—"}`}
+              {nearbyServiceTooltipLabel(s)}
             </Tooltip>
           </CircleMarker>
         ))}

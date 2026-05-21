@@ -68,12 +68,37 @@ type MaestraNearbyRow = {
  * Destino del servicio desde `vista.vw_driver_live_raw_flat` (solo lectura).
  * Requiere fila con `id_user` = ID conductor, `availability = busy` y coordenadas de destino válidas.
  */
+async function fetchProductNameByServiceId(seIdRaw: string): Promise<string> {
+  const seId = seIdRaw.trim();
+  if (!seId) return "";
+  try {
+    const pool = getMoobizViewsPool();
+    const { rows } = await pool.query<{ product_name?: unknown }>(
+      `
+        SELECT COALESCE(NULLIF(trim(m.pr_name::text), ''), '') AS product_name
+        FROM vista.moobiz_services_maestra m
+        WHERE m.id::text = $1
+        LIMIT 1
+      `,
+      [seId],
+    );
+    return asText(rows[0]?.product_name);
+  } catch (e) {
+    console.warn(
+      "[live-driver-location] fetchProductNameByServiceId:",
+      e instanceof Error ? e.message : e,
+    );
+    return "";
+  }
+}
+
 async function fetchServiceDestinationFromFlat(idUserRaw: string): Promise<{
   lat: number;
   lng: number;
   se_id: string;
   name: string;
   se_dst_address: string;
+  product_name: string;
 } | null> {
   const idUser = idUserRaw.trim();
   if (!idUser) return null;
@@ -98,12 +123,15 @@ async function fetchServiceDestinationFromFlat(idUserRaw: string): Promise<{
     const lat = asNumber(row.se_dst_lat);
     const lng = asNumber(row.se_dst_lng);
     if (lat === null || lng === null) return null;
+    const se_id = asText(row.se_id);
+    const product_name = await fetchProductNameByServiceId(se_id);
     return {
       lat,
       lng,
-      se_id: asText(row.se_id),
+      se_id,
       name: asText(row.name),
       se_dst_address: asText(row.se_dst_address),
+      product_name,
     };
   } catch (e) {
     console.warn(
@@ -162,7 +190,8 @@ async function fetchNearbyServicesFromLiveDriverLocationJoin(): Promise<NearbyMo
       COALESCE(l.dst_zone::text, m.dst_zone::text, '') AS dst_zone,
       COALESCE(l.prioridad_mapa, m.prioridad_mapa) AS prioridad_mapa,
       COALESCE(NULLIF(trim(l.status::text), ''), NULLIF(trim(m.state_color_name::text), ''), '') AS status,
-      COALESCE(NULLIF(trim(m.pr_name::text), ''), '') AS product_name
+      COALESCE(NULLIF(trim(m.pr_name::text), ''), NULLIF(trim(l.pr_name::text), ''), '') AS product_name,
+      COALESCE(NULLIF(trim(m.pr_name::text), ''), NULLIF(trim(l.pr_name::text), ''), '') AS pr_name
     FROM public.live_driver_location l
     LEFT JOIN vista.moobiz_services_maestra m ON m.id::text = l.se_id::text
     WHERE COALESCE(l.prioridad_mapa, m.prioridad_mapa, 0) > 0

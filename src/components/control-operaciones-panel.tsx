@@ -73,6 +73,7 @@ import {
   type DriverLiveLocationItem,
   type DriverLiveServiceDestination,
 } from "@/lib/moobiz-live-driver-location-client";
+import { resolveNearbyServiceProductName } from "@/lib/map-nearby-service-display";
 import { OperacionesDriverModeSwitch } from "@/components/operaciones-driver-mode-switch";
 import { useOperacionesDriverFilters } from "@/context/operaciones-driver-filters-context";
 import {
@@ -552,6 +553,20 @@ function formatGpsDate(value: string): string {
   const d = new Date(isoCandidate);
   if (Number.isNaN(d.getTime())) return raw;
   return format(d, "dd/MM/yyyy HH:mm");
+}
+
+function resolveMapDetailsProductName(
+  nearbyServices: NearbyServiceMarker[],
+  serviceDestination: DriverLiveServiceDestination | null | undefined,
+): string {
+  const fromDest = String(serviceDestination?.product_name ?? "").trim();
+  if (fromDest) return fromDest;
+  const seId = String(serviceDestination?.se_id ?? "").trim();
+  if (seId) {
+    const match = nearbyServices.find((s) => String(s.id).trim() === seId);
+    if (match) return resolveNearbyServiceProductName(match);
+  }
+  return "";
 }
 
 export function ControlOperacionesPanel() {
@@ -1706,6 +1721,13 @@ export function ControlOperacionesPanel() {
                     </span>
                   </p>
                 ) : null}
+                <div className="mt-2 text-sm text-slate-700">
+                  <strong>Producto: </strong>
+                  {resolveMapDetailsProductName(
+                    gpsModalState.nearbyServices,
+                    gpsModalState.serviceDestination,
+                  ) || <em className="text-slate-500">No especificado</em>}
+                </div>
               </div>
             </div>
           ) : null}

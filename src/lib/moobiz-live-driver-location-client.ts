@@ -25,6 +25,7 @@ export type DriverLiveServiceDestination = {
   se_id: string;
   name: string;
   se_dst_address: string;
+  product_name?: string;
 };
 
 export type DriverLiveLocationApiResponse = {
@@ -60,6 +61,7 @@ export async function fetchLiveDriverLocationByConductorName(
           se_id: String((dest as { se_id?: unknown }).se_id ?? ""),
           name: String((dest as { name?: unknown }).name ?? ""),
           se_dst_address: String((dest as { se_dst_address?: unknown }).se_dst_address ?? ""),
+          product_name: String((dest as { product_name?: unknown }).product_name ?? "").trim(),
         }
       : null;
   return {

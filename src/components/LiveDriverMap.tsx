@@ -13,7 +13,12 @@ import {
   Tooltip,
 } from "react-leaflet";
 
+import { NearbyServiceMapTooltip } from "@/components/map/NearbyServiceMapTooltip";
 import type { DriverLiveServiceDestination } from "@/lib/moobiz-live-driver-location-client";
+import {
+  resolveNearbyServiceProductName,
+  resolveNearbyServiceStatus,
+} from "@/lib/map-nearby-service-display";
 
 export type NearbyServiceMarker = {
   id: string | number;
@@ -26,18 +31,6 @@ export type NearbyServiceMarker = {
   status?: string;
   product_name?: string;
 };
-
-function nearbyServiceTooltipLabel(marker: NearbyServiceMarker): string {
-  const date = formatAltDate(marker.alt_date);
-  const zone = String(marker.dst_zone || "").trim() || "—";
-  const status = String(marker.status ?? "").trim();
-  const productName = String(marker.product_name ?? "").trim();
-  const statusProduct = `${status}${productName ? ` - (${productName})` : ""}`.trim();
-  if (statusProduct) return `${date} - ${statusProduct} - ${zone}`;
-  const legacyProduct = String(marker.pr_name || "").trim();
-  if (legacyProduct) return `${date} - ${legacyProduct} - ${zone}`;
-  return `${date} - ${zone}`;
-}
 
 type Props = {
   lat: number;
@@ -164,7 +157,7 @@ export default function LiveDriverMap(props: Props) {
             }}
           >
             <Tooltip direction="top" offset={[0, -4]} opacity={1}>
-              {nearbyServiceTooltipLabel(s)}
+              <NearbyServiceMapTooltip marker={s} dateLabel={formatAltDate(s.alt_date)} />
             </Tooltip>
           </CircleMarker>
         ))}
@@ -190,6 +183,14 @@ export default function LiveDriverMap(props: Props) {
               <div className="max-w-[240px] space-y-0.5 text-left text-[11px] leading-snug text-slate-800">
                 <p className="font-mono text-[10px] text-slate-600">
                   se_id: {dest.se_id.trim() ? dest.se_id : "—"}
+                </p>
+                <p>
+                  <strong>{resolveNearbyServiceStatus({ status: "busy" })}</strong>
+                  {resolveNearbyServiceProductName(dest) ? (
+                    <span className="ml-2 text-slate-500">
+                      — ({resolveNearbyServiceProductName(dest)})
+                    </span>
+                  ) : null}
                 </p>
                 <p className="font-medium">{dest.name.trim() ? dest.name : "—"}</p>
                 <p className="text-slate-600">{dest.se_dst_address.trim() ? dest.se_dst_address : "—"}</p>

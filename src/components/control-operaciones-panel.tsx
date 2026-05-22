@@ -1558,9 +1558,24 @@ export function ControlOperacionesPanel() {
                           aria-label={`Sel ${r.id_conductor}`}
                         />
                       </div>
-                      <span className="truncate font-mono text-[11px]" title={r.id_conductor}>
-                        {r.id_conductor}
-                      </span>
+                      <div className="flex min-w-0 items-center gap-1" data-no-shift-select>
+                        <span className="truncate font-mono text-[11px]" title={r.id_conductor}>
+                          {r.id_conductor}
+                        </span>
+                        {String(r.id_conductor ?? "").trim() ? (
+                          <a
+                            href={`https://app.moobiz.pe/drivers?query=${encodeURIComponent(String(r.id_conductor).trim())}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Ver conductor en Moobiz"
+                            aria-label={`Ver conductor ${r.id_conductor} en Moobiz`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex shrink-0 items-center justify-center text-slate-500 hover:text-slate-800"
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </a>
+                        ) : null}
+                      </div>
                       <span className="truncate" title={r.nombre_conductor}>
                         {r.nombre_conductor}
                       </span>

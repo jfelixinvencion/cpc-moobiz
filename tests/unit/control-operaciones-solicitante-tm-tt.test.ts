@@ -28,6 +28,26 @@ test("buildSolicitanteFilterOptions une TM y TT (etiquetas únicas)", () => {
   );
 });
 
+test("rowMatchesSolicitanteFilter: contains case-insensitive en TM o TT", () => {
+  const cell = { solicitante_tm: "1", solicitante_tt: null, observacion: null };
+  assert.equal(
+    rowMatchesSolicitanteFilter({
+      solicitanteFilter: "ana",
+      cell,
+      operatorLabelByValue: opMap,
+    }),
+    true,
+  );
+  assert.equal(
+    rowMatchesSolicitanteFilter({
+      solicitanteFilter: "BRU",
+      cell: { solicitante_tm: null, solicitante_tt: "2", observacion: null },
+      operatorLabelByValue: opMap,
+    }),
+    true,
+  );
+});
+
 test("rowMatchesSolicitanteFilter: OR entre TM y TT por etiqueta", () => {
   const cell = { solicitante_tm: "1", solicitante_tt: null, observacion: null };
   assert.equal(
@@ -57,7 +77,7 @@ test("rowMatchesSolicitanteFilter: OR entre TM y TT por etiqueta", () => {
   );
 });
 
-test("rowMatchesSolicitanteFilter: Vacíos solo si ambas columnas vacías", () => {
+test("rowMatchesSolicitanteFilter: Vacío solo si ambas columnas vacías", () => {
   assert.equal(
     rowMatchesSolicitanteFilter({
       solicitanteFilter: SOLICITANTE_FILTER_EMPTY,

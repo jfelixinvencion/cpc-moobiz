@@ -144,6 +144,7 @@ function SearchableMiniSelect(props: {
   widthClass?: string;
   markEditing?: boolean;
   disabled?: boolean;
+  loading?: boolean;
   portalContainer?: HTMLElement | null;
 }) {
   const {
@@ -154,6 +155,7 @@ function SearchableMiniSelect(props: {
     widthClass = "w-[200px]",
     markEditing,
     disabled,
+    loading,
     portalContainer,
   } = props;
   const [open, setOpen] = useState(false);
@@ -225,16 +227,17 @@ function SearchableMiniSelect(props: {
         type="button"
         variant="outline"
         size="sm"
-        disabled={disabled}
+        disabled={disabled || loading}
         className="h-8 w-full justify-between px-2 text-left text-xs font-normal"
         onClick={() => {
-          if (disabled) return;
+          if (disabled || loading) return;
           setQ("");
           setOpen((o) => !o);
         }}
         {...(markEditing && open ? { "data-control-edit": "true" } : {})}
       >
-        <span className="truncate">{label || "—"}</span>
+        <span className="truncate">{loading ? "Cargando…" : label || "—"}</span>
+        {loading ? <Loader2 className="ml-1 h-3.5 w-3.5 shrink-0 animate-spin text-slate-400" /> : null}
       </Button>
       {open && !disabled && menuPos
         ? createPortal(
@@ -636,12 +639,14 @@ export function ControlOperacionesPanel() {
     return map;
   }, [operatorOptions]);
 
-  const solicitanteFilterOptions = useMemo(() => {
-    return buildSolicitanteFilterOptions({
-      controlById,
-      operatorLabelByValue,
-    });
-  }, [controlById, operatorLabelByValue]);
+  const solicitanteFilterOptions = useMemo(
+    () =>
+      buildSolicitanteFilterOptions({
+        controlById,
+        operatorLabelByValue,
+      }),
+    [controlById, operatorLabelByValue],
+  );
 
   const rowsBeforeDistritoFilter = useMemo(() => {
     const cq = conductorQ.trim().toLowerCase();
@@ -770,11 +775,7 @@ export function ControlOperacionesPanel() {
     setLoading(true);
     setError(null);
     try {
-      const sp = new URLSearchParams();
-      if (solicitanteFilter === SOLICITANTE_EMPTY) sp.append("solicitante", SOLICITANTE_EMPTY);
-      else if (solicitanteFilter !== SOLICITANTE_ALL) sp.append("solicitante", solicitanteFilter);
-      const qs = sp.toString();
-      const res = await fetch(qs ? `/api/control-operaciones?${qs}` : "/api/control-operaciones", {
+      const res = await fetch("/api/control-operaciones", {
         cache: "no-store",
       });
       const j = (await res.json()) as ApiPage & { loadStrategy?: unknown };
@@ -816,7 +817,7 @@ export function ControlOperacionesPanel() {
     } finally {
       setLoading(false);
     }
-  }, [enrichHeavyForSlice, registerDriverMetas, solicitanteFilter]);
+  }, [enrichHeavyForSlice, registerDriverMetas]);
 
   const reloadTable = useCallback(() => {
     setSelected(new Set());

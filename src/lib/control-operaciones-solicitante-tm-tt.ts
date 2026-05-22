@@ -36,14 +36,21 @@ export function buildSolicitanteFilterOptions(params: {
   }
   return [
     { value: SOLICITANTE_FILTER_ALL, label: "Todos" },
-    { value: SOLICITANTE_FILTER_EMPTY, label: "Vacíos" },
+    { value: SOLICITANTE_FILTER_EMPTY, label: "Vacío" },
     ...Array.from(set)
       .sort((a, b) => a.localeCompare(b, "es"))
       .map((s) => ({ value: s, label: s })),
   ];
 }
 
-/** Fila visible si el filtro por etiqueta de solicitante coincide (OR en TM y TT). */
+function containsInsensitive(hay: string, needle: string): boolean {
+  const h = hay.trim().toLowerCase();
+  const n = needle.trim().toLowerCase();
+  if (!n) return false;
+  return h.includes(n);
+}
+
+/** Fila visible si el filtro por solicitante coincide (OR en TM y TT, contiene, sin distinguir mayúsculas). */
 export function rowMatchesSolicitanteFilter(params: {
   solicitanteFilter: string;
   cell: ControlSolicitanteCell | undefined;
@@ -52,9 +59,16 @@ export function rowMatchesSolicitanteFilter(params: {
   const { solicitanteFilter, cell, operatorLabelByValue } = params;
   const ltm = labelForOperatorId(cell?.solicitante_tm, operatorLabelByValue);
   const ltt = labelForOperatorId(cell?.solicitante_tt, operatorLabelByValue);
+  const rawTm = String(cell?.solicitante_tm ?? "").trim();
+  const rawTt = String(cell?.solicitante_tt ?? "").trim();
   if (solicitanteFilter === SOLICITANTE_FILTER_EMPTY) {
-    return !ltm && !ltt;
+    return !ltm && !ltt && !rawTm && !rawTt;
   }
   if (solicitanteFilter === SOLICITANTE_FILTER_ALL) return true;
-  return ltm === solicitanteFilter || ltt === solicitanteFilter;
+  return (
+    containsInsensitive(ltm, solicitanteFilter) ||
+    containsInsensitive(ltt, solicitanteFilter) ||
+    containsInsensitive(rawTm, solicitanteFilter) ||
+    containsInsensitive(rawTt, solicitanteFilter)
+  );
 }

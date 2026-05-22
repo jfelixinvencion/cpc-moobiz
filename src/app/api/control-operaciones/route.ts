@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { formatApiError } from "@/lib/format-api-error";
 import type { DriverLiveAvailability } from "@/lib/control-operaciones-gps-filter";
-import { SOLICITANTE_FILTER_EMPTY, type ControlSolicitanteCell } from "@/lib/control-operaciones-solicitante-tm-tt";
+import type { ControlSolicitanteCell } from "@/lib/control-operaciones-solicitante-tm-tt";
 import { mapExcelRowToControlDriver, type ControlDriverExcelRow } from "@/lib/control-operaciones-map";
 import { semanaLabelLiquidaciones } from "@/lib/control-operaciones-semana";
 import { assertQualityReadAccess, assertQualityWriteAccess } from "@/lib/panel-session";
@@ -46,12 +46,14 @@ function pickSemaforo(row: Record<string, unknown>): string {
 }
 
 function pickIdConductorLiq(row: Record<string, unknown>): string {
-  const v = row.id_conductor ?? row.ID_Conductor ?? row["id conductor"];
+  const v =
+    row.id_conductor ?? row["ID Conductor"] ?? row.ID_Conductor ?? row["id conductor"];
   return v === null || v === undefined ? "" : String(v).trim();
 }
 
 function pickSemanaLabel(row: Record<string, unknown>): string {
-  const v = row.semana_label ?? row.SEMANA_LABEL ?? row["semana_label"];
+  const v =
+    row.semana ?? row.Semana ?? row.semana_label ?? row.SEMANA_LABEL ?? row["semana_label"];
   return v === null || v === undefined ? "" : String(v).trim();
 }
 
@@ -260,16 +262,14 @@ async function fetchServCountsByDriverIds(drIds: string[]): Promise<Record<strin
   return Object.fromEntries(counts.entries());
 }
 
-async function fetchLiquidacionesSemaforoBySemanaLabel(
-  semanaLabel: string,
-): Promise<Record<string, string>> {
+async function fetchSemaforoBySemanaLabel(semanaLabel: string): Promise<Record<string, string>> {
   const sb = getSupabaseAdmin();
   const map: Record<string, string> = {};
   const { data, error } = await sb
     .schema("reportes")
-    .from("liquidaciones_conductores_resumen_mv")
-    .select('id_conductor,semana_label,"Semaforo"')
-    .eq("semana_label", semanaLabel);
+    .from("semaforo")
+    .select('id_conductor:"ID Conductor",semana:"Semana","Semaforo"')
+    .eq("Semana", semanaLabel);
   if (error) throw error;
   const rows = Array.isArray(data) ? data : [];
   for (const raw of rows) {
@@ -376,41 +376,6 @@ function controlByIdFromRows(
   return controlById;
 }
 
-function operatorIdsMatchingSolicitanteLabels(
-  labels: string[],
-  operatorOptions: { value: string; label: string }[],
-): Set<string> {
-  const want = new Set(labels.map((l) => l.trim()).filter(Boolean));
-  const ids = new Set<string>();
-  for (const o of operatorOptions) {
-    if (want.has(o.label) || want.has(o.value)) ids.add(o.value);
-  }
-  return ids;
-}
-
-function filterDriversBySolicitanteParams(
-  drivers: ControlDriverExcelRow[],
-  controlById: Record<string, ControlSolicitanteCell>,
-  solicitanteParams: string[],
-  operatorOptions: { value: string; label: string }[],
-): ControlDriverExcelRow[] {
-  if (solicitanteParams.length === 0) return drivers;
-  if (solicitanteParams.length === 1 && solicitanteParams[0] === SOLICITANTE_FILTER_EMPTY) {
-    return drivers.filter((d) => {
-      const c = controlById[d.id_conductor];
-      return !normCellText(c?.solicitante_tm) && !normCellText(c?.solicitante_tt);
-    });
-  }
-  const idSet = operatorIdsMatchingSolicitanteLabels(solicitanteParams, operatorOptions);
-  if (idSet.size === 0) return [];
-  return drivers.filter((d) => {
-    const c = controlById[d.id_conductor];
-    const tm = normCellText(c?.solicitante_tm);
-    const tt = normCellText(c?.solicitante_tt);
-    return (tm != null && idSet.has(tm)) || (tt != null && idSet.has(tt));
-  });
-}
-
 /**
  * GET principal (sin partial): solo página de drivers + control_operaciones + meta.
  * Causa histórica de timeout 57014: Promise.all de (a) paginación completa de la vista con select(*),
@@ -471,7 +436,7 @@ export async function GET(request: NextRequest) {
       const t0 = nowMs();
       const semanaLabel =
         url.searchParams.get("semanaLabel")?.trim() || semanaLabelLiquidaciones();
-      const semaforoById = await fetchLiquidacionesSemaforoBySemanaLabel(semanaLabel);
+      const semaforoById = await fetchSemaforoBySemanaLabel(semanaLabel);
       const semaforoOptions = Array.from(
         new Set(
           Object.values(semaforoById)
@@ -505,34 +470,13 @@ export async function GET(request: NextRequest) {
     const controlById = controlByIdFromRows(controlRows);
     const semanaLabel = semanaLabelLiquidaciones();
 
-    const solicitanteParams = url.searchParams.getAll("solicitante").map((s) => s.trim()).filter(Boolean);
-    let driversResponse = drivers;
-    let gpsAvailabilityResponse = gpsAvailabilityById;
-    if (solicitanteParams.length > 0) {
-      const tSol = nowMs();
-      const operatorOptions = await fetchOperatorsActivos();
-      driversResponse = filterDriversBySolicitanteParams(
-        drivers,
-        controlById,
-        solicitanteParams,
-        operatorOptions,
-      );
-      const allowed = new Set(driversResponse.map((d) => d.id_conductor));
-      const gpsFiltered: Record<string, DriverLiveAvailability | null> = {};
-      for (const [k, v] of Object.entries(gpsAvailabilityById)) {
-        if (allowed.has(k)) gpsFiltered[k] = v;
-      }
-      gpsAvailabilityResponse = gpsFiltered;
-      logBlock(`solicitante filter params=${solicitanteParams.length} drivers=${driversResponse.length}`, tSol);
-    }
-
     const tFlName = nowMs();
     const flNameById = await fetchFlNameMapByDriverIds(
-      driversResponse.map((d) => String(d.id_conductor ?? "").trim()).filter(Boolean),
+      drivers.map((d) => String(d.id_conductor ?? "").trim()).filter(Boolean),
     );
-    logBlock(`fl_name map drivers=${driversResponse.length}`, tFlName);
+    logBlock(`fl_name map drivers=${drivers.length}`, tFlName);
 
-    const driversWithFlName = driversResponse.map((row) => {
+    const driversWithFlName = drivers.map((row) => {
       const idKey = String(
         row.id_conductor ?? (row as Record<string, unknown>)["ID Conductor"] ?? (row as { id?: unknown }).id ?? "",
       ).trim();
@@ -543,7 +487,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       drivers: driversWithFlName,
-      gpsAvailabilityById: gpsAvailabilityResponse,
+      gpsAvailabilityById,
       controlById,
       total,
       approvedCount: drivers.length,

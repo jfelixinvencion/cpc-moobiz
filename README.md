@@ -104,7 +104,7 @@ Los scripts de sync corren de forma independiente y no dependen de `.env.local` 
 
 - `node scripts/sync_moobiz_drivers.js`
 - `node scripts/sync_moobiz_logs_incremental.js`
-- `node scripts/sync_moobiz_history.js`
+- `node scripts/sync_moobiz_history.js` (modo normal por defecto: `NORMAL_LIMIT_FIXED=2000`, `NORMAL_PAGES_FIXED=2`; sobreescribir vía env o `--limit` / `--page`)
 
 Comportamiento de entorno:
 

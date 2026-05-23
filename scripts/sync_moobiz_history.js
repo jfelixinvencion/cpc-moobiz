@@ -2,7 +2,8 @@
  * Sync de historial Moobiz -> Supabase (public.moobiz_services_history).
  *
  * Modo normal (defecto): order_col=date_updated, order_dir=desc, date_from=hoy−20 (YYYY-MM-DD),
- * date_to=ahora (ISO), 2×1000 salvo override con --limit / --page. --order-col / --order_col
+ * date_to=ahora (ISO), 2×2000 por defecto (NORMAL_PAGES_FIXED×NORMAL_LIMIT_FIXED; env override).
+ * --limit / --page en CLI. --order-col / --order_col
  * para date_scheduled u date_updated. Dedupe, fetchExistingIdsChunked, upsert, last_run;
  * si order_col=date_updated también guarda moobiz_services_history_last_date_updated (máx.
  * date_updated del run). Sin overlaps en sync_state.
@@ -51,8 +52,9 @@ const MOOBIZ_WEB_ORIGIN = MOOBIZ_API_BASE_URL;
 /** Solo modo normal: marca de última corrida (no se usa como filtro). */
 const LAST_RUN_KEY = "moobiz_services_history_last_run";
 const LAST_DATE_UPDATED_KEY = "moobiz_services_history_last_date_updated";
-const NORMAL_PAGES_FIXED = 2;
-const NORMAL_LIMIT_FIXED = 1000;
+// Leer límite y páginas desde variables de entorno (fallback: 2000×2 por corrida en modo normal).
+const NORMAL_LIMIT_FIXED = Number(process.env.NORMAL_LIMIT_FIXED) || 2000;
+const NORMAL_PAGES_FIXED = Number(process.env.NORMAL_PAGES_FIXED) || 2;
 const NORMAL_DELAY_MS_FIXED = 200;
 
 const PAGE_SIZE_DEFAULT = Number.parseInt(process.env.MOOBIZ_HISTORY_PAGE_SIZE || "", 10) || 1000;

@@ -16,7 +16,8 @@
     "sync:services": "node scripts/sync_moobiz_services.js",
     "sync:logs": "node scripts/sync_moobiz_logs_incremental.js",
     "recover:fv-items": "node -r dotenv/config scripts/recover_moobiz_drivers_fv_items.js",
-    "probe:drivers-pagination": "node scripts/probe_moobiz_drivers_pagination.js"
+    "probe:drivers-pagination": "node scripts/probe_moobiz_drivers_pagination.js",
+    "dry-run:moobiz-timezone": "node -r dotenv/config scripts/dry_run_moobiz_timezone.js"
   },
   "dependencies": {
     "@supabase/ssr": "^0.10.2",
@@ -31,6 +32,7 @@
     "dotenv": "^17.4.2",
     "leaflet": "^1.9.4",
     "lucide-react": "^1.8.0",
+    "luxon": "^3.7.2",
     "next": "16.2.3",
     "pg": "^8.20.0",
     "radix-ui": "^1.4.3",
@@ -45,6 +47,7 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/luxon": "^3.7.1",
     "@types/node": "^20",
     "@types/pg": "^8.20.0",
     "@types/react": "^19",

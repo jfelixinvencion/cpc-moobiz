@@ -1,8 +1,8 @@
 /**
  * Sync de historial Moobiz -> Supabase (public.moobiz_services_history).
  *
- * Modo normal (defecto): order_col=date_updated, order_dir=desc, date_from=hoy−20 (YYYY-MM-DD),
- * date_to=ahora (ISO), 2×2000 por defecto (NORMAL_PAGES_FIXED×NORMAL_LIMIT_FIXED; env override).
+ * Modo normal (defecto): order_col=date_updated, order_dir=desc, date_from=hoy−20 (YYYY-MM-DD en America/Lima),
+ * date_to=ahora (UTC ISO), 2×2000 por defecto. Fechas API sin zona → parseo Lima→UTC (`helpers/moobiz-dates.js`).
  * --limit / --page en CLI. --order-col / --order_col
  * para date_scheduled u date_updated. Dedupe, fetchExistingIdsChunked, upsert, last_run;
  * si order_col=date_updated también guarda moobiz_services_history_last_date_updated (máx.
@@ -20,6 +20,15 @@ if (!process.env.GITHUB_ACTIONS && !process.env.CI) {
 const { randomUUID } = require("node:crypto");
 const { ensureMoobizToken, redactToken } = require("../helpers/refresh_moobiz_token");
 const { fetchWithRetry } = require("../helpers/moobiz_fetch_retry");
+const {
+  parseMoobizDateAsUTC,
+  parseMoobizDateToMillis,
+  moobizYmdDaysAgo,
+  moobizYmdStartUtcMillis,
+  moobizDateToNowUtcIso,
+  maxMoobizDateUpdatedIsoFromRows,
+  getMoobizDefaultTimezone,
+} = require("../helpers/moobiz-dates");
 const { ensureEnv, getMoobizTokenFallback, getMoobizTokenFromSyncStateOnly, getSupabaseUrl } = require("./lib/env");
 
 const EXIT_CODES = {
@@ -243,13 +252,12 @@ async function ensureMoobizBearerNoSyncState() {
   return moobizBearer;
 }
 
+/** Normaliza fechas Moobiz (Lima sin Z) → UTC ISO; ISO con T/Z sin cambio de zona explícita. */
 function toIsoDate(value) {
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toISOString();
+  return parseMoobizDateAsUTC(value);
 }
 
-/** Fecha calendario local YYYY-MM-DD (como envía la UI en date_from / date_to). */
+/** Fecha calendario YYYY-MM-DD en zona Moobiz (fallback para overrides manuales). */
 function formatYyyyMmDdFromDate(d) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -257,11 +265,9 @@ function formatYyyyMmDdFromDate(d) {
   return `${y}-${m}-${day}`;
 }
 
-/** Hoy − N días en calendario local, YYYY-MM-DD (API). */
+/** Hoy − N días en calendario America/Lima (DEFAULT_TIMEZONE), YYYY-MM-DD para API. */
 function ymdDaysAgoLocal(days) {
-  const d = new Date();
-  d.setDate(d.getDate() - days);
-  return formatYyyyMmDdFromDate(d);
+  return moobizYmdDaysAgo(days);
 }
 
 /** Normaliza CLI/ISO a YYYY-MM-DD para el API. */
@@ -282,7 +288,7 @@ function finalizedMsFromRaw(raw) {
     toIsoDate(raw?.date_completed) ||
     toIsoDate(raw?.date_end);
   if (!iso) return NaN;
-  return Date.parse(iso);
+  return parseMoobizDateToMillis(iso) ?? Date.parse(iso);
 }
 
 function parseMoney(value) {
@@ -325,22 +331,17 @@ function pickFechaActualizadaSample(r) {
   return "";
 }
 
-/** Mayor date_updated (ISO) entre filas dedupe; timestamps vía Date.parse (sync_state). */
+/** Mayor date_updated (UTC ISO) entre filas dedupe; parseo Lima → UTC (sync_state). */
 function maxDateUpdatedIsoFromRows(rowsDedup) {
   if (!rowsDedup || rowsDedup.length === 0) return null;
   const cands = rowsDedup
-    .map((r) => (r.raw_data && r.raw_data.date_updated) || r.date_updated)
+    .map((r) => {
+      const raw = (r.raw_data && r.raw_data.date_updated) || r.date_updated;
+      return { raw, utc: parseMoobizDateAsUTC(raw) };
+    })
     .slice(0, 50);
-  console.log("[history-sync] candidatos date_updated:", cands);
-  const maxTs = rowsDedup.reduce((acc, r) => {
-    const cand =
-      (r.raw_data && (r.raw_data.date_updated ?? r.raw_data["date_updated"])) || r.date_updated || null;
-    if (cand == null || cand === "") return acc;
-    const ts = Date.parse(String(cand));
-    if (Number.isNaN(ts)) return acc;
-    return acc === null || ts > acc ? ts : acc;
-  }, null);
-  return maxTs != null ? new Date(maxTs).toISOString() : null;
+  console.log("[history-sync] candidatos date_updated (raw→utc):", cands);
+  return maxMoobizDateUpdatedIsoFromRows(rowsDedup);
 }
 
 /** order_col permitido en modo normal (CLI --order-col= o --order_col=). */
@@ -590,9 +591,11 @@ async function countExistingHistoryIds(ids) {
 }
 
 function computeCursorDate(rows, fallbackIso) {
-  let max = fallbackIso ? Date.parse(fallbackIso) : NaN;
+  let max = fallbackIso ? (parseMoobizDateToMillis(fallbackIso) ?? Date.parse(fallbackIso)) : NaN;
   for (const row of rows) {
-    const t = row?.date_finalized ? Date.parse(row.date_finalized) : NaN;
+    const t = row?.date_finalized
+      ? (parseMoobizDateToMillis(row.date_finalized) ?? Date.parse(row.date_finalized))
+      : NaN;
     if (!Number.isNaN(t) && (Number.isNaN(max) || t > max)) max = t;
   }
   if (Number.isNaN(max)) return fallbackIso || null;
@@ -632,10 +635,9 @@ async function sync() {
       moobizBearer = initialToken;
     }
 
-    const date_to = new Date().toISOString();
-    console.log(
-      `[history-sync] date_to_utc=${date_to} date_to_local=${new Date(date_to).toLocaleString()}`,
-    );
+    const date_to = moobizDateToNowUtcIso();
+    const moobizTz = getMoobizDefaultTimezone();
+    console.log(`[history-sync] timezone=${moobizTz} date_to_utc=${date_to}`);
 
     if (RUN_MODE !== "normal" && RUN_MODE !== "pages_backfill") {
       throw new Error(`Modo no soportado: ${RUN_MODE}. Usa --mode=pages_backfill o sin --mode.`);
@@ -943,7 +945,7 @@ async function sync() {
     const seen = new Set();
     let page = 1;
     let continueLoop = true;
-    const dateFromMs = dateFromYmdManual ? Date.parse(dateFromYmdManual) : NaN;
+    const dateFromMs = dateFromYmdManual ? moobizYmdStartUtcMillis(dateFromYmdManual) : NaN;
 
     while (continueLoop) {
       if (page > effectiveMaxPages) {

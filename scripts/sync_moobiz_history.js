@@ -610,6 +610,26 @@ function resolveStopDays() {
   return Number.isFinite(n) && n > 0 ? n : 5;
 }
 
+/** Renueva bearer cuando MOOBIZ_TOKEN en env está caducado (API devuelve ok:false not_logged). */
+async function ensureBearerForExtraction(opts = {}) {
+  if (opts.forceRefresh) {
+    moobizBearer = null;
+    try {
+      const fresh = await ensureMoobizToken();
+      moobizBearer = fresh;
+      console.log("[history-sync] Bearer renovado vía ensureMoobizToken (extracción)");
+      return fresh;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn(`[history-sync] ensureMoobizToken falló (${msg}) — login admin`);
+      const fresh = await moobizAdminLogin();
+      moobizBearer = fresh;
+      return fresh;
+    }
+  }
+  return ensureMoobizBearer();
+}
+
 /** Modo normal: extracción por umbral + mismos upserts/sync_state que antes. */
 async function runThresholdExtractionNormal() {
   const runStartedAt = new Date().toISOString();
@@ -641,7 +661,8 @@ async function runThresholdExtractionNormal() {
     tmpDir,
     output_path: outputPath,
     auditPath,
-    ensureBearer: ensureMoobizBearer,
+    ensureBearer: ensureBearerForExtraction,
+    refreshBearer: () => ensureBearerForExtraction({ forceRefresh: true }),
     servicesUrl: MOOBIZ_SERVICES_URL,
     webOrigin: MOOBIZ_WEB_ORIGIN,
     userAgent: CHROME_UA,

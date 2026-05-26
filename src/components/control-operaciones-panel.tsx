@@ -1848,11 +1848,15 @@ export function ControlOperacionesPanel() {
 function ObservacionCell(props: { initial: string; onCommit: (t: string) => void }) {
   const [v, setV] = useState(props.initial);
   const tRef = useRef<number | null>(null);
+  const isFocusedRef = useRef(false);
+  const vRef = useRef(v);
+  vRef.current = v;
   const commitRef = useRef(props.onCommit);
   commitRef.current = props.onCommit;
 
   useEffect(() => {
-    setV(props.initial);
+    if (isFocusedRef.current) return;
+    setV((cur) => (cur === props.initial ? cur : props.initial));
   }, [props.initial]);
 
   useEffect(() => {
@@ -1874,13 +1878,15 @@ function ObservacionCell(props: { initial: string; onCommit: (t: string) => void
       value={v}
       data-control-edit
       onFocus={(e) => {
+        isFocusedRef.current = true;
         e.currentTarget.setAttribute("data-control-edit", "true");
       }}
       onBlur={(e) => {
+        isFocusedRef.current = false;
         e.currentTarget.setAttribute("data-control-edit", "false");
         if (tRef.current != null) window.clearTimeout(tRef.current);
         tRef.current = null;
-        commitRef.current(v);
+        commitRef.current(vRef.current);
       }}
       onChange={(e) => {
         const next = e.target.value;

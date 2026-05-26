@@ -111,6 +111,26 @@ function percentile(sorted, p) {
   return sorted[Math.max(0, Math.min(idx, sorted.length - 1))];
 }
 
+/** Mismo criterio que scripts/sync_moobiz_history.js extractItems */
+function extractItemsFromBody(body) {
+  if (Array.isArray(body)) return body;
+  if (body && Array.isArray(body.items)) return body.items;
+  if (body && Array.isArray(body.data)) return body.data;
+  if (body && Array.isArray(body.services)) return body.services;
+  return [];
+}
+
+function writeDebugRawResponse(cfg, page, payload) {
+  if (process.env.MOOBIZ_EXTRACTION_DEBUG !== "1" || !cfg.tmpDir || !cfg.run_id) return;
+  try {
+    mkdirSync(cfg.tmpDir, { recursive: true });
+    const p = join(cfg.tmpDir, `moobiz-raw-response-${cfg.run_id}-page-${page}.json`);
+    writeFileSync(p, JSON.stringify(payload, null, 2), "utf8");
+  } catch {
+    /* ignore */
+  }
+}
+
 function publicItem(row) {
   return {
     id: row.id,
@@ -145,7 +165,7 @@ async function fetchServicesPageExtraction(cfg, page) {
     pause_ms,
   } = cfg;
 
-  const bearer = await ensureBearer();
+  let bearer = await ensureBearer();
   const qs = new URLSearchParams({
     page: String(page),
     limit: String(limit),
@@ -208,9 +228,43 @@ async function fetchServicesPageExtraction(cfg, page) {
         return { http_status: res.status, error: "invalid_json", elapsed_ms, retries: attempt };
       }
 
-      const items = Array.isArray(body)
-        ? body
-        : body?.items || body?.data || body?.services || [];
+      writeDebugRawResponse(cfg, page, {
+        status: res.status,
+        headers: headerSnippet(res),
+        url,
+        body,
+        body_preview_first_200_bytes: text.slice(0, 200),
+      });
+
+      if (body && typeof body === "object" && !Array.isArray(body) && body.ok === false) {
+        const msg = String(body.msg || "");
+        const authInvalid = /not_logged|unauthorized|auth/i.test(msg);
+        if (authInvalid && typeof cfg.refreshBearer === "function" && !cfg._authRefreshUsed) {
+          cfg._authRefreshUsed = true;
+          console.warn(
+            `[moobiz-extraction] API ok=false msg=${msg} — renovando token y reintentando página ${page}`,
+          );
+          const refreshed = await cfg.refreshBearer();
+          if (refreshed && String(refreshed).trim()) {
+            bearer = String(refreshed).trim();
+          } else {
+            bearer = await ensureBearer();
+          }
+          continue;
+        }
+        return {
+          http_status: res.status,
+          error: `api_ok_false:${msg || "unknown"}`,
+          api_msg: msg,
+          api_ok_false: true,
+          elapsed_ms,
+          retries: attempt,
+          headers: headerSnippet(res),
+          body_snippet: text.slice(0, 300),
+        };
+      }
+
+      const items = extractItemsFromBody(body);
       return {
         http_status: res.status,
         elapsed_ms,
@@ -220,6 +274,8 @@ async function fetchServicesPageExtraction(cfg, page) {
         rows: items,
         retries: attempt,
         headers: headerSnippet(res),
+        api_ok: body?.ok,
+        api_msg: body?.msg,
       };
     } catch (e) {
       if (attempt >= retries) {
@@ -567,5 +623,6 @@ module.exports = {
   splitPageRowsByThreshold,
   dedupeRawItemsKeepLatest,
   parseItem,
+  extractItemsFromBody,
   DEFAULTS,
 };

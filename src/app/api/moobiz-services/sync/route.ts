@@ -17,7 +17,10 @@ async function readSyncTarget(request: NextRequest): Promise<"services" | "histo
   }
 }
 
-/** Sync manual: Moobiz dispatcher → `moobiz_services`, o disparo GitHub `sync-history` si `target: "history"`. */
+/**
+ * Sync manual: Moobiz dispatcher → `moobiz_services`, o disparo GitHub `sync-history` si `target: "history"`.
+ * Historial (`target: "history"`): fechas Moobiz se normalizan en `scripts/sync_moobiz_history.js` vía `helpers/moobiz-dates.js` (Lima→UTC).
+ */
 export async function POST(request: NextRequest) {
   try {
     console.log("[services-sync][AUDIT] POST /api/moobiz-services/sync iniciado");

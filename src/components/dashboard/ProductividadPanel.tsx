@@ -77,7 +77,6 @@ const TYPE_COLORS: Record<ProductividadLogType, string> = {
 
 /** Opciones en cascada; type_user / type_log_name son implícitos en SQL (no UI). */
 const FILTER_FIELDS: ProductividadFilterField[] = [
-  "global",
   "estado",
   "n_semana",
   "us_name",
@@ -307,8 +306,15 @@ export function ProductividadPanel() {
             `/api/dashboard/productividad/filters?field=${field}&${q}`,
             { cache: "no-store" },
           );
-          const body = (await res.json()) as { values?: string[]; error?: string };
-          if (!res.ok) throw new Error(body.error ?? res.statusText);
+          const body = (await res.json()) as {
+            values?: string[];
+            error?: string;
+            sql?: string;
+          };
+          if (!res.ok) {
+            console.error("[productividad/filters]", field, body.error, body.sql);
+            throw new Error(body.error ?? res.statusText);
+          }
           return [field, Array.isArray(body.values) ? body.values : []] as const;
         }),
       );
@@ -826,13 +832,6 @@ export function ProductividadPanel() {
       >
         <div className="flex flex-wrap items-end gap-3">
           <ProductividadFilterMulti
-            label="Global"
-            options={filterOptions.global ?? []}
-            selected={filters.global}
-            onChange={(v) => setFilter("global", v)}
-            loading={filterLoading}
-          />
-          <ProductividadFilterMulti
             label="Estado"
             options={filterOptions.estado ?? []}
             selected={filters.estado}
@@ -847,7 +846,7 @@ export function ProductividadPanel() {
             loading={filterLoading}
           />
           <ProductividadFilterMulti
-            label="Usuario"
+            label="Solicitante"
             options={filterOptions.us_name ?? []}
             selected={filters.usName}
             onChange={(v) => setFilter("usName", v)}

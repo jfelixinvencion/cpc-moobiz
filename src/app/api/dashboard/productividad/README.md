@@ -1,4 +1,4 @@
-# API Productividad (`reportes.moobiz_logs_enriched`)
+# API Productividad (`reportes.productividad_operaciones`)
 
 Rutas bajo `/api/dashboard/productividad/*`. Requieren `DATABASE_URL` (mismo pool que el dashboard de servicios).
 
@@ -8,12 +8,12 @@ Todos los endpoints aceptan los mismos filtros. Los valores de fecha deben ir en
 
 | Parámetro | Tipo | Descripción |
 |-----------|------|-------------|
-| `global` | repetible | Array; omitir = sin filtro |
-| `estado` | repetible | |
-| `n_semana` | repetible | |
+| `global` | repetible | **Obsoleto** — no existe en `productividad_operaciones`; ignorado |
+| `estado` | repetible | Columna `"Estado"` |
+| `n_semana` | repetible | Columna `"N_Semana"` |
 | `type_user` | repetible | |
 | `type_log_name` | repetible | **No** enviar en `/cards` (las tarjetas ignoran este filtro) |
-| `us_name` | repetible | |
+| `us_name` | repetible | Filtra columna `"Solicitante"` en la vista |
 | `fecha_from` | string | `DD/MM/YYYY` |
 | `fecha_to` | string | `DD/MM/YYYY` |
 | `limit` | number | Solo `/users` (default 20) |

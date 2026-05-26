@@ -50,13 +50,13 @@ test("isoInputToFechaParam convierte para API", () => {
 
 test("buildProductividadWhere omite filtro en cascada", () => {
   const p = parseProductividadParams(
-    new URLSearchParams("global=LIMA&estado=Activo"),
+    new URLSearchParams("estado=Activo&n_semana=22"),
   );
   const all = buildProductividadWhere(p);
-  const omitGlobal = buildProductividadWhere(p, "global");
-  assert.match(all.sql, /global/);
-  assert.doesNotMatch(omitGlobal.sql, /global/);
-  assert.match(omitGlobal.sql, /estado/);
+  const omitEstado = buildProductividadWhere(p, "estado");
+  assert.match(all.sql, /"Estado"/);
+  assert.doesNotMatch(omitEstado.sql, /"Estado"/);
+  assert.match(omitEstado.sql, /"N_Semana"/);
 });
 
 test("parseProductividadParams weekdays ISO 1..7", () => {
@@ -71,7 +71,7 @@ test("buildProductividadWhere aplica weekday y type_log_name opcionales", () => 
     new URLSearchParams("weekday=1&type_log_name=Creó&type_log_name=Asignó"),
   );
   const { sql, params } = buildProductividadWhere(p);
-  assert.match(sql, /to_char\(to_date\(fecha/);
+  assert.match(sql, /to_char\(to_date\("Fecha"/);
   assert.match(sql, /'ID'\)::int = ANY/);
   assert.ok(params.some((x) => Array.isArray(x) && x.includes(1)));
   assert.ok(
@@ -86,8 +86,8 @@ test("buildProductividadWhere aplica filtros implícitos Operador + 5 tipos", ()
     new URLSearchParams("type_user=Admin&type_log_name=Otro"),
   );
   const { sql } = buildProductividadWhere(p);
-  assert.match(sql, /type_user::text = 'Operador'/);
-  assert.match(sql, /type_log_name::text = ANY\(ARRAY\[/);
+  assert.match(sql, /"Tp_user"::text = 'Operador'/);
+  assert.match(sql, /"Actividad"::text = ANY\(ARRAY\[/);
   assert.match(sql, /'Creó'/);
   assert.match(sql, /'Quitó'/);
   assert.doesNotMatch(sql, /\$1::text\[\].*type_user/);
@@ -133,10 +133,11 @@ test("smoke: runProductividadByDate y ByDateHour", async () => {
 });
 
 test("smoke: runProductividadFilterOptions devuelve array", async () => {
-  const pool = mockPool([{ v: "LIMA" }]);
+  const pool = mockPool([{ v: "Finalizado" }]);
   const parsed = parseProductividadParams(new URLSearchParams());
-  const opts = await runProductividadFilterOptions(pool, parsed, "global");
-  assert.deepEqual(opts, ["LIMA"]);
+  const { values, sql } = await runProductividadFilterOptions(pool, parsed, "estado");
+  assert.deepEqual(values, ["Finalizado"]);
+  assert.match(sql, /"Estado"/);
 });
 
 test("appendProductividadParams no envía type_log_name si skip", () => {

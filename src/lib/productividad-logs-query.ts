@@ -7,7 +7,35 @@ import {
   type ProductividadParsedParams,
 } from "./productividad-logs-params.ts";
 
-const TABLE = "reportes.moobiz_logs_enriched";
+const TABLE = "reportes.productividad_operaciones";
+
+/**
+ * Parámetro API → columna real en reportes.productividad_operaciones.
+ * Identificadores quoted (PostgreSQL case-sensitive).
+ */
+export const PRODUCTIVIDAD_FILTER_FIELD_TO_COLUMN = {
+  estado: '"Estado"',
+  n_semana: '"N_Semana"',
+  us_name: '"Solicitante"',
+  type_user: '"Tp_user"',
+  type_log_name: '"Actividad"',
+} as const satisfies Record<
+  Exclude<ProductividadFilterField, "fecha" | "global">,
+  string
+>;
+
+/** Columnas de reportes.productividad_operaciones (identificadores quoted en SQL). */
+const COL = {
+  estado: PRODUCTIVIDAD_FILTER_FIELD_TO_COLUMN.estado,
+  nSemana: PRODUCTIVIDAD_FILTER_FIELD_TO_COLUMN.n_semana,
+  solicitante: PRODUCTIVIDAD_FILTER_FIELD_TO_COLUMN.us_name,
+  fecha: '"Fecha"',
+  hora: '"Hora"',
+  actividad: PRODUCTIVIDAD_FILTER_FIELD_TO_COLUMN.type_log_name,
+  tpUser: PRODUCTIVIDAD_FILTER_FIELD_TO_COLUMN.type_user,
+} as const;
+
+const FECHA_BUCKET = `${COL.fecha} || ' ' || ${COL.hora}`;
 
 export type FilterSql = {
   sql: string;
@@ -20,8 +48,8 @@ function productividadImplicitWhereParts(): string[] {
   ).join(", ");
   const operador = PRODUCTIVIDAD_IMPLICIT_TYPE_USER.replace(/'/g, "''");
   return [
-    `type_user::text = '${operador}'`,
-    `type_log_name::text = ANY(ARRAY[${logTypesSql}]::text[])`,
+    `${COL.tpUser}::text = '${operador}'`,
+    `${COL.actividad}::text = ANY(ARRAY[${logTypesSql}]::text[])`,
   ];
 }
 
@@ -40,23 +68,22 @@ export function buildProductividadWhere(
     parts.push(`($${params.length}::text[] IS NULL OR ${col}::text = ANY($${params.length}::text[]))`);
   };
 
-  addArray("global", parsed.global, "global");
-  addArray("estado", parsed.estado, "estado");
-  addArray("n_semana", parsed.nSemana?.map(String) ?? null, "n_semana");
-  addArray("us_name", parsed.usName, "us_name");
+  addArray(COL.estado, parsed.estado, "estado");
+  addArray(COL.nSemana, parsed.nSemana?.map(String) ?? null, "n_semana");
+  addArray(COL.solicitante, parsed.usName, "us_name");
 
   if (parsed.typeLogName != null) {
     if (parsed.typeLogName.length === 0) {
       parts.push("FALSE");
     } else if (omit !== "type_log_name") {
-      addArray("type_log_name", parsed.typeLogName, "type_log_name");
+      addArray(COL.actividad, parsed.typeLogName, "type_log_name");
     }
   }
 
   if (parsed.weekdays != null && parsed.weekdays.length > 0) {
     params.push(parsed.weekdays);
     parts.push(
-      `(to_char(to_date(fecha,'DD/MM/YYYY'), 'ID')::int = ANY($${params.length}::int[]))`,
+      `(to_char(to_date(${COL.fecha},'DD/MM/YYYY'), 'ID')::int = ANY($${params.length}::int[]))`,
     );
   }
 
@@ -64,13 +91,13 @@ export function buildProductividadWhere(
     if (parsed.fechaFrom) {
       params.push(parsed.fechaFrom);
       parts.push(
-        `(to_date(fecha,'DD/MM/YYYY') >= to_date($${params.length}::text,'DD/MM/YYYY'))`,
+        `(to_date(${COL.fecha},'DD/MM/YYYY') >= to_date($${params.length}::text,'DD/MM/YYYY'))`,
       );
     }
     if (parsed.fechaTo) {
       params.push(parsed.fechaTo);
       parts.push(
-        `(to_date(fecha,'DD/MM/YYYY') <= to_date($${params.length}::text,'DD/MM/YYYY'))`,
+        `(to_date(${COL.fecha},'DD/MM/YYYY') <= to_date($${params.length}::text,'DD/MM/YYYY'))`,
       );
     }
   }
@@ -80,54 +107,90 @@ export function buildProductividadWhere(
 }
 
 const FILTER_COLUMN: Record<
-  Exclude<ProductividadFilterField, "fecha">,
+  Exclude<ProductividadFilterField, "fecha" | "global">,
   string
 > = {
-  global: "global",
-  estado: "estado",
-  n_semana: "n_semana::text",
-  type_user: "type_user",
-  type_log_name: "type_log_name",
-  us_name: "us_name",
+  estado: COL.estado,
+  n_semana: `${COL.nSemana}::text`,
+  type_user: COL.tpUser,
+  type_log_name: COL.actividad,
+  us_name: COL.solicitante,
 };
+
+export type ProductividadFilterOptionsResult = {
+  values: string[] | { min: string | null; max: string | null };
+  sql: string;
+  columnSql: string | null;
+};
+
+export function formatProductividadSqlForLog(sql: string, params: unknown[]): string {
+  return `${sql.trim()}\n-- params: ${JSON.stringify(params)}`;
+}
+
+export function buildProductividadFilterOptionsQuery(
+  parsed: ProductividadParsedParams,
+  field: ProductividadFilterField,
+): { sql: string; params: unknown[]; columnSql: string | null } {
+  if (field === "global") {
+    throw new Error(
+      'El filtro "global" no existe en reportes.productividad_operaciones (sin columna Global).',
+    );
+  }
+
+  const { sql: whereSql, params } = buildProductividadWhere(parsed, field);
+
+  if (field === "fecha") {
+    const sql = `
+SELECT
+  to_char(MIN(to_date(${COL.fecha},'DD/MM/YYYY')), 'DD/MM/YYYY') AS min_fecha,
+  to_char(MAX(to_date(${COL.fecha},'DD/MM/YYYY')), 'DD/MM/YYYY') AS max_fecha
+FROM ${TABLE}
+WHERE ${whereSql}
+  AND ${COL.fecha} IS NOT NULL
+  AND trim(${COL.fecha}::text) <> ''
+`;
+    return { sql, params, columnSql: COL.fecha };
+  }
+
+  const columnSql = FILTER_COLUMN[field];
+  const sql = `
+SELECT DISTINCT ${columnSql} AS v
+FROM ${TABLE}
+WHERE ${whereSql}
+  AND ${columnSql} IS NOT NULL
+  AND trim(${columnSql}::text) <> ''
+ORDER BY 1
+LIMIT 500
+`;
+  return { sql, params, columnSql };
+}
 
 export async function runProductividadFilterOptions(
   pool: Pool,
   parsed: ProductividadParsedParams,
   field: ProductividadFilterField,
-): Promise<string[] | { min: string | null; max: string | null }> {
-  const { sql: whereSql, params } = buildProductividadWhere(parsed, field);
+): Promise<ProductividadFilterOptionsResult> {
+  const { sql, params, columnSql } = buildProductividadFilterOptionsQuery(parsed, field);
 
   if (field === "fecha") {
-    const q = `
-SELECT
-  to_char(MIN(to_date(fecha,'DD/MM/YYYY')), 'DD/MM/YYYY') AS min_fecha,
-  to_char(MAX(to_date(fecha,'DD/MM/YYYY')), 'DD/MM/YYYY') AS max_fecha
-FROM ${TABLE}
-WHERE ${whereSql}
-  AND fecha IS NOT NULL
-  AND trim(fecha::text) <> ''
-`;
     const { rows } = await pool.query<{ min_fecha: string | null; max_fecha: string | null }>(
-      q,
+      sql,
       params,
     );
     const row = rows[0];
-    return { min: row?.min_fecha ?? null, max: row?.max_fecha ?? null };
+    return {
+      values: { min: row?.min_fecha ?? null, max: row?.max_fecha ?? null },
+      sql: formatProductividadSqlForLog(sql, params),
+      columnSql,
+    };
   }
 
-  const col = FILTER_COLUMN[field];
-  const q = `
-SELECT DISTINCT ${col} AS v
-FROM ${TABLE}
-WHERE ${whereSql}
-  AND ${col} IS NOT NULL
-  AND trim(${col}::text) <> ''
-ORDER BY 1
-LIMIT 500
-`;
-  const { rows } = await pool.query<{ v: string }>(q, params);
-  return rows.map((r) => String(r.v ?? "").trim()).filter(Boolean);
+  const { rows } = await pool.query<{ v: string }>(sql, params);
+  return {
+    values: rows.map((r) => String(r.v ?? "").trim()).filter(Boolean),
+    sql: formatProductividadSqlForLog(sql, params),
+    columnSql,
+  };
 }
 
 export type UserChartRow = {
@@ -154,13 +217,13 @@ export async function runProductividadUserChart(
   const q = `
 WITH grouped AS (
   SELECT
-    us_name,
-    type_log_name,
+    ${COL.solicitante} AS us_name,
+    ${COL.actividad} AS type_log_name,
     COUNT(*)::int AS cnt,
-    COUNT(DISTINCT fecha || ' ' || hora)::int AS buckets
+    COUNT(DISTINCT ${FECHA_BUCKET})::int AS buckets
   FROM ${TABLE}
   WHERE ${whereSql}
-  GROUP BY us_name, type_log_name
+  GROUP BY ${COL.solicitante}, ${COL.actividad}
 ),
 user_totals AS (
   SELECT us_name, SUM(cnt)::int AS total_per_user
@@ -205,7 +268,7 @@ ORDER BY tu.sort_metric DESC, g.us_name, g.type_log_name
 `;
 
   const countQ = `
-SELECT COUNT(DISTINCT us_name)::int AS total
+SELECT COUNT(DISTINCT ${COL.solicitante})::int AS total
 FROM ${TABLE}
 WHERE ${whereSql}
 `;
@@ -244,8 +307,8 @@ export async function runProductividadCards(
 
   const cases = PRODUCTIVIDAD_LOG_TYPES.map(
     (t) => `
-  COUNT(*) FILTER (WHERE type_log_name = '${t.replace(/'/g, "''")}') AS total_${slugType(t)},
-  COUNT(DISTINCT fecha || ' ' || hora) FILTER (WHERE type_log_name = '${t.replace(/'/g, "''")}') AS buckets_${slugType(t)}`,
+  COUNT(*) FILTER (WHERE ${COL.actividad} = '${t.replace(/'/g, "''")}') AS total_${slugType(t)},
+  COUNT(DISTINCT ${FECHA_BUCKET}) FILTER (WHERE ${COL.actividad} = '${t.replace(/'/g, "''")}') AS buckets_${slugType(t)}`,
   ).join(",\n  ");
 
   const q = `
@@ -285,11 +348,11 @@ export async function runProductividadByDate(
 ): Promise<DateCountRow[]> {
   const { sql: whereSql, params } = buildProductividadWhere(parsed);
   const q = `
-SELECT fecha, COUNT(*)::int AS cnt
+SELECT ${COL.fecha} AS fecha, COUNT(*)::int AS cnt
 FROM ${TABLE}
 WHERE ${whereSql}
-GROUP BY fecha
-ORDER BY to_date(fecha,'DD/MM/YYYY')
+GROUP BY ${COL.fecha}
+ORDER BY to_date(${COL.fecha},'DD/MM/YYYY')
 `;
   const { rows } = await pool.query<DateCountRow>(q, params);
   return rows.map((r) => ({ fecha: String(r.fecha ?? ""), cnt: Number(r.cnt) || 0 }));
@@ -301,11 +364,11 @@ export async function runProductividadByDateHour(
 ): Promise<DateHourCountRow[]> {
   const { sql: whereSql, params } = buildProductividadWhere(parsed);
   const q = `
-SELECT fecha, hora::text AS hora, COUNT(*)::int AS cnt
+SELECT ${COL.fecha} AS fecha, ${COL.hora}::text AS hora, COUNT(*)::int AS cnt
 FROM ${TABLE}
 WHERE ${whereSql}
-GROUP BY fecha, hora
-ORDER BY to_date(fecha,'DD/MM/YYYY'), hora
+GROUP BY ${COL.fecha}, ${COL.hora}
+ORDER BY to_date(${COL.fecha},'DD/MM/YYYY'), ${COL.hora}
 `;
   const { rows } = await pool.query<DateHourCountRow>(q, params);
   return rows.map((r) => ({

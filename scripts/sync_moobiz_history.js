@@ -1,8 +1,9 @@
 /**
  * Sync de historial Moobiz -> Supabase (public.moobiz_services_history).
  *
- * Modo normal (defecto): order_col=date_updated, order_dir=desc, date_from=hoy−20 (YYYY-MM-DD en America/Lima),
- * date_to=ahora (UTC ISO), 2×2000 por defecto. Fechas API sin zona → parseo Lima→UTC (`helpers/moobiz-dates.js`).
+ * Modo normal (defecto): extracción paginada desc + corte cliente (frozen−N días, limit=200) vía
+ * `helpers/moobiz-history-extraction.js`; persistencia sin cambios (`upsertHistoryRows`). Fechas Lima→UTC.
+ * `--run-mode=dry_run|execute` (CI sin flag usa execute). `--stop-days=5` por defecto.
  * --limit / --page en CLI. --order-col / --order_col
  * para date_scheduled u date_updated. Dedupe, fetchExistingIdsChunked, upsert, last_run;
  * si order_col=date_updated también guarda moobiz_services_history_last_date_updated (máx.
@@ -30,6 +31,8 @@ const {
   getMoobizDefaultTimezone,
 } = require("../helpers/moobiz-dates");
 const { ensureEnv, getMoobizTokenFallback, getMoobizTokenFromSyncStateOnly, getSupabaseUrl } = require("./lib/env");
+const { syncMoobizHistoryExtraction } = require("../helpers/moobiz-history-extraction");
+const { join } = require("node:path");
 
 const EXIT_CODES = {
   MISSING_CRITICAL_ENVS: 2,
@@ -590,6 +593,148 @@ async function countExistingHistoryIds(ids) {
   return existing;
 }
 
+function resolveSyncRunMode() {
+  const fromCli = String(CLI_ARGS["run-mode"] || CLI_ARGS.run_mode || "").trim().toLowerCase();
+  if (fromCli === "execute" || fromCli === "dry_run") return fromCli;
+  const fromEnv = String(process.env.MOOBIZ_SYNC_RUN_MODE || "").trim().toLowerCase();
+  if (fromEnv === "execute" || fromEnv === "dry_run") return fromEnv;
+  if (process.env.GITHUB_ACTIONS || process.env.CI) return "execute";
+  return "dry_run";
+}
+
+function resolveStopDays() {
+  const n = Number.parseInt(
+    String(CLI_ARGS["stop-days"] || CLI_ARGS.stop_days || process.env.MOOBIZ_SYNC_STOP_DAYS || "5").trim(),
+    10,
+  );
+  return Number.isFinite(n) && n > 0 ? n : 5;
+}
+
+/** Modo normal: extracción por umbral + mismos upserts/sync_state que antes. */
+async function runThresholdExtractionNormal() {
+  const runStartedAt = new Date().toISOString();
+  const run_mode = resolveSyncRunMode();
+  const stop_days = resolveStopDays();
+  const mode = "threshold_extraction";
+  const tmpDir = join(process.cwd(), "tmp");
+  const runId = randomUUID();
+  const outputPath = join(tmpDir, `moobiz-extraction-${runId}.json`);
+  const auditPath = join(tmpDir, `audit-${runId}.json`);
+
+  console.log(
+    `[history-sync] modo=${mode} stop_days=${stop_days} run_mode=${run_mode} limit=200 max_pages=50`,
+  );
+
+  const normalizedBatches = [];
+
+  const report = await syncMoobizHistoryExtraction({
+    stop_days,
+    limit: 200,
+    pause_ms: 500,
+    timeout_ms: 15000,
+    retries: 3,
+    max_pages_safety: 50,
+    abort_if_too_many_rows: 10000,
+    batch_pages: 10,
+    run_mode,
+    run_id: runId,
+    tmpDir,
+    output_path: outputPath,
+    auditPath,
+    ensureBearer: ensureMoobizBearer,
+    servicesUrl: MOOBIZ_SERVICES_URL,
+    webOrigin: MOOBIZ_WEB_ORIGIN,
+    userAgent: CHROME_UA,
+    onBatch: async (rawItems) => {
+      const pageRows = [];
+      const seen = new Set();
+      for (const raw of rawItems) {
+        const normalized = normalizeServiceRow(raw);
+        if (!normalized) continue;
+        if (seen.has(normalized.id)) continue;
+        seen.add(normalized.id);
+        pageRows.push(normalized);
+        normalizedBatches.push(normalized);
+      }
+      if (run_mode !== "execute") {
+        return { processed: pageRows.length, dry_run: true };
+      }
+      return upsertHistoryRows(pageRows.map(stripHistoryRowForUpsert));
+    },
+  });
+
+  const byId = new Map();
+  for (const r of normalizedBatches) byId.set(r.id, r);
+  const collected = [...byId.values()];
+
+  pagesQueried = report.metadata.pages_successful;
+  reasonForStop = report.global.stop_reason;
+
+  let recordsReturnedByUpsert = null;
+  if (run_mode === "execute") {
+    recordsProcessed = report.global.rows_persisted;
+    recordsReturnedByUpsert = report.global.rows_persisted;
+  } else {
+    recordsProcessed = collected.length;
+  }
+
+  if (collected.length > 0) {
+    const idsToProcess = collected.map((r) => r.id);
+    const existingIdsSet = await fetchExistingIdsChunked(idsToProcess);
+    const actualizados = idsToProcess.filter((id) => existingIdsSet.has(id)).length;
+    registrosNuevosEstimados = idsToProcess.length - actualizados;
+    registrosActualizadosEstimados = actualizados;
+  } else {
+    registrosNuevosEstimados = 0;
+    registrosActualizadosEstimados = 0;
+  }
+
+  if (run_mode === "execute") {
+    await writeSyncStateValue(LAST_RUN_KEY, runStartedAt);
+    const maxUpd = maxDateUpdatedIsoFromRows(collected);
+    if (maxUpd) {
+      await writeSyncStateValue(LAST_DATE_UPDATED_KEY, maxUpd);
+      console.log(`[history-sync] saved last_date_updated=${maxUpd}`);
+    }
+    cursorAfter = runStartedAt;
+  } else {
+    cursorAfter = report.global.coverage_span_of_collected?.newest_normalized_utc_iso || runStartedAt;
+    console.log(`[history-sync] dry_run: no upsert ni sync_state (${collected.length} filas simuladas)`);
+  }
+
+  console.log(
+    "[history-sync] métricas extracción:",
+    JSON.stringify({
+      pages_processed: report.performance.pages_processed,
+      rows_fetched: report.global.total_rows_fetched,
+      rows_persisted: report.global.rows_persisted,
+      runtime_ms: report.performance.runtime_ms,
+      last_processed_ts: report.performance.last_processed_ts,
+      duplicate_rate: report.global.duplicate_rate,
+      stop_reason: report.global.stop_reason,
+    }),
+  );
+
+  console.log(
+    JSON.stringify({
+      status: report.errors.length ? "partial" : "success",
+      mode,
+      run_mode,
+      stop_days,
+      registros_procesados: recordsProcessed,
+      registros_nuevos_estimados: registrosNuevosEstimados,
+      registros_actualizados_estimados: registrosActualizadosEstimados,
+      filas_devueltas_upsert: recordsReturnedByUpsert,
+      pages_queried: pagesQueried,
+      extraction_output: outputPath,
+      extraction_audit: auditPath,
+      stop_reason: reasonForStop,
+      coverage: report.global.coverage_span_of_collected,
+    }),
+  );
+  console.log("[history-sync] ✅ Sync extracción completado");
+}
+
 function computeCursorDate(rows, fallbackIso) {
   let max = fallbackIso ? (parseMoobizDateToMillis(fallbackIso) ?? Date.parse(fallbackIso)) : NaN;
   for (const row of rows) {
@@ -785,142 +930,7 @@ async function sync() {
     }
 
     if (!MANUAL_RANGE_MODE) {
-      const runStartedAt = new Date().toISOString();
-      const mode = "normal_2pages";
-      const normalOrderCol = normalizeNormalOrderCol(CLI_ARGS["order-col"] || CLI_ARGS.order_col);
-
-      const parsedLimit = Number.parseInt(String(CLI_ARGS.limit || "").trim(), 10);
-      const effectiveLimit =
-        Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : NORMAL_LIMIT_FIXED;
-
-      const parsedPageRounds = Number.parseInt(
-        String(CLI_ARGS.page || CLI_ARGS.pages || "").trim(),
-        10,
-      );
-      const effectivePageRounds =
-        Number.isFinite(parsedPageRounds) && parsedPageRounds > 0
-          ? Math.min(parsedPageRounds, 50)
-          : NORMAL_PAGES_FIXED;
-
-      const dateFromYmd = ymdDaysAgoLocal(20);
-
-      console.log(
-        `[history-sync] run params: order_col=${normalOrderCol} date_from=${dateFromYmd} date_to=${date_to} pages=${effectivePageRounds} limit=${effectiveLimit}`,
-      );
-      console.log(
-        `[history-sync] modo=${mode} run_started_at=${runStartedAt} delay_ms=${NORMAL_DELAY_MS_FIXED} base=${MOOBIZ_API_BASE_URL}`,
-      );
-
-      const byId = new Map();
-
-      for (let page = 1; page <= effectivePageRounds; page += 1) {
-        const items = await fetchServicesPage({
-          page,
-          dateFrom: dateFromYmd,
-          dateTo: date_to,
-          limit: effectiveLimit,
-          skipSyncStateToken: false,
-          orderCol: normalOrderCol,
-          orderDir: "desc",
-        });
-        pagesQueried = page;
-
-        for (const raw of items) {
-          const normalized = normalizeServiceRow(raw);
-          if (!normalized) continue;
-          byId.set(normalized.id, normalized);
-        }
-
-        console.log(
-          `[history-sync] Página ${page}/${effectivePageRounds}: API_items=${items.length} ids_unicos_acum=${byId.size}`,
-        );
-
-        if (page < effectivePageRounds) await sleep(NORMAL_DELAY_MS_FIXED);
-      }
-
-      const collected = [...byId.values()];
-      console.log(`[history-sync] filas unicas tras dedupe: ${collected.length}`);
-
-      if (PRINT_SAMPLE) {
-        console.log("[history-sync] SAMPLE first 20 (id, date_scheduled, date_updated):");
-        const sampleFirst20 = collected.slice(0, 20).map((r) => ({
-          id: r.id,
-          date_scheduled: pickFechaProgramadaSample(r) || "",
-          date_updated: pickFechaActualizadaSample(r) || "",
-        }));
-        if (typeof console.table === "function") {
-          console.table(sampleFirst20);
-        } else {
-          console.log(JSON.stringify(sampleFirst20, null, 2));
-        }
-      }
-
-      const idsToProcess = collected.map((r) => r.id);
-      const total = idsToProcess.length;
-      const existingIdsSet = await fetchExistingIdsChunked(idsToProcess);
-      const actualizados = idsToProcess.filter((id) => existingIdsSet.has(id)).length;
-      const nuevos = total - actualizados;
-      registrosNuevosEstimados = nuevos;
-      registrosActualizadosEstimados = actualizados;
-      console.log(
-        `[history-sync] métricas (pre-upsert, ids vs DB): total_ids=${total} existentes=${actualizados} registros_nuevos=${nuevos} registros_actualizados=${actualizados}`,
-      );
-
-      const rowsForUpsert = collected.map(stripHistoryRowForUpsert);
-      const upsertStats = await upsertHistoryRows(rowsForUpsert);
-      recordsProcessed = total;
-      recordsReturnedByUpsert = upsertStats.countedByApi;
-
-      if (recordsReturnedByUpsert === null) {
-        console.log(
-          "[history-sync] Supabase no devolvió conteo confiable de filas devueltas por upsert; sync_monitor usa nuevos/actualizados exactos del pre-chequeo.",
-        );
-      } else {
-        console.log(
-          `[history-sync] filas devueltas por upsert (representación API): ${recordsReturnedByUpsert}`,
-        );
-      }
-
-      await writeSyncStateValue(LAST_RUN_KEY, runStartedAt);
-
-      let lastDateUpdatedSaved = null;
-      if (normalOrderCol === "date_updated") {
-        const maxUpd = maxDateUpdatedIsoFromRows(collected);
-        if (maxUpd) {
-          await writeSyncStateValue(LAST_DATE_UPDATED_KEY, maxUpd);
-          lastDateUpdatedSaved = maxUpd;
-          console.log(`[history-sync] saved last_date_updated=${maxUpd}`);
-        }
-      }
-
-      pagesQueried = effectivePageRounds;
-      reasonForStop = `ok_2pages_sync;order_col=${normalOrderCol};nuevos=${nuevos};actualizados=${actualizados};run_started_at=${runStartedAt}`;
-      cursorAfter = runStartedAt;
-
-      console.log(
-        JSON.stringify({
-          status,
-          mode,
-          order_col: normalOrderCol,
-          run_started_at: runStartedAt,
-          registros_procesados: total,
-          registros_nuevos_estimados: nuevos,
-          registros_actualizados_estimados: actualizados,
-          filas_devueltas_upsert: recordsReturnedByUpsert,
-          pages_queried: effectivePageRounds,
-          limit: effectiveLimit,
-          date_from: dateFromYmd,
-          date_to: date_to,
-          last_run_saved_key: LAST_RUN_KEY,
-          ...(normalOrderCol === "date_updated"
-            ? {
-                last_date_updated_key: LAST_DATE_UPDATED_KEY,
-                last_date_updated_saved: lastDateUpdatedSaved,
-              }
-            : {}),
-        }),
-      );
-      console.log("[history-sync] ✅ Sync completado");
+      await runThresholdExtractionNormal();
       return;
     }
 

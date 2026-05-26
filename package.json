@@ -10,6 +10,7 @@
     "test": "node --test --experimental-strip-types tests/**/*.test.ts",
     "check:env": "node scripts/check_env.js SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY",
     "sync:history": "node scripts/sync_moobiz_history.js",
+    "sync:history:run": "node -r dotenv/config scripts/run-sync-moobiz-history.js",
     "sync:history:pages": "node -r dotenv/config scripts/sync_moobiz_history.js --mode=pages_backfill --pages=20 --limit=1000",
     "sync:drivers": "node scripts/sync_moobiz_drivers.js",
     "sync:operators": "node scripts/sync_moobiz_operators.js",

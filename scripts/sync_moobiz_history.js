@@ -138,6 +138,87 @@ async function fetchJsonOrThrow(url, options, label) {
   return raw ? JSON.parse(raw) : null;
 }
 
+/** Inserta un registro en sync_monitor con status='running' y devuelve el id generado. */
+async function insertMonitorRunning() {
+  try {
+    const rows = await fetchJsonOrThrow(
+      `${SUPABASE_URL}/rest/v1/sync_monitor`,
+      {
+        method: "POST",
+        headers: supabaseHeaders({
+          "Content-Type": "application/json",
+          Prefer: "return=representation",
+        }),
+        body: JSON.stringify({
+          status: "running",
+          last_id: "moobiz_services_history",
+          records_procesados: 0,
+          records_inserted: 0,
+          pages_queried: 0,
+        }),
+      },
+      "Insert sync_monitor running",
+    );
+    const id = Array.isArray(rows) && rows[0] ? rows[0].id : null;
+    if (id) console.log(`[history-sync] sync_monitor iniciado id=${id}`);
+    return id ?? null;
+  } catch (e) {
+    console.warn(
+      "[history-sync] sync_monitor insert running falló (no bloqueante):",
+      e instanceof Error ? e.message : String(e),
+    );
+    return null;
+  }
+}
+
+/**
+ * Actualiza un registro existente en sync_monitor por id.
+ * Si no hay id (ej. el INSERT inicial falló), hace un INSERT de respaldo.
+ */
+async function updateMonitorRecord(monitorId, payload) {
+  if (!monitorId) {
+    try {
+      console.log("[history-sync] sync_monitor fallback INSERT (sin id previo):", JSON.stringify(payload));
+      await fetchJsonOrThrow(
+        `${SUPABASE_URL}/rest/v1/sync_monitor`,
+        {
+          method: "POST",
+          headers: supabaseHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify(payload),
+        },
+        "Insert sync_monitor fallback",
+      );
+    } catch (e) {
+      console.error(
+        "[history-sync] sync_monitor fallback insert falló:",
+        e instanceof Error ? e.message : String(e),
+      );
+    }
+    return;
+  }
+  try {
+    console.log(`[history-sync] sync_monitor UPDATE id=${monitorId}:`, JSON.stringify(payload));
+    await fetchJsonOrThrow(
+      `${SUPABASE_URL}/rest/v1/sync_monitor?id=eq.${encodeURIComponent(monitorId)}`,
+      {
+        method: "PATCH",
+        headers: supabaseHeaders({
+          "Content-Type": "application/json",
+          Prefer: "return=minimal",
+        }),
+        body: JSON.stringify(payload),
+      },
+      `Update sync_monitor id=${monitorId}`,
+    );
+    console.log(`[history-sync] sync_monitor actualizado id=${monitorId}`);
+  } catch (e) {
+    console.error(
+      "[history-sync] sync_monitor update falló:",
+      e instanceof Error ? e.message : String(e),
+    );
+  }
+}
+
 async function readSyncStateValue(key) {
   const rows = await fetchJsonOrThrow(
     `${SUPABASE_URL}/rest/v1/sync_state?key=eq.${encodeURIComponent(key)}&select=value`,
@@ -754,6 +835,18 @@ async function runThresholdExtractionNormal() {
     }),
   );
   console.log("[history-sync] ✅ Sync extracción completado");
+
+  return {
+    recordsProcessed,
+    recordsReturnedByUpsert,
+    pagesQueried,
+    reasonForStop,
+    registrosNuevosEstimados,
+    registrosActualizadosEstimados,
+    rowsFetched: report.global.total_rows_fetched ?? 0,
+    errors: report.errors ?? [],
+    status: (report.errors ?? []).length ? "partial" : "success",
+  };
 }
 
 function computeCursorDate(rows, fallbackIso) {
@@ -779,6 +872,8 @@ async function sync() {
   let pagesQueried = 0;
   let errorMessage = null;
   let cursorAfter = "";
+  let monitorId = null;
+  let rowsFetched = 0;
 
   try {
     ensureEnv(["SUPABASE_SERVICE_ROLE_KEY"]);
@@ -800,6 +895,8 @@ async function sync() {
       }
       moobizBearer = initialToken;
     }
+
+    monitorId = await insertMonitorRunning();
 
     const date_to = moobizDateToNowUtcIso();
     const moobizTz = getMoobizDefaultTimezone();
@@ -951,7 +1048,15 @@ async function sync() {
     }
 
     if (!MANUAL_RANGE_MODE) {
-      await runThresholdExtractionNormal();
+      const r = await runThresholdExtractionNormal();
+      recordsProcessed = r.recordsProcessed ?? 0;
+      recordsReturnedByUpsert = r.recordsReturnedByUpsert ?? null;
+      pagesQueried = r.pagesQueried ?? 0;
+      reasonForStop = r.reasonForStop ?? null;
+      registrosNuevosEstimados = r.registrosNuevosEstimados ?? null;
+      registrosActualizadosEstimados = r.registrosActualizadosEstimados ?? null;
+      rowsFetched = r.rowsFetched ?? 0;
+      if (r.errors && r.errors.length) status = r.status ?? "partial";
       return;
     }
 
@@ -1087,46 +1192,27 @@ async function sync() {
     );
     console.log("[history-sync] ✅ Sync completado");
   } catch (err) {
-    status = "error";
+    status = "failed";
     errorMessage = err instanceof Error ? err.message : String(err);
     throw err;
   } finally {
-    try {
-      const reasonResolved =
-        reasonForStop ?? (status === "error" ? "sync_exception" : "unknown_stop");
-      const reasonWithMode =
-        PAGES_BACKFILL_MODE
-          ? `${reasonResolved};mode=pages_backfill;pages=${BACKFILL_PAGES};limit=${BACKFILL_LIMIT}`
-          : reasonResolved;
-      const monitorPayload = {
-        status,
-        records_procesados: recordsProcessed,
-        records_inserted: recordsProcessed,
-        registros_nuevos_estimados: registrosNuevosEstimados,
-        registros_actualizados_estimados: registrosActualizadosEstimados,
-        reason_for_stop: reasonWithMode,
-        pages_queried: pagesQueried,
-        last_id: "moobiz_services_history",
-        error_message: errorMessage,
-      };
-      console.log("[history-sync] sync_monitor payload:", JSON.stringify(monitorPayload));
-      await fetchJsonOrThrow(
-        `${SUPABASE_URL}/rest/v1/sync_monitor`,
-        {
-          method: "POST",
-          headers: supabaseHeaders({
-            "Content-Type": "application/json",
-          }),
-          body: JSON.stringify(monitorPayload),
-        },
-        "Insert sync_monitor history",
-      );
-    } catch (e) {
-      console.error(
-        "[history-sync] sync_monitor insert falló:",
-        e instanceof Error ? e.message : String(e),
-      );
-    }
+    const reasonResolved =
+      reasonForStop ?? (status === "failed" ? "sync_exception" : "unknown_stop");
+    const reasonWithMode = PAGES_BACKFILL_MODE
+      ? `${reasonResolved};mode=pages_backfill;pages=${BACKFILL_PAGES};limit=${BACKFILL_LIMIT}`
+      : reasonResolved;
+    const monitorPayload = {
+      status,
+      records_procesados: rowsFetched || recordsProcessed,
+      records_inserted: recordsReturnedByUpsert ?? recordsProcessed,
+      registros_nuevos_estimados: registrosNuevosEstimados,
+      registros_actualizados_estimados: registrosActualizadosEstimados,
+      reason_for_stop: reasonWithMode,
+      pages_queried: pagesQueried,
+      last_id: "moobiz_services_history",
+      error_message: errorMessage,
+    };
+    await updateMonitorRecord(monitorId, monitorPayload);
   }
 }
 

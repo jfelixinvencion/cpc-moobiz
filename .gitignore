@@ -35,6 +35,7 @@ yarn-error.log*
 
 # moobiz extraction checkpoints (dry-run / local)
 /tmp/
+tmp_raw_forms_job/
 
 # vercel
 .vercel

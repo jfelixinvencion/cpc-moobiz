@@ -18,7 +18,8 @@
     "sync:logs": "node scripts/sync_moobiz_logs_incremental.js",
     "recover:fv-items": "node -r dotenv/config scripts/recover_moobiz_drivers_fv_items.js",
     "probe:drivers-pagination": "node scripts/probe_moobiz_drivers_pagination.js",
-    "dry-run:moobiz-timezone": "node -r dotenv/config scripts/dry_run_moobiz_timezone.js"
+    "dry-run:moobiz-timezone": "node -r dotenv/config scripts/dry_run_moobiz_timezone.js",
+    "sync:driver-forms": "node scripts/sync_moobiz_driver_forms.js"
   },
   "dependencies": {
     "@supabase/ssr": "^0.10.2",

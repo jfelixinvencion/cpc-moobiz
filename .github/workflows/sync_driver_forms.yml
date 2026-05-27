@@ -1,0 +1,53 @@
+name: sync-driver-forms
+
+# Solo ejecución manual desde GitHub Actions UI (workflow_dispatch).
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry-run (no escribe en DB)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      batch_size:
+        description: "Máximo de conductores por ejecución"
+        required: false
+        default: "50"
+        type: string
+      concurrency:
+        description: "Paralelismo POST /drivers/form"
+        required: false
+        default: "8"
+        type: string
+
+jobs:
+  sync-driver-forms:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DB_CONNECTION_STRING: ${{ secrets.DATABASE_URL }}
+      MOOBIZ_TOKEN: ${{ secrets.MOOBIZ_TOKEN }}
+      MOOBIZ_EMAIL: ${{ secrets.MOOBIZ_EMAIL }}
+      MOOBIZ_PASSWORD: ${{ secrets.MOOBIZ_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install
+        run: npm ci
+      - name: Preflight env check
+        run: npm run check:env
+      - name: Run sync driver forms
+        run: |
+          ARGS="--batch-size=${{ inputs.batch_size }} --concurrency=${{ inputs.concurrency }}"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          node scripts/sync_moobiz_driver_forms.js $ARGS

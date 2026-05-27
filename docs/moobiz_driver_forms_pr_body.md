@@ -39,12 +39,15 @@ npm run sync:driver-forms -- --batch-size=50 --concurrency=8
 
 **GitHub Actions:** Actions → **sync-driver-forms** → Run workflow.
 
-## Pruebas staging
+## Pruebas staging (2026-05-27 — ejecutadas en STAGING)
+
+**Migración aplicada en STAGING únicamente.** No ejecutar en PRODUCCIÓN sin aprobación y backup.
 
 Ver `docs/moobiz_driver_forms_pr_test_logs.md`:
 
-- Dry-run 10 ids: **10/10 OK**
-- Batch real 10 ids: **10/10 UPSERT OK**
+- Migración: `table_exists=true`, columna `forms` presente
+- Dry-run 10 ids: **10/10 OK** (`processed=10`, `errors=0`)
+- Batch real 10 ids: **10/10 UPSERT OK** (`total_rows` en tabla staging = 11 incl. prueba previa)
 
 ## Test plan
 

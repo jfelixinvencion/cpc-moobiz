@@ -1,0 +1,5 @@
+HTTP/1.1 200
+content-type: application/json
+content-length: 1105
+
+{"ok":true,"msg":"","item":{"id":"131126","id_branch":"5","id_role":"9","id_payment":"0","id_user_inviter":"0","id_subscription":"0","type":"3","code":"NS38UILD","name":"JUAN DOMINGO","surname":"ARMAS ABANTO","email":"noaplica@moobiz.com","phone":"904763452","document":"41888380","rating_average":"0","pic":"","pic_sm":null,"wallet_balance":"0","wallet_active":"0","state":"2","reason_disabled":"","language":"","send_emails":"1","privacy_show_phone_to_driver":"1","date_birth":"2000-01-01","date_created":"2026-05-25 21:37:07","requires_validation":"0","service_validation_id_roles":"","service_validation_select_user":"0","notify_to":"","fb_id":"","token_fcm":"","ro_name":null,"ro_menu_collapsed":null,"ro_id_module":null,"br_name":null,"co_id":null,"co_name":null,"co_state":null,"ar_name":null,"se_app_version_code":null,"id_company":"0","id_company_area":"0","id_company_ceco":"0","monthly_spending_limit":"0","id_vehicle":"0","num_services":"0","rating_count":"0","rating_date_reset":null,"external_user_code":"","assignment_priority":"1","date_updated":"2026-05-25 21:45:17","date_deleted":null}}

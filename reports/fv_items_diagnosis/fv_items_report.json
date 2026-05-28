@@ -1,0 +1,369 @@
+{
+  "ids": {
+    "131124": {
+      "oneEndpoint": {
+        "url": "https://app.moobiz.pe/api/admin/drivers/131124",
+        "status": 200,
+        "headers": {
+          "content-type": "application/json",
+          "content-length": "1276"
+        },
+        "bodyBytes": 1276,
+        "rawFile": "C:\\Users\\Moobiz\\taxi-dashboard\\reports\\fv_items_diagnosis\\response_131124_raw.txt",
+        "fvPath": null,
+        "fv": {
+          "bytes": 0,
+          "chars": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "head400": "",
+          "tail400": "",
+          "truncationHints": []
+        },
+        "bodyPreview": "{\"ok\":true,\"msg\":\"\",\"item\":{\"id\":\"131124\",\"id_branch\":\"5\",\"id_role\":\"9\",\"id_payment\":\"0\",\"id_user_inviter\":\"0\",\"id_subscription\":\"0\",\"type\":\"3\",\"code\":\"F69OHQA9\",\"name\":\"Jeremy\",\"surname\":\"Arancibia \",\"email\":\"jeremy.arancibia.1122@gmail.com\",\"phone\":\"+51987930656\",\"document\":\"\",\"rating_average\":\"0\",\"pic\":\"\\/users\\/pic_131124.jpg?t=1779749825\",\"pic_sm\":null,\"wallet_balance\":\"0\",\"wallet_active\":\"0\",\"state\":\"3\",\"reason_disabled\":\"\",\"language\":\"es\",\"send_emails\":\"1\",\"privacy_show_phone_to_driver\":\""
+      },
+      "listEndpoint": {
+        "foundInList": true,
+        "fvPath": "root.fv_items",
+        "fv": {
+          "bytes": 1035,
+          "chars": 1024,
+          "sha256": "73e70462476bce5b7b5eefc22a34f54a83d207fe096dd9c804b469849e2cb4b9",
+          "head400": "En que distrito vive|:fi:|Cercado de lima|:fv:|Turno|:fi:|T8: TN: LIBRE|:fv:|Vencimiento de Brevete|:fi:|2034-09-28|:fv:|Vencimiento de SOAT|:fi:|2027-03-31|:fv:|Número de DNI/CE/PASSPORT|:fi:|71385619|:fv:|Vencimiento de Revisión Técnica |:fi:|2027-03-31|:fv:|Documento de Identidad|:fi:|DNI|:fv:|COMBUSTIBLE|:fi:|GLP|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Categoría Brevete|:fi:|AI|:fv:|Nombre Ban",
+          "tail400": "re completo de titular de la cuenta:|:fi:||:fv:|Nº DNI /CE / PASS / RUC de titular de la cuenta:|:fi:||:fv:|Tipo de Documento del titular de la cuenta:|:fi:||:fv:|Tipo de cuenta Banco:|:fi:||:fv:|Marcar si Moobiz realiza su contabilidad|:fi:||:fv:|Tipo de Contribuyente|:fi:||:fv:|Fecha Activacion|:fi:||:fv:|Ruc a nombre de TERCERO:|:fi:||:fv:|Emisión o Declaración:|:fi:||:fv:|PAGO FRECUENTE|:fi:||",
+          "truncationHints": [
+            "exactly_1024_chars"
+          ]
+        }
+      },
+      "comparison": {
+        "apiOneChars": 0,
+        "apiListChars": 1024,
+        "dbFvChars": 1024,
+        "dbFvBytes": 1035,
+        "apiOneSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "apiListSha256": "73e70462476bce5b7b5eefc22a34f54a83d207fe096dd9c804b469849e2cb4b9",
+        "dbFvSha256": "73e70462476bce5b7b5eefc22a34f54a83d207fe096dd9c804b469849e2cb4b9",
+        "truncatedInApiList": false,
+        "truncatedInDbVsApiOne": false
+      }
+    },
+    "131126": {
+      "oneEndpoint": {
+        "url": "https://app.moobiz.pe/api/admin/drivers/131126",
+        "status": 200,
+        "headers": {
+          "content-type": "application/json",
+          "content-length": "1105"
+        },
+        "bodyBytes": 1105,
+        "rawFile": "C:\\Users\\Moobiz\\taxi-dashboard\\reports\\fv_items_diagnosis\\response_131126_raw.txt",
+        "fvPath": null,
+        "fv": {
+          "bytes": 0,
+          "chars": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "head400": "",
+          "tail400": "",
+          "truncationHints": []
+        },
+        "bodyPreview": "{\"ok\":true,\"msg\":\"\",\"item\":{\"id\":\"131126\",\"id_branch\":\"5\",\"id_role\":\"9\",\"id_payment\":\"0\",\"id_user_inviter\":\"0\",\"id_subscription\":\"0\",\"type\":\"3\",\"code\":\"NS38UILD\",\"name\":\"JUAN DOMINGO\",\"surname\":\"ARMAS ABANTO\",\"email\":\"noaplica@moobiz.com\",\"phone\":\"904763452\",\"document\":\"41888380\",\"rating_average\":\"0\",\"pic\":\"\",\"pic_sm\":null,\"wallet_balance\":\"0\",\"wallet_active\":\"0\",\"state\":\"2\",\"reason_disabled\":\"\",\"language\":\"\",\"send_emails\":\"1\",\"privacy_show_phone_to_driver\":\"1\",\"date_birth\":\"2000-01-01\",\"date_cr"
+      },
+      "listEndpoint": {
+        "foundInList": true,
+        "fvPath": "root.fv_items",
+        "fv": {
+          "bytes": 1035,
+          "chars": 1024,
+          "sha256": "78ddc58f4dbcba853788fa164374be9502be377d04bdb9b4680b08bc59ade3dc",
+          "head400": "En que distrito vive|:fi:|LURIGANCHO|:fv:|Turno|:fi:|T1: TD: LIBRE|:fv:|Vencimiento de Brevete|:fi:|2000-01-01|:fv:|Vencimiento de SOAT|:fi:|2000-01-01|:fv:|Número de DNI/CE/PASSPORT|:fi:|41888380|:fv:|Vencimiento de Revisión Técnica |:fi:|2000-01-01|:fv:|Documento de Identidad|:fi:|DNI|:fv:|COMBUSTIBLE|:fi:|HIBRIDO|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Categoría Brevete|:fi:|AI|:fv:|Nombre Banc",
+          "tail400": "e completo de titular de la cuenta:|:fi:||:fv:|Nº DNI /CE / PASS / RUC de titular de la cuenta:|:fi:||:fv:|Tipo de Documento del titular de la cuenta:|:fi:||:fv:|Tipo de cuenta Banco:|:fi:||:fv:|Marcar si Moobiz realiza su contabilidad|:fi:|0|:fv:|Tipo de Contribuyente|:fi:||:fv:|Fecha Activacion|:fi:||:fv:|Ruc a nombre de TERCERO:|:fi:||:fv:|Emisión o Declaración:|:fi:||:fv:|PAGO FRECUENTE|:fi:||",
+          "truncationHints": [
+            "exactly_1024_chars"
+          ]
+        }
+      },
+      "comparison": {
+        "apiOneChars": 0,
+        "apiListChars": 1024,
+        "dbFvChars": 1024,
+        "dbFvBytes": 1035,
+        "apiOneSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "apiListSha256": "78ddc58f4dbcba853788fa164374be9502be377d04bdb9b4680b08bc59ade3dc",
+        "dbFvSha256": "78ddc58f4dbcba853788fa164374be9502be377d04bdb9b4680b08bc59ade3dc",
+        "truncatedInApiList": false,
+        "truncatedInDbVsApiOne": false
+      }
+    },
+    "131135": {
+      "oneEndpoint": {
+        "url": "https://app.moobiz.pe/api/admin/drivers/131135",
+        "status": 200,
+        "headers": {
+          "content-type": "application/json",
+          "content-length": "1290"
+        },
+        "bodyBytes": 1290,
+        "rawFile": "C:\\Users\\Moobiz\\taxi-dashboard\\reports\\fv_items_diagnosis\\response_131135_raw.txt",
+        "fvPath": null,
+        "fv": {
+          "bytes": 0,
+          "chars": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "head400": "",
+          "tail400": "",
+          "truncationHints": []
+        },
+        "bodyPreview": "{\"ok\":true,\"msg\":\"\",\"item\":{\"id\":\"131135\",\"id_branch\":\"5\",\"id_role\":\"9\",\"id_payment\":\"0\",\"id_user_inviter\":\"0\",\"id_subscription\":\"24\",\"type\":\"3\",\"code\":\"IC5KVYHK\",\"name\":\"CARLOS\",\"surname\":\"LINARES BERROCAL\",\"email\":\"elamogero1@hotmail.com\",\"phone\":\"+51991155704\",\"document\":\"45283233\",\"rating_average\":\"0\",\"pic\":\"\\/users\\/pic_131135.jpg?t=1779807651\",\"pic_sm\":null,\"wallet_balance\":\"0\",\"wallet_active\":\"0\",\"state\":\"1\",\"reason_disabled\":\"\",\"language\":\"es\",\"send_emails\":\"1\",\"privacy_show_phone_to_dri"
+      },
+      "listEndpoint": {
+        "foundInList": true,
+        "fvPath": "root.fv_items",
+        "fv": {
+          "bytes": 1036,
+          "chars": 1024,
+          "sha256": "8fc47d5b03df8540518a190a06cda0b0349892caf62059512e378fc9fea8f76b",
+          "head400": "En que distrito vive|:fi:|San Martín de Porres|:fv:|Turno|:fi:|T1: TD: LIBRE|:fv:|Vencimiento de Brevete|:fi:|2032-04-05|:fv:|Vencimiento de SOAT|:fi:|2027-01-12|:fv:|Número de DNI/CE/PASSPORT|:fi:|45283233|:fv:|Vencimiento de Revisión Técnica |:fi:|2027-03-25|:fv:|Documento de Identidad|:fi:|DNI|:fv:|COMBUSTIBLE|:fi:|GNV|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Categoría Brevete|:fi:|AI|:fv:|Nombr",
+          "tail400": "|Nombre completo de titular de la cuenta:|:fi:||:fv:|Nº DNI /CE / PASS / RUC de titular de la cuenta:|:fi:||:fv:|Tipo de Documento del titular de la cuenta:|:fi:||:fv:|Tipo de cuenta Banco:|:fi:||:fv:|Marcar si Moobiz realiza su contabilidad|:fi:|0|:fv:|Tipo de Contribuyente|:fi:||:fv:|Fecha Activacion|:fi:||:fv:|Ruc a nombre de TERCERO:|:fi:||:fv:|Emisión o Declaración:|:fi:||:fv:|PAGO FRECUENTE|",
+          "truncationHints": [
+            "exactly_1024_chars"
+          ]
+        }
+      },
+      "comparison": {
+        "apiOneChars": 0,
+        "apiListChars": 1024,
+        "dbFvChars": 1024,
+        "dbFvBytes": 1036,
+        "apiOneSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "apiListSha256": "8fc47d5b03df8540518a190a06cda0b0349892caf62059512e378fc9fea8f76b",
+        "dbFvSha256": "8fc47d5b03df8540518a190a06cda0b0349892caf62059512e378fc9fea8f76b",
+        "truncatedInApiList": false,
+        "truncatedInDbVsApiOne": false
+      }
+    },
+    "131136": {
+      "oneEndpoint": {
+        "url": "https://app.moobiz.pe/api/admin/drivers/131136",
+        "status": 200,
+        "headers": {
+          "content-type": "application/json",
+          "content-length": "1302"
+        },
+        "bodyBytes": 1302,
+        "rawFile": "C:\\Users\\Moobiz\\taxi-dashboard\\reports\\fv_items_diagnosis\\response_131136_raw.txt",
+        "fvPath": null,
+        "fv": {
+          "bytes": 0,
+          "chars": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "head400": "",
+          "tail400": "",
+          "truncationHints": []
+        },
+        "bodyPreview": "{\"ok\":true,\"msg\":\"\",\"item\":{\"id\":\"131136\",\"id_branch\":\"5\",\"id_role\":\"9\",\"id_payment\":\"0\",\"id_user_inviter\":\"0\",\"id_subscription\":\"24\",\"type\":\"3\",\"code\":\"NOOF94DH\",\"name\":\"JOHNNY ANGIELLO\",\"surname\":\"MARTINEZ QUISPE\",\"email\":\"johnny_martinezq_@hotmail.com\",\"phone\":\"903205169\",\"document\":\"73211232\",\"rating_average\":\"0\",\"pic\":\"\\/users\\/pic_131136.png?t=1779811901\",\"pic_sm\":null,\"wallet_balance\":\"0\",\"wallet_active\":\"0\",\"state\":\"1\",\"reason_disabled\":\"\",\"language\":\"es\",\"send_emails\":\"1\",\"privacy_show_"
+      },
+      "listEndpoint": {
+        "foundInList": true,
+        "fvPath": "root.fv_items",
+        "fv": {
+          "bytes": 1035,
+          "chars": 1024,
+          "sha256": "bd011a592288c26e58fa833f7214c60dee950d430dbfc7d9d36273eb5490c099",
+          "head400": "En que distrito vive|:fi:|San miguel|:fv:|Turno|:fi:|T2: TD: 05:00 - 19:00|:fv:|Vencimiento de Brevete|:fi:|2035-02-20|:fv:|Vencimiento de SOAT|:fi:|2026-12-19|:fv:|Número de DNI/CE/PASSPORT|:fi:|73211232|:fv:|Vencimiento de Revisión Técnica |:fi:|2029-05-26|:fv:|Documento de Identidad|:fi:|DNI|:fv:|COMBUSTIBLE|:fi:|GLP|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Categoría Brevete|:fi:|AI|:fv:|Nombre ",
+          "tail400": "ombre completo de titular de la cuenta:|:fi:||:fv:|Nº DNI /CE / PASS / RUC de titular de la cuenta:|:fi:||:fv:|Tipo de Documento del titular de la cuenta:|:fi:||:fv:|Tipo de cuenta Banco:|:fi:||:fv:|Marcar si Moobiz realiza su contabilidad|:fi:|0|:fv:|Tipo de Contribuyente|:fi:||:fv:|Fecha Activacion|:fi:|2026-05-26|:fv:|Ruc a nombre de TERCERO:|:fi:||:fv:|Emisión o Declaración:|:fi:||:fv:|PAGO FR",
+          "truncationHints": [
+            "exactly_1024_chars"
+          ]
+        }
+      },
+      "comparison": {
+        "apiOneChars": 0,
+        "apiListChars": 1024,
+        "dbFvChars": 1024,
+        "dbFvBytes": 1035,
+        "apiOneSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "apiListSha256": "bd011a592288c26e58fa833f7214c60dee950d430dbfc7d9d36273eb5490c099",
+        "dbFvSha256": "d8a0a4cbad4b9805cd21100a23249dd4f8c336791ab66187c4642d177df33789",
+        "truncatedInApiList": false,
+        "truncatedInDbVsApiOne": false
+      }
+    },
+    "131137": {
+      "oneEndpoint": {
+        "url": "https://app.moobiz.pe/api/admin/drivers/131137",
+        "status": 200,
+        "headers": {
+          "content-type": "application/json",
+          "content-length": "1299"
+        },
+        "bodyBytes": 1299,
+        "rawFile": "C:\\Users\\Moobiz\\taxi-dashboard\\reports\\fv_items_diagnosis\\response_131137_raw.txt",
+        "fvPath": null,
+        "fv": {
+          "bytes": 0,
+          "chars": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "head400": "",
+          "tail400": "",
+          "truncationHints": []
+        },
+        "bodyPreview": "{\"ok\":true,\"msg\":\"\",\"item\":{\"id\":\"131137\",\"id_branch\":\"5\",\"id_role\":\"9\",\"id_payment\":\"0\",\"id_user_inviter\":\"0\",\"id_subscription\":\"24\",\"type\":\"3\",\"code\":\"LQDJ0AMG\",\"name\":\"JUNIOR ALEXANDER\",\"surname\":\"ANCCO BENITES \",\"email\":\"juniorancco33@gmail.com\",\"phone\":\"+51940923636\",\"document\":\"43152534\",\"rating_average\":\"0\",\"pic\":\"\\/users\\/pic_131137.jpg?t=1779814158\",\"pic_sm\":null,\"wallet_balance\":\"0\",\"wallet_active\":\"0\",\"state\":\"1\",\"reason_disabled\":\"\",\"language\":\"es\",\"send_emails\":\"1\",\"privacy_show_pho"
+      },
+      "listEndpoint": {
+        "foundInList": true,
+        "fvPath": "root.fv_items",
+        "fv": {
+          "bytes": 1035,
+          "chars": 1024,
+          "sha256": "e2a78f51087b8de779d5c9855d465e2d42cd61b1037baa4fd72463e94b7183c6",
+          "head400": "En que distrito vive|:fi:|Villa maria|:fv:|Turno|:fi:|T3: TD: 09:00 - 20:00|:fv:|Vencimiento de Brevete|:fi:|2031-04-13|:fv:|Vencimiento de SOAT|:fi:|2027-05-21|:fv:|Número de DNI/CE/PASSPORT|:fi:|43152534|:fv:|Vencimiento de Revisión Técnica |:fi:|2028-05-24|:fv:|Documento de Identidad|:fi:|DNI|:fv:|COMBUSTIBLE|:fi:|GLP|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Categoría Brevete|:fi:|AIIb|:fv:|Nomb",
+          "tail400": ":|Nombre completo de titular de la cuenta:|:fi:||:fv:|Nº DNI /CE / PASS / RUC de titular de la cuenta:|:fi:||:fv:|Tipo de Documento del titular de la cuenta:|:fi:||:fv:|Tipo de cuenta Banco:|:fi:||:fv:|Marcar si Moobiz realiza su contabilidad|:fi:|0|:fv:|Tipo de Contribuyente|:fi:||:fv:|Fecha Activacion|:fi:|2026-05-26|:fv:|Ruc a nombre de TERCERO:|:fi:||:fv:|Emisión o Declaración:|:fi:||:fv:|PAGO",
+          "truncationHints": [
+            "exactly_1024_chars"
+          ]
+        }
+      },
+      "comparison": {
+        "apiOneChars": 0,
+        "apiListChars": 1024,
+        "dbFvChars": 1024,
+        "dbFvBytes": 1035,
+        "apiOneSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "apiListSha256": "e2a78f51087b8de779d5c9855d465e2d42cd61b1037baa4fd72463e94b7183c6",
+        "dbFvSha256": "f641ab69c846dbe06e2221ab599c9c850bdf9a263f4e8614ea2aed989778b0f4",
+        "truncatedInApiList": false,
+        "truncatedInDbVsApiOne": false
+      }
+    }
+  },
+  "listApi": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "transfer-encoding": "chunked"
+    },
+    "bodyBytes": 4850968,
+    "total": 1539,
+    "itemsCount": 1539,
+    "rawFile": "C:\\Users\\Moobiz\\taxi-dashboard\\reports\\fv_items_diagnosis\\drivers_list_raw.txt"
+  },
+  "db": {
+    "rows": [
+      {
+        "id": "131137",
+        "raw_data_json_len": 3185,
+        "fv_len_text_op": 1024,
+        "fv_bytes": 1035,
+        "fv_sha256": "f641ab69c846dbe06e2221ab599c9c850bdf9a263f4e8614ea2aed989778b0f4",
+        "fv_head_400": "En que distrito vive|:fi:|Villa maria|:fv:|Turno|:fi:|T3: TD: 09:00 - 20:00|:fv:|Vencimiento de Brevete|:fi:|2031-04-13|:fv:|Vencimiento de SOAT|:fi:|2027-05-21|:fv:|Número de DNI/CE/PASSPORT|:fi:|43152534|:fv:|Vencimiento de Revisión Técnica |:fi:|2028-05-24|:fv:|Documento de Identidad|:fi:|DNI|:fv:|COMBUSTIBLE|:fi:|GLP|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Categoría Brevete|:fi:|AIIb|:fv:|Nomb",
+        "fv_tail_400": ":|Nombre completo de titular de la cuenta:|:fi:||:fv:|Nº DNI /CE / PASS / RUC de titular de la cuenta:|:fi:||:fv:|Tipo de Documento del titular de la cuenta:|:fi:||:fv:|Tipo de cuenta Banco:|:fi:||:fv:|Marcar si Moobiz realiza su contabilidad|:fi:|0|:fv:|Tipo de Contribuyente|:fi:||:fv:|Fecha Activacion|:fi:||:fv:|Ruc a nombre de TERCERO:|:fi:||:fv:|Emisión o Declaración:|:fi:||:fv:|PAGO FRECUENTE",
+        "fv_head_2000": "En que distrito vive|:fi:|Villa maria|:fv:|Turno|:fi:|T3: TD: 09:00 - 20:00|:fv:|Vencimiento de Brevete|:fi:|2031-04-13|:fv:|Vencimiento de SOAT|:fi:|2027-05-21|:fv:|Número de DNI/CE/PASSPORT|:fi:|43152534|:fv:|Vencimiento de Revisión Técnica |:fi:|2028-05-24|:fv:|Documento de Identidad|:fi:|DNI|:fv:|COMBUSTIBLE|:fi:|GLP|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Categoría Brevete|:fi:|AIIb|:fv:|Nombre Banco:|:fi:||:fv:|Número de cuenta BCP:|:fi:||:fv:|Número Ruc Factura:|:fi:||:fv:|Nº Cta interbancario CCI: (Banco distinto a BCP)|:fi:||:fv:|Clave Sol Sunat: (Para emisión de facturas)|:fi:||:fv:|Usuario Sunat:|:fi:||:fv:|Nombre completo de titular de la cuenta:|:fi:||:fv:|Nº DNI /CE / PASS / RUC de titular de la cuenta:|:fi:||:fv:|Tipo de Documento del titular de la cuenta:|:fi:||:fv:|Tipo de cuenta Banco:|:fi:||:fv:|Marcar si Moobiz realiza su contabilidad|:fi:|0|:fv:|Tipo de Contribuyente|:fi:||:fv:|Fecha Activacion|:fi:||:fv:|Ruc a nombre de TERCERO:|:fi:||:fv:|Emisión o Declaración:|:fi:||:fv:|PAGO FRECUENTE"
+      },
+      {
+        "id": "131136",
+        "raw_data_json_len": 3178,
+        "fv_len_text_op": 1024,
+        "fv_bytes": 1035,
+        "fv_sha256": "d8a0a4cbad4b9805cd21100a23249dd4f8c336791ab66187c4642d177df33789",
+        "fv_head_400": "En que distrito vive|:fi:|San miguel|:fv:|Turno|:fi:|T2: TD: 05:00 - 19:00|:fv:|Vencimiento de Brevete|:fi:|2035-02-20|:fv:|Vencimiento de SOAT|:fi:|2026-12-19|:fv:|Número de DNI/CE/PASSPORT|:fi:|73211232|:fv:|Vencimiento de Revisión Técnica |:fi:|2029-05-26|:fv:|Documento de Identidad|:fi:|DNI|:fv:|COMBUSTIBLE|:fi:|GLP|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Categoría Brevete|:fi:|AI|:fv:|Nombre ",
+        "fv_tail_400": "ombre completo de titular de la cuenta:|:fi:||:fv:|Nº DNI /CE / PASS / RUC de titular de la cuenta:|:fi:||:fv:|Tipo de Documento del titular de la cuenta:|:fi:||:fv:|Tipo de cuenta Banco:|:fi:||:fv:|Marcar si Moobiz realiza su contabilidad|:fi:|0|:fv:|Tipo de Contribuyente|:fi:||:fv:|Fecha Activacion|:fi:||:fv:|Ruc a nombre de TERCERO:|:fi:||:fv:|Emisión o Declaración:|:fi:||:fv:|PAGO FRECUENTE|:f",
+        "fv_head_2000": "En que distrito vive|:fi:|San miguel|:fv:|Turno|:fi:|T2: TD: 05:00 - 19:00|:fv:|Vencimiento de Brevete|:fi:|2035-02-20|:fv:|Vencimiento de SOAT|:fi:|2026-12-19|:fv:|Número de DNI/CE/PASSPORT|:fi:|73211232|:fv:|Vencimiento de Revisión Técnica |:fi:|2029-05-26|:fv:|Documento de Identidad|:fi:|DNI|:fv:|COMBUSTIBLE|:fi:|GLP|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Categoría Brevete|:fi:|AI|:fv:|Nombre Banco:|:fi:||:fv:|Número de cuenta BCP:|:fi:||:fv:|Número Ruc Factura:|:fi:||:fv:|Nº Cta interbancario CCI: (Banco distinto a BCP)|:fi:||:fv:|Clave Sol Sunat: (Para emisión de facturas)|:fi:||:fv:|Usuario Sunat:|:fi:||:fv:|Nombre completo de titular de la cuenta:|:fi:||:fv:|Nº DNI /CE / PASS / RUC de titular de la cuenta:|:fi:||:fv:|Tipo de Documento del titular de la cuenta:|:fi:||:fv:|Tipo de cuenta Banco:|:fi:||:fv:|Marcar si Moobiz realiza su contabilidad|:fi:|0|:fv:|Tipo de Contribuyente|:fi:||:fv:|Fecha Activacion|:fi:||:fv:|Ruc a nombre de TERCERO:|:fi:||:fv:|Emisión o Declaración:|:fi:||:fv:|PAGO FRECUENTE|:f"
+      },
+      {
+        "id": "131135",
+        "raw_data_json_len": 3095,
+        "fv_len_text_op": 1024,
+        "fv_bytes": 1036,
+        "fv_sha256": "8fc47d5b03df8540518a190a06cda0b0349892caf62059512e378fc9fea8f76b",
+        "fv_head_400": "En que distrito vive|:fi:|San Martín de Porres|:fv:|Turno|:fi:|T1: TD: LIBRE|:fv:|Vencimiento de Brevete|:fi:|2032-04-05|:fv:|Vencimiento de SOAT|:fi:|2027-01-12|:fv:|Número de DNI/CE/PASSPORT|:fi:|45283233|:fv:|Vencimiento de Revisión Técnica |:fi:|2027-03-25|:fv:|Documento de Identidad|:fi:|DNI|:fv:|COMBUSTIBLE|:fi:|GNV|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Categoría Brevete|:fi:|AI|:fv:|Nombr",
+        "fv_tail_400": "|Nombre completo de titular de la cuenta:|:fi:||:fv:|Nº DNI /CE / PASS / RUC de titular de la cuenta:|:fi:||:fv:|Tipo de Documento del titular de la cuenta:|:fi:||:fv:|Tipo de cuenta Banco:|:fi:||:fv:|Marcar si Moobiz realiza su contabilidad|:fi:|0|:fv:|Tipo de Contribuyente|:fi:||:fv:|Fecha Activacion|:fi:||:fv:|Ruc a nombre de TERCERO:|:fi:||:fv:|Emisión o Declaración:|:fi:||:fv:|PAGO FRECUENTE|",
+        "fv_head_2000": "En que distrito vive|:fi:|San Martín de Porres|:fv:|Turno|:fi:|T1: TD: LIBRE|:fv:|Vencimiento de Brevete|:fi:|2032-04-05|:fv:|Vencimiento de SOAT|:fi:|2027-01-12|:fv:|Número de DNI/CE/PASSPORT|:fi:|45283233|:fv:|Vencimiento de Revisión Técnica |:fi:|2027-03-25|:fv:|Documento de Identidad|:fi:|DNI|:fv:|COMBUSTIBLE|:fi:|GNV|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Categoría Brevete|:fi:|AI|:fv:|Nombre Banco:|:fi:||:fv:|Número de cuenta BCP:|:fi:||:fv:|Número Ruc Factura:|:fi:||:fv:|Nº Cta interbancario CCI: (Banco distinto a BCP)|:fi:||:fv:|Clave Sol Sunat: (Para emisión de facturas)|:fi:||:fv:|Usuario Sunat:|:fi:||:fv:|Nombre completo de titular de la cuenta:|:fi:||:fv:|Nº DNI /CE / PASS / RUC de titular de la cuenta:|:fi:||:fv:|Tipo de Documento del titular de la cuenta:|:fi:||:fv:|Tipo de cuenta Banco:|:fi:||:fv:|Marcar si Moobiz realiza su contabilidad|:fi:|0|:fv:|Tipo de Contribuyente|:fi:||:fv:|Fecha Activacion|:fi:||:fv:|Ruc a nombre de TERCERO:|:fi:||:fv:|Emisión o Declaración:|:fi:||:fv:|PAGO FRECUENTE|"
+      },
+      {
+        "id": "131126",
+        "raw_data_json_len": 2903,
+        "fv_len_text_op": 1024,
+        "fv_bytes": 1035,
+        "fv_sha256": "78ddc58f4dbcba853788fa164374be9502be377d04bdb9b4680b08bc59ade3dc",
+        "fv_head_400": "En que distrito vive|:fi:|LURIGANCHO|:fv:|Turno|:fi:|T1: TD: LIBRE|:fv:|Vencimiento de Brevete|:fi:|2000-01-01|:fv:|Vencimiento de SOAT|:fi:|2000-01-01|:fv:|Número de DNI/CE/PASSPORT|:fi:|41888380|:fv:|Vencimiento de Revisión Técnica |:fi:|2000-01-01|:fv:|Documento de Identidad|:fi:|DNI|:fv:|COMBUSTIBLE|:fi:|HIBRIDO|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Categoría Brevete|:fi:|AI|:fv:|Nombre Banc",
+        "fv_tail_400": "e completo de titular de la cuenta:|:fi:||:fv:|Nº DNI /CE / PASS / RUC de titular de la cuenta:|:fi:||:fv:|Tipo de Documento del titular de la cuenta:|:fi:||:fv:|Tipo de cuenta Banco:|:fi:||:fv:|Marcar si Moobiz realiza su contabilidad|:fi:|0|:fv:|Tipo de Contribuyente|:fi:||:fv:|Fecha Activacion|:fi:||:fv:|Ruc a nombre de TERCERO:|:fi:||:fv:|Emisión o Declaración:|:fi:||:fv:|PAGO FRECUENTE|:fi:||",
+        "fv_head_2000": "En que distrito vive|:fi:|LURIGANCHO|:fv:|Turno|:fi:|T1: TD: LIBRE|:fv:|Vencimiento de Brevete|:fi:|2000-01-01|:fv:|Vencimiento de SOAT|:fi:|2000-01-01|:fv:|Número de DNI/CE/PASSPORT|:fi:|41888380|:fv:|Vencimiento de Revisión Técnica |:fi:|2000-01-01|:fv:|Documento de Identidad|:fi:|DNI|:fv:|COMBUSTIBLE|:fi:|HIBRIDO|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Categoría Brevete|:fi:|AI|:fv:|Nombre Banco:|:fi:||:fv:|Número de cuenta BCP:|:fi:||:fv:|Número Ruc Factura:|:fi:||:fv:|Nº Cta interbancario CCI: (Banco distinto a BCP)|:fi:||:fv:|Clave Sol Sunat: (Para emisión de facturas)|:fi:||:fv:|Usuario Sunat:|:fi:||:fv:|Nombre completo de titular de la cuenta:|:fi:||:fv:|Nº DNI /CE / PASS / RUC de titular de la cuenta:|:fi:||:fv:|Tipo de Documento del titular de la cuenta:|:fi:||:fv:|Tipo de cuenta Banco:|:fi:||:fv:|Marcar si Moobiz realiza su contabilidad|:fi:|0|:fv:|Tipo de Contribuyente|:fi:||:fv:|Fecha Activacion|:fi:||:fv:|Ruc a nombre de TERCERO:|:fi:||:fv:|Emisión o Declaración:|:fi:||:fv:|PAGO FRECUENTE|:fi:||"
+      },
+      {
+        "id": "131124",
+        "raw_data_json_len": 3069,
+        "fv_len_text_op": 1024,
+        "fv_bytes": 1035,
+        "fv_sha256": "73e70462476bce5b7b5eefc22a34f54a83d207fe096dd9c804b469849e2cb4b9",
+        "fv_head_400": "En que distrito vive|:fi:|Cercado de lima|:fv:|Turno|:fi:|T8: TN: LIBRE|:fv:|Vencimiento de Brevete|:fi:|2034-09-28|:fv:|Vencimiento de SOAT|:fi:|2027-03-31|:fv:|Número de DNI/CE/PASSPORT|:fi:|71385619|:fv:|Vencimiento de Revisión Técnica |:fi:|2027-03-31|:fv:|Documento de Identidad|:fi:|DNI|:fv:|COMBUSTIBLE|:fi:|GLP|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Categoría Brevete|:fi:|AI|:fv:|Nombre Ban",
+        "fv_tail_400": "re completo de titular de la cuenta:|:fi:||:fv:|Nº DNI /CE / PASS / RUC de titular de la cuenta:|:fi:||:fv:|Tipo de Documento del titular de la cuenta:|:fi:||:fv:|Tipo de cuenta Banco:|:fi:||:fv:|Marcar si Moobiz realiza su contabilidad|:fi:||:fv:|Tipo de Contribuyente|:fi:||:fv:|Fecha Activacion|:fi:||:fv:|Ruc a nombre de TERCERO:|:fi:||:fv:|Emisión o Declaración:|:fi:||:fv:|PAGO FRECUENTE|:fi:||",
+        "fv_head_2000": "En que distrito vive|:fi:|Cercado de lima|:fv:|Turno|:fi:|T8: TN: LIBRE|:fv:|Vencimiento de Brevete|:fi:|2034-09-28|:fv:|Vencimiento de SOAT|:fi:|2027-03-31|:fv:|Número de DNI/CE/PASSPORT|:fi:|71385619|:fv:|Vencimiento de Revisión Técnica |:fi:|2027-03-31|:fv:|Documento de Identidad|:fi:|DNI|:fv:|COMBUSTIBLE|:fi:|GLP|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Categoría Brevete|:fi:|AI|:fv:|Nombre Banco:|:fi:||:fv:|Número de cuenta BCP:|:fi:||:fv:|Número Ruc Factura:|:fi:||:fv:|Nº Cta interbancario CCI: (Banco distinto a BCP)|:fi:||:fv:|Clave Sol Sunat: (Para emisión de facturas)|:fi:||:fv:|Usuario Sunat:|:fi:||:fv:|Nombre completo de titular de la cuenta:|:fi:||:fv:|Nº DNI /CE / PASS / RUC de titular de la cuenta:|:fi:||:fv:|Tipo de Documento del titular de la cuenta:|:fi:||:fv:|Tipo de cuenta Banco:|:fi:||:fv:|Marcar si Moobiz realiza su contabilidad|:fi:||:fv:|Tipo de Contribuyente|:fi:||:fv:|Fecha Activacion|:fi:||:fv:|Ruc a nombre de TERCERO:|:fi:||:fv:|Emisión o Declaración:|:fi:||:fv:|PAGO FRECUENTE|:fi:||"
+      }
+    ]
+  },
+  "schema": [
+    {
+      "column_name": "id",
+      "data_type": "text",
+      "character_maximum_length": null,
+      "udt_name": "text"
+    },
+    {
+      "column_name": "id_branch",
+      "data_type": "text",
+      "character_maximum_length": null,
+      "udt_name": "text"
+    },
+    {
+      "column_name": "id_role",
+      "data_type": "text",
+      "character_maximum_length": null,
+      "udt_name": "text"
+    },
+    {
+      "column_name": "id_company",
+      "data_type": "text",
+      "character_maximum_length": null,
+      "udt_name": "text"
+    },
+    {
+      "column_name": "id_company_area",
+      "data_type": "text",
+      "character_maximum_length": null,
+      "udt_name": "text"
+    },
+    {
+      "column_name": "show_data_fleets",
+      "data_type": "boolean",
+      "character_maximum_length": null,
+      "udt_name": "bool"
+    },
+    {
+      "column_name": "raw_data",
+      "data_type": "jsonb",
+      "character_maximum_length": null,
+      "udt_name": "jsonb"
+    },
+    {
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone",
+      "character_maximum_length": null,
+      "udt_name": "timestamptz"
+    },
+    {
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone",
+      "character_maximum_length": null,
+      "udt_name": "timestamptz"
+    }
+  ],
+  "triggers": [
+    {
+      "event_object_table": "moobiz_drivers",
+      "trigger_name": "trg_moobiz_drivers_updated_at",
+      "action_timing": "BEFORE",
+      "event_manipulation": "UPDATE",
+      "action_statement": "EXECUTE FUNCTION set_moobiz_drivers_updated_at()"
+    }
+  ]
+}

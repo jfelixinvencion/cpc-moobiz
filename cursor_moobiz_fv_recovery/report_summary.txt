@@ -1,0 +1,45 @@
+=== Moobiz fv_items recovery job (dry-run) ===
+finished_at: 2026-05-27T17:42:29.946Z
+output_dir: C:\Users\Moobiz\taxi-dashboard\cursor_moobiz_fv_recovery
+
+Métricas:
+  total_ids_procesados: 1539
+  total_con_raw_fv_present: 1539
+  total_raw_len_eq_1024 (chars): 1538
+  total_rebuilt_len_gt_raw_len: 1539
+  total_sha_mismatch (con rebuilt): 1539
+  diff_flag SAME: 0
+  diff_flag TRUNCATED_ON_LIST: 1539
+  diff_flag ERROR: 0
+  diff_flag MISSING_ON_FORM: 0
+
+Recuperación (criterio primario):
+  ids con raw char len 1024: 1538
+  recuperados (TRUNCATED_ON_LIST): 1538
+  percent_recovered: 100%
+
+Latencia POST /drivers/form (ms):
+  p50: 180
+  p95: 220
+  p99: 478
+  samples: 1539
+
+¿Recuperación masiva posible?
+  SI (>=95% de ids con fv_items truncado a 1024 chars)
+
+Top ejemplos TRUNCATED_ON_LIST:
+  id=131153 raw=1035B rebuilt=1236B tail_raw="En que distrito vive|:fi:|San Martin de porres|:fv:|Turno|:f…"
+  id=131150 raw=1035B rebuilt=1217B tail_raw="En que distrito vive|:fi:|Comas|:fv:|Turno|:fi:|T1: TD: LIBR…"
+  id=131149 raw=1036B rebuilt=1224B tail_raw="En que distrito vive|:fi:|Santa María|:fv:|Turno|:fi:|T1: TD…"
+  id=131148 raw=1034B rebuilt=1290B tail_raw="En que distrito vive|:fi:|Smp|:fv:|Turno|:fi:|T1: TD: LIBRE|…"
+  id=131147 raw=1035B rebuilt=1240B tail_raw="En que distrito vive|:fi:|Cerro colorado|:fv:|Turno|:fi:|T2:…"
+
+Integración sugerida en sync_moobiz_drivers:
+  1) Mantener GET list para metadatos masivos.
+  2) Tras listado, para cada id (o solo donde length(fv_items)=1024):
+     POST /api/admin/drivers/form {id} → rebuildFvFromForms(forms).
+  3) Sustituir raw_data.fv_items en el objeto antes del RPC moobiz_drivers_full_replace.
+  4) Concurrencia 4-8, retries/backoff, checkpoint por id.
+  5) Nota: orden/campos rebuilt pueden diferir del listado; usar rebuilt como fuente completa.
+
+Seguridad: rotar token Moobiz si se usó en entorno compartido.

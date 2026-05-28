@@ -1,0 +1,150 @@
+{
+  "FULL_RETRIEVABLE": true,
+  "verdict": "fv_items completos recuperables vía POST /api/admin/drivers/form para >=95% de ids con lista truncada a 1024 chars",
+  "totals": {
+    "total_ids": 1539,
+    "total_with_raw_fv": 1539,
+    "total_raw_len_eq_1024": 1538,
+    "count_truncated_on_list": 1539,
+    "count_same": 0,
+    "count_missing_on_form": 0,
+    "count_errors": 0,
+    "percent_recovered": 100,
+    "percent_recovered_denominator": "ids_with_raw_fv_char_len_1024",
+    "ids_truncated_1024": 1538,
+    "recovered_among_1024": 1538
+  },
+  "limitations": [
+    "rebuilt usa orden forms[].fields[]; puede diferir del orden del listado aunque contenga más datos",
+    "1 id con raw_fv_char_len!=1024 (105978: 1020 chars) también recuperó contenido ampliado"
+  ],
+  "method": {
+    "list": "GET https://app.moobiz.pe/api/admin/drivers?limit=3000",
+    "form": "POST https://app.moobiz.pe/api/admin/drivers/form body {\"id\":\"<ID>\"}",
+    "rebuild_rule": "${label}|:fi:|${value||''}|:fv:| per forms[].fields[]"
+  },
+  "examples": [
+    {
+      "id": "131153",
+      "raw_len": 1035,
+      "rebuilt_len": 1236,
+      "diff_flag": "TRUNCATED_ON_LIST",
+      "raw_preview_first200": "En que distrito vive|:fi:|San Martin de porres|:fv:|Turno|:fi:|T1: TD: LIBRE|:fv:|Vencimiento de Brevete|:fi:|2026-11-13|:fv:|Vencimiento de SOAT|:fi:|2027-05-22|:fv:|Número de DNI/CE/PASSPORT|:fi:|42…",
+      "rebuilt_preview_first200": "DNI / CE / PASS|:fi:|/field_values/f_25_t_131153_6a17153296675.jpg|:fv:|COMBUSTIBLE|:fi:|GASOLINA|:fv:|PERMISO PLACA|:fi:|TAXI ATU|:fv:|Brevete|:fi:|/field_values/f_28_t_131153_6a1715331503d.png|:fv:|…"
+    },
+    {
+      "id": "131146",
+      "raw_len": 1035,
+      "rebuilt_len": 1243,
+      "diff_flag": "TRUNCATED_ON_LIST",
+      "raw_preview_first200": "En que distrito vive|:fi:|Callao|:fv:|Turno|:fi:|T6: TD: 05:00 - 14:00|:fv:|Vencimiento de Brevete|:fi:|2027-05-16|:fv:|Vencimiento de SOAT|:fi:|2027-03-26|:fv:|Número de DNI/CE/PASSPORT|:fi:|41261333…",
+      "rebuilt_preview_first200": "DNI / CE / PASS|:fi:|/field_values/f_25_t_131146_6a1611d36bd1b.jpg|:fv:|COMBUSTIBLE|:fi:|HIBRIDO|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Brevete|:fi:|/field_values/f_28_t_131146_6a1611d3d72f2.jpg|:fv:…"
+    },
+    {
+      "id": "131137",
+      "raw_len": 1035,
+      "rebuilt_len": 1244,
+      "diff_flag": "TRUNCATED_ON_LIST",
+      "raw_preview_first200": "En que distrito vive|:fi:|Villa maria|:fv:|Turno|:fi:|T3: TD: 09:00 - 20:00|:fv:|Vencimiento de Brevete|:fi:|2031-04-13|:fv:|Vencimiento de SOAT|:fi:|2027-05-21|:fv:|Número de DNI/CE/PASSPORT|:fi:|431…",
+      "rebuilt_preview_first200": "DNI / CE / PASS|:fi:|/field_values/f_25_t_131137_6a15cf0ebb3e3.jpg|:fv:|COMBUSTIBLE|:fi:|GLP|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Brevete|:fi:|/field_values/f_28_t_131137_6a15cf0f347d7.jpg|:fv:|Cat…"
+    },
+    {
+      "id": "131141",
+      "raw_len": 1035,
+      "rebuilt_len": 1244,
+      "diff_flag": "TRUNCATED_ON_LIST",
+      "raw_preview_first200": "En que distrito vive|:fi:|Lurigancho|:fv:|Turno|:fi:|T9: TN: 19:00 - 06:00|:fv:|Vencimiento de Brevete|:fi:|2030-01-17|:fv:|Vencimiento de SOAT|:fi:|2026-12-26|:fv:|Número de DNI/CE/PASSPORT|:fi:|4800…",
+      "rebuilt_preview_first200": "DNI / CE / PASS|:fi:|/field_values/f_25_t_131141_6a15f93b1514f.jpg|:fv:|COMBUSTIBLE|:fi:|GNV|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Brevete|:fi:|/field_values/f_28_t_131141_6a15f93b76a36.jpg|:fv:|Cat…"
+    },
+    {
+      "id": "131148",
+      "raw_len": 1034,
+      "rebuilt_len": 1290,
+      "diff_flag": "TRUNCATED_ON_LIST",
+      "raw_preview_first200": "En que distrito vive|:fi:|Smp|:fv:|Turno|:fi:|T1: TD: LIBRE|:fv:|Vencimiento de Brevete|:fi:|2028-04-13|:fv:|Vencimiento de SOAT|:fi:|2027-05-12|:fv:|Número de DNI/CE/PASSPORT|:fi:|003175145|:fv:|Venc…",
+      "rebuilt_preview_first200": "DNI / CE / PASS|:fi:|/field_values/f_25_t_131148_6a16280535309.jpg|:fv:|COMBUSTIBLE|:fi:|GNV|:fv:|PERMISO PLACA|:fi:|TAXI ATU|:fv:|Brevete|:fi:|/field_values/f_28_t_131148_6a162805a57cf.jpg|:fv:|Categ…"
+    },
+    {
+      "id": "131149",
+      "raw_len": 1036,
+      "rebuilt_len": 1224,
+      "diff_flag": "TRUNCATED_ON_LIST",
+      "raw_preview_first200": "En que distrito vive|:fi:|Santa María|:fv:|Turno|:fi:|T1: TD: LIBRE|:fv:|Vencimiento de Brevete|:fi:|2028-01-25|:fv:|Vencimiento de SOAT|:fi:|2026-12-24|:fv:|Número de DNI/CE/PASSPORT|:fi:|71474904|:f…",
+      "rebuilt_preview_first200": "DNI / CE / PASS|:fi:|/field_values/f_25_t_131149_6a167684ac41d.png|:fv:|COMBUSTIBLE|:fi:|GNV|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Brevete|:fi:|/field_values/f_28_t_131149_6a1676856b92d.png|:fv:|Cat…"
+    },
+    {
+      "id": "131136",
+      "raw_len": 1035,
+      "rebuilt_len": 1241,
+      "diff_flag": "TRUNCATED_ON_LIST",
+      "raw_preview_first200": "En que distrito vive|:fi:|San miguel|:fv:|Turno|:fi:|T2: TD: 05:00 - 19:00|:fv:|Vencimiento de Brevete|:fi:|2035-02-20|:fv:|Vencimiento de SOAT|:fi:|2026-12-19|:fv:|Número de DNI/CE/PASSPORT|:fi:|7321…",
+      "rebuilt_preview_first200": "DNI / CE / PASS|:fi:|/field_values/f_25_t_131136_6a15c63d828da.png|:fv:|COMBUSTIBLE|:fi:|GLP|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Brevete|:fi:|/field_values/f_28_t_131136_6a15c63e0c87b.png|:fv:|Cat…"
+    },
+    {
+      "id": "131135",
+      "raw_len": 1036,
+      "rebuilt_len": 1234,
+      "diff_flag": "TRUNCATED_ON_LIST",
+      "raw_preview_first200": "En que distrito vive|:fi:|San Martín de Porres|:fv:|Turno|:fi:|T1: TD: LIBRE|:fv:|Vencimiento de Brevete|:fi:|2032-04-05|:fv:|Vencimiento de SOAT|:fi:|2027-01-12|:fv:|Número de DNI/CE/PASSPORT|:fi:|45…",
+      "rebuilt_preview_first200": "DNI / CE / PASS|:fi:|/field_values/f_25_t_131135_6a15b5a38d990.jpg|:fv:|COMBUSTIBLE|:fi:|GNV|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Brevete|:fi:|/field_values/f_28_t_131135_6a15b5a40828c.jpg|:fv:|Cat…"
+    },
+    {
+      "id": "131143",
+      "raw_len": 1035,
+      "rebuilt_len": 1245,
+      "diff_flag": "TRUNCATED_ON_LIST",
+      "raw_preview_first200": "En que distrito vive|:fi:|San Juan de Lurigancho|:fv:|Turno|:fi:|T1: TD: LIBRE|:fv:|Vencimiento de Brevete|:fi:|2027-11-29|:fv:|Vencimiento de SOAT|:fi:|2026-12-13|:fv:|Número de DNI/CE/PASSPORT|:fi:|…",
+      "rebuilt_preview_first200": "DNI / CE / PASS|:fi:|/field_values/f_25_t_131143_6a1604b7cd521.jpg|:fv:|COMBUSTIBLE|:fi:|GNV|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Brevete|:fi:|/field_values/f_28_t_131143_6a1604b84ec00.jpg|:fv:|Cat…"
+    },
+    {
+      "id": "131145",
+      "raw_len": 1035,
+      "rebuilt_len": 1224,
+      "diff_flag": "TRUNCATED_ON_LIST",
+      "raw_preview_first200": "En que distrito vive|:fi:|El agustino|:fv:|Turno|:fi:|T1: TD: LIBRE|:fv:|Vencimiento de Brevete|:fi:|2027-04-11|:fv:|Vencimiento de SOAT|:fi:|2026-12-13|:fv:|Número de DNI/CE/PASSPORT|:fi:|76375587|:f…",
+      "rebuilt_preview_first200": "DNI / CE / PASS|:fi:|/field_values/f_25_t_131145_6a160bb684c8e.jpg|:fv:|COMBUSTIBLE|:fi:|GNV|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Brevete|:fi:|/field_values/f_28_t_131145_6a160bb7345ae.jpg|:fv:|Cat…"
+    },
+    {
+      "id": "131126",
+      "raw_len": 1035,
+      "rebuilt_len": 1227,
+      "diff_flag": "TRUNCATED_ON_LIST",
+      "raw_preview_first200": "En que distrito vive|:fi:|LURIGANCHO|:fv:|Turno|:fi:|T1: TD: LIBRE|:fv:|Vencimiento de Brevete|:fi:|2000-01-01|:fv:|Vencimiento de SOAT|:fi:|2000-01-01|:fv:|Número de DNI/CE/PASSPORT|:fi:|41888380|:fv…",
+      "rebuilt_preview_first200": "DNI / CE / PASS|:fi:|/field_values/f_25_t_131126_6a15075398ba0.png|:fv:|COMBUSTIBLE|:fi:|HIBRIDO|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Brevete|:fi:|/field_values/f_28_t_131126_6a150753c4f5a.png|:fv:…"
+    },
+    {
+      "id": "131124",
+      "raw_len": 1035,
+      "rebuilt_len": 1227,
+      "diff_flag": "TRUNCATED_ON_LIST",
+      "raw_preview_first200": "En que distrito vive|:fi:|Cercado de lima|:fv:|Turno|:fi:|T8: TN: LIBRE|:fv:|Vencimiento de Brevete|:fi:|2034-09-28|:fv:|Vencimiento de SOAT|:fi:|2027-03-31|:fv:|Número de DNI/CE/PASSPORT|:fi:|7138561…",
+      "rebuilt_preview_first200": "DNI / CE / PASS|:fi:|/field_values/f_25_t_131124_6a14d3c1bb4fd.jpg|:fv:|COMBUSTIBLE|:fi:|GLP|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Brevete|:fi:|/field_values/f_28_t_131124_6a14d3c23eed0.jpg|:fv:|Cat…"
+    },
+    {
+      "id": "131123",
+      "raw_len": 1033,
+      "rebuilt_len": 1353,
+      "diff_flag": "TRUNCATED_ON_LIST",
+      "raw_preview_first200": "En que distrito vive|:fi:|San Juan de Lurigancho|:fv:|Turno|:fi:|T1: TD: LIBRE|:fv:|Vencimiento de Brevete|:fi:|2036-03-19|:fv:|Vencimiento de SOAT|:fi:|2027-03-19|:fv:|Número de DNI/CE/PASSPORT|:fi:|…",
+      "rebuilt_preview_first200": "DNI / CE / PASS|:fi:|/field_values/f_25_t_131123_6a14c96041133.jpg|:fv:|COMBUSTIBLE|:fi:|GASOLINA|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Brevete|:fi:|/field_values/f_28_t_131123_6a14c960ad50b.jpg|:fv…"
+    },
+    {
+      "id": "131118",
+      "raw_len": 1035,
+      "rebuilt_len": 1250,
+      "diff_flag": "TRUNCATED_ON_LIST",
+      "raw_preview_first200": "En que distrito vive|:fi:|San Juan de lurigancho|:fv:|Turno|:fi:|T3: TD: 09:00 - 20:00|:fv:|Vencimiento de Brevete|:fi:|2026-05-25|:fv:|Vencimiento de SOAT|:fi:|2026-05-31|:fv:|Número de DNI/CE/PASSPO…",
+      "rebuilt_preview_first200": "DNI / CE / PASS|:fi:|/field_values/f_25_t_131118_6a14a4381a969.png|:fv:|COMBUSTIBLE|:fi:|GASOLINA|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Brevete|:fi:|/field_values/f_28_t_131118_6a14a4388937e.png|:fv…"
+    },
+    {
+      "id": "131117",
+      "raw_len": 1035,
+      "rebuilt_len": 1230,
+      "diff_flag": "TRUNCATED_ON_LIST",
+      "raw_preview_first200": "En que distrito vive|:fi:|Villa el salvador|:fv:|Turno|:fi:|T1: TD: LIBRE|:fv:|Vencimiento de Brevete|:fi:|2030-01-28|:fv:|Vencimiento de SOAT|:fi:|2026-10-27|:fv:|Número de DNI/CE/PASSPORT|:fi:|70865…",
+      "rebuilt_preview_first200": "DNI / CE / PASS|:fi:|/field_values/f_25_t_131117_6a14824fb5e9b.png|:fv:|COMBUSTIBLE|:fi:|GNV|:fv:|PERMISO PLACA|:fi:|PARTICULAR|:fv:|Brevete|:fi:|/field_values/f_28_t_131117_6a1482503504f.png|:fv:|Cat…"
+    }
+  ],
+  "output_dir": "C:\\Users\\Moobiz\\taxi-dashboard\\cursor_moobiz_fv_validation_readonly",
+  "finished_at": "2026-05-27T18:57:37.294Z"
+}

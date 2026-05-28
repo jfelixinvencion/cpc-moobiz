@@ -6,6 +6,8 @@ Guardar la respuesta **completa** de `POST /api/admin/drivers/form` por conducto
 
 El listado masivo (`GET /api/admin/drivers`) trunca `fv_items` a 1024 caracteres; el endpoint `form` devuelve todos los campos.
 
+El script lista **todos los conductores sin filtro de sucursal** (Lima + provincias). Para cada id con `fv_items` de longitud **1024**, llama a `POST /drivers/form`, reconstruye `fv_items` y lo sustituye en `raw_data` antes del upsert en `moobiz_driver_forms`.
+
 ## Migraciones (manual — DBA)
 
 Orden sugerido:
@@ -31,24 +33,30 @@ psql "$DB_CONNECTION_STRING" -v ON_ERROR_STOP=1 -f migrations/20260528_create_mo
 
 No publicar tokens en logs ni commits.
 
-### Flags
+### Flags y variables
 
-| Flag | Descripción |
-|------|-------------|
-| `--dry-run` | Solo API + `tmp_sync_driver_forms/`; sin UPSERT |
-| `--batch-size=N` | Máx. ids por ejecución (default 50) |
-| `--concurrency=N` | Paralelismo (default 8) |
-| `--max-workers=N` | Alias de `--concurrency` |
-| `--since=ISO` | Solo ids presentes en listado y con `moobiz_drivers.updated_at >= since` |
+| Flag / env | Descripción |
+|------------|-------------|
+| `--dry-run` | **Default** (`DRY_RUN`≠false): artefactos en `OUTPUT_DIR`, sin UPSERT |
+| `--no-dry-run` | Aplicar UPSERT en `moobiz_driver_forms` |
+| `--emit-sql` / `EMIT_SQL=true` | Generar `artifacts/update_sql.sql` |
+| `ONLY_IDS=128317,130927` | Prueba rápida (fuerza POST form) |
+| `OUTPUT_DIR` | Default `./output_cursor_sync_forms` |
+| `CONCURRENCY` | Default 8 |
+| `LIST_LIMIT` | Default 3000 |
+| `--batch-size=N` | Límite de candidatos truncados por ejecución |
 
 ### Ejemplos locales
 
 ```bash
-# Dry-run 10 ids
-DB_CONNECTION_STRING="postgres://..." node scripts/sync_moobiz_driver_forms.js --dry-run --batch-size=10 --concurrency=4
+# Verificación LIMA + AREQUIPA (dry-run)
+ONLY_IDS=128317,130927 node scripts/sync_moobiz_driver_forms.js --dry-run --emit-sql
 
-# Lote real 50 ids
-DB_CONNECTION_STRING="postgres://..." node scripts/sync_moobiz_driver_forms.js --batch-size=50 --concurrency=8
+# Run completo truncados (dry-run, ~1900 ids)
+node scripts/sync_moobiz_driver_forms.js --dry-run --emit-sql
+
+# Staging/prod: aplicar upserts
+DRY_RUN=false DB_CONNECTION_STRING="postgres://..." node scripts/sync_moobiz_driver_forms.js --batch-size=100
 ```
 
 npm:

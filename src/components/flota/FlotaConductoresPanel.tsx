@@ -1,7 +1,7 @@
 "use client";
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, ArrowUp, ArrowUpDown, Loader2 } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, ExternalLink, Loader2 } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -22,7 +22,19 @@ import {
   type FlotaConductoresSortDir,
 } from "@/lib/flota-conductores-params";
 import type { FlotaConductorRow, FlotaConductoresMeta } from "@/lib/flota-conductores-query";
+import { formatDateForUi } from "@/lib/date-utils";
 import { cn } from "@/lib/utils";
+
+const MOOBIZ_DRIVER_URL = "https://app.moobiz.pe/drivers";
+
+function moobizDriverHref(idConductor: string): string {
+  return `${MOOBIZ_DRIVER_URL}?query=${encodeURIComponent(idConductor)}`;
+}
+
+function formatFechaActivacion(value: string | null | undefined): string {
+  if (!value?.trim()) return "—";
+  return formatDateForUi(value) || value.trim();
+}
 
 const BATCH = 100;
 const ROW_H = 40;
@@ -228,7 +240,7 @@ export function FlotaConductoresPanel() {
 
   const gridCols = useMemo(
     () =>
-      "grid grid-cols-[minmax(5rem,0.6fr)_minmax(8rem,1.4fr)_minmax(5rem,0.8fr)_minmax(7rem,1fr)_minmax(4rem,0.5fr)_minmax(4.5rem,0.55fr)] gap-2",
+      "grid grid-cols-[minmax(6rem,0.75fr)_minmax(8rem,1.4fr)_minmax(5rem,0.8fr)_minmax(7rem,1fr)_minmax(4rem,0.5fr)_minmax(5.5rem,0.65fr)_minmax(4.5rem,0.55fr)] gap-2",
     [],
   );
 
@@ -341,6 +353,7 @@ export function FlotaConductoresPanel() {
               <SortIcon active={sortCol === "distrito"} dir={sortDir} />
             </button>
             <span>Turno</span>
+            <span className="text-center">Fecha Activación</span>
             <button
               type="button"
               className="flex items-center justify-end text-right hover:text-slate-900"
@@ -389,8 +402,25 @@ export function FlotaConductoresPanel() {
                         }
                       }}
                     >
-                      <span className="truncate font-mono text-[11px]" title={row.idConductor}>
-                        {row.idConductor}
+                      <span className="flex min-w-0 items-center gap-1">
+                        <span
+                          className="truncate font-mono text-[11px]"
+                          title={row.idConductor}
+                        >
+                          {row.idConductor}
+                        </span>
+                        <a
+                          href={moobizDriverHref(row.idConductor)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={`Abrir driver ${row.idConductor} en app.moobiz`}
+                          aria-label={`Abrir driver ${row.idConductor} en app.moobiz`}
+                          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-[#0f5666]"
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => e.stopPropagation()}
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+                        </a>
                       </span>
                       <span className="truncate" title={row.nombreConductor}>
                         {row.nombreConductor}
@@ -403,6 +433,12 @@ export function FlotaConductoresPanel() {
                       </span>
                       <span className="truncate" title={row.turno}>
                         {row.turno || "—"}
+                      </span>
+                      <span
+                        className="truncate text-center tabular-nums text-[11px]"
+                        title={row.fechaActivacion ?? ""}
+                      >
+                        {formatFechaActivacion(row.fechaActivacion)}
                       </span>
                       <span className="text-right tabular-nums font-semibold text-[#0f5666]">
                         {row.nServicios.toLocaleString("es-PE")}

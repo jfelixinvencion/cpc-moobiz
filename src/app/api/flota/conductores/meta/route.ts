@@ -7,6 +7,7 @@ import { assertQualityReadAccess } from "@/lib/panel-session";
 
 export const runtime = "nodejs";
 
+/** Meta desde `reportes.mv_conductores` y semanas en `reportes.semaforo`. */
 export async function GET(req: NextRequest) {
   try {
     assertQualityReadAccess(req);

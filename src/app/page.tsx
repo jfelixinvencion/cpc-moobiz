@@ -27,6 +27,8 @@ import { FlotaConductoresPanel } from "@/components/flota/FlotaConductoresPanel"
 import { FlotaPendientesCard } from "@/components/flota-pendientes-card";
 import { ProductividadPanel } from "@/components/dashboard/ProductividadPanel";
 import { ReservasCharts } from "@/components/dashboard/ReservasCharts";
+import { ServiciosMoobizCard } from "@/components/dashboard/ServiciosMoobizCard";
+import { ServiciosPendientesCard } from "@/components/dashboard/ServiciosPendientesCard";
 import { ControlOperacionesPanel } from "@/components/control-operaciones-panel";
 import { OperacionesDriverFiltersProvider } from "@/context/operaciones-driver-filters-context";
 import { MouseRevealHeaderLayout } from "@/components/mouse-reveal-header-layout";
@@ -97,7 +99,8 @@ function DashboardContent() {
   const [syncMonitorRow, setSyncMonitorRow] = useState<SyncMonitorRow | null>(null);
   const [syncMonitorLoading, setSyncMonitorLoading] = useState(true);
   const [syncMonitorError, setSyncMonitorError] = useState<string | null>(null);
-  const [dashboardSubTab, setDashboardSubTab] = useState("reservas");
+  const [dashboardSubTab, setDashboardSubTab] = useState("productividad");
+  const [planificacionSubTab, setPlanificacionSubTab] = useState("reservas");
 
   const setDatosSubInUrl = useCallback(
     (value: string) => {
@@ -323,6 +326,12 @@ function DashboardContent() {
                 className="flex-1 text-xs text-slate-200 data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
               >
                 Dashboard
+              </TabsTrigger>
+              <TabsTrigger
+                value="planificacion"
+                className="flex-1 text-xs text-slate-200 data-active:bg-[#00e676] data-active:text-[#0b1131] md:text-sm"
+              >
+                Planificacion
               </TabsTrigger>
               <TabsTrigger
                 value="operaciones"
@@ -581,15 +590,33 @@ function DashboardContent() {
             </Card>
           </TabsContent>
 
-          <TabsContent value="dashboard" className="mt-0 space-y-4 outline-none">
-            <Tabs value={dashboardSubTab} onValueChange={setDashboardSubTab} className="w-full">
-              <TabsList className="mb-3 grid h-auto min-h-10 w-full max-w-3xl grid-cols-1 gap-1 bg-slate-200/90 p-1 sm:grid-cols-2 sm:gap-0">
+          <TabsContent value="planificacion" className="mt-0 space-y-4 outline-none">
+            <Tabs value={planificacionSubTab} onValueChange={setPlanificacionSubTab} className="w-full">
+              <TabsList className="mb-3 grid h-auto min-h-10 w-full max-w-3xl grid-cols-1 gap-1 bg-slate-200/90 p-1 sm:grid-cols-1 sm:gap-0">
                 <TabsTrigger
                   value="reservas"
                   className="text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm sm:flex-1"
                 >
                   Reservas
                 </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="reservas" className="mt-0 space-y-4 outline-none">
+                <ServiciosPendientesCard
+                  active={mainTab === "planificacion" && planificacionSubTab === "reservas"}
+                  refreshKey={refreshKey}
+                />
+                <ServiciosMoobizCard />
+                <ReservasCharts
+                  active={mainTab === "planificacion" && planificacionSubTab === "reservas"}
+                />
+              </TabsContent>
+            </Tabs>
+          </TabsContent>
+
+          <TabsContent value="dashboard" className="mt-0 space-y-4 outline-none">
+            <Tabs value={dashboardSubTab} onValueChange={setDashboardSubTab} className="w-full">
+              <TabsList className="mb-3 grid h-auto min-h-10 w-full max-w-3xl grid-cols-1 gap-1 bg-slate-200/90 p-1 sm:grid-cols-1 sm:gap-0">
                 <TabsTrigger
                   value="productividad"
                   className="text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm sm:flex-1"
@@ -597,12 +624,6 @@ function DashboardContent() {
                   Productividad
                 </TabsTrigger>
               </TabsList>
-
-              <TabsContent value="reservas" className="mt-0 space-y-4 outline-none">
-                <ReservasCharts
-                  active={mainTab === "dashboard" && dashboardSubTab === "reservas"}
-                />
-              </TabsContent>
 
               <TabsContent value="productividad" className="mt-0 w-full max-w-none px-0 outline-none">
                 {/* Recuperar ancho útil frente al px-4/md:px-6 del shell sin afectar otras subpestañas */}

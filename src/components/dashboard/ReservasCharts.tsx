@@ -33,6 +33,44 @@ const CHART3_Y_TICK_COUNT = 5;
 const CHART3_ABSOLUTE_Y_MIN = 10;
 const CHART3_MIN_PERCENT_AXIS = 5;
 
+const CHART1_EXCLUDED_ESTADO = "desplazamiento";
+const CHART1_LEGEND_ORDER = ["Cancelado", "Finalizado", "No realizado"] as const;
+const CHART1_ESTADO_COLORS: Record<(typeof CHART1_LEGEND_ORDER)[number], string> = {
+  Cancelado: "#f43f5e",
+  Finalizado: "#0f5666",
+  "No realizado": "#f59e0b",
+};
+
+const WEEKDAY_TOGGLES = [
+  { iso: 1, label: "Lunes", aria: "Lunes" },
+  { iso: 2, label: "Martes", aria: "Martes" },
+  { iso: 3, label: "Miércoles", aria: "Miércoles" },
+  { iso: 4, label: "Jueves", aria: "Jueves" },
+  { iso: 5, label: "Viernes", aria: "Viernes" },
+  { iso: 6, label: "Sábado", aria: "Sábado" },
+  { iso: 7, label: "Domingo", aria: "Domingo" },
+] as const;
+
+function isExcludedChart1Estado(name: string): boolean {
+  return name.trim().toLowerCase() === CHART1_EXCLUDED_ESTADO;
+}
+
+function sortChart1Series(series: { name: string; data: number[] }[]): { name: string; data: number[] }[] {
+  const order = new Map<string, number>(CHART1_LEGEND_ORDER.map((name, idx) => [name, idx]));
+  return [...series].sort((a, b) => {
+    const ai = order.get(a.name) ?? 999;
+    const bi = order.get(b.name) ?? 999;
+    return ai - bi || a.name.localeCompare(b.name);
+  });
+}
+
+function chart1EstadoColor(name: string, fallbackIdx: number): string {
+  return (
+    CHART1_ESTADO_COLORS[name as (typeof CHART1_LEGEND_ORDER)[number]] ??
+    CHART_COLORS[fallbackIdx % CHART_COLORS.length]
+  );
+}
+
 function chart3AbsoluteYMax(numeratorValues: number[]): number {
   const maxNumerator = numeratorValues.length > 0 ? Math.max(...numeratorValues) : 0;
   if (maxNumerator === 0) return CHART3_ABSOLUTE_Y_MIN;
@@ -138,6 +176,7 @@ export function ReservasCharts({ active = true }: Props) {
   const [granularity, setGranularity] = useState<ReservasGranularity>("day");
   const [semana, setSemana] = useState<string | null>(null);
   const [estadoGlobal, setEstadoGlobal] = useState<string[]>([]);
+  const [selectedWeekdays, setSelectedWeekdays] = useState<number[]>([]);
   const [chart2Estado, setChart2Estado] = useState<string[]>([]);
   const [showPercentChart3, setShowPercentChart3] = useState(false);
 
@@ -145,6 +184,12 @@ export function ReservasCharts({ active = true }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  const toggleWeekday = useCallback((iso: number) => {
+    setSelectedWeekdays((prev) =>
+      prev.includes(iso) ? prev.filter((d) => d !== iso) : [...prev, iso].sort((a, b) => a - b),
+    );
+  }, []);
 
   const buildParams = useCallback(() => {
     const start = new Date(`${startDate}T00:00:00`);
@@ -156,8 +201,9 @@ export function ReservasCharts({ active = true }: Props) {
       semana,
       estado: estadoGlobal.length > 0 ? estadoGlobal : null,
       chart2Estado: chart2Estado.length > 0 ? chart2Estado : null,
+      weekdays: selectedWeekdays.length > 0 ? selectedWeekdays : null,
     };
-  }, [chart2Estado, endDate, estadoGlobal, granularity, semana, startDate]);
+  }, [chart2Estado, endDate, estadoGlobal, granularity, selectedWeekdays, semana, startDate]);
 
   const fetchData = useCallback(async () => {
     if (!active) return;
@@ -222,12 +268,20 @@ export function ReservasCharts({ active = true }: Props) {
     [buildParams, showPercentChart3],
   );
 
+  const chart1Series = useMemo(
+    () =>
+      sortChart1Series(
+        (data?.chart1.series ?? []).filter((s) => !isExcludedChart1Estado(s.name)),
+      ),
+    [data],
+  );
+
   const chart1Rows = useMemo(
     () =>
       data
-        ? toRechartsRows(data.chart1.buckets, data.chart1.series, data.meta.granularity)
+        ? toRechartsRows(data.chart1.buckets, chart1Series, data.meta.granularity)
         : [],
-    [data],
+    [chart1Series, data],
   );
 
   const chart2Rows = useMemo(
@@ -312,6 +366,30 @@ export function ReservasCharts({ active = true }: Props) {
             loading={loading && !data}
             className="min-w-[10rem]"
           />
+          <div
+            role="group"
+            aria-label="Filtrar por día de la semana"
+            className="flex flex-wrap items-end gap-1"
+          >
+            {WEEKDAY_TOGGLES.map(({ iso, label, aria }) => {
+              const on = selectedWeekdays.includes(iso);
+              return (
+                <Button
+                  key={iso}
+                  type="button"
+                  variant={on ? "default" : "outline"}
+                  size="sm"
+                  className="h-8 px-2 text-[11px] font-semibold"
+                  onClick={() => toggleWeekday(iso)}
+                  aria-pressed={on}
+                  aria-label={`Filtrar por ${aria}`}
+                  disabled={loading}
+                >
+                  {label}
+                </Button>
+              );
+            })}
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button
@@ -367,21 +445,25 @@ export function ReservasCharts({ active = true }: Props) {
           exportDisabled={!data}
         >
           <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={chart1Rows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+            <BarChart data={chart1Rows} margin={{ top: 28, right: 8, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.35)" />
+              <Legend
+                verticalAlign="top"
+                align="center"
+                wrapperStyle={{ fontSize: 11, paddingBottom: 4 }}
+              />
               <XAxis dataKey="bucketLabel" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
               <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
               <Tooltip
                 formatter={(value, name) => [Number(value).toLocaleString("es-PE"), String(name)]}
                 labelFormatter={(label) => String(label)}
               />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
-              {(data?.chart1.series ?? []).map((s, idx) => (
+              {chart1Series.map((s, idx) => (
                 <Bar
                   key={s.name}
                   dataKey={s.name}
                   stackId="estado"
-                  fill={CHART_COLORS[idx % CHART_COLORS.length]}
+                  fill={chart1EstadoColor(s.name, idx)}
                 />
               ))}
             </BarChart>

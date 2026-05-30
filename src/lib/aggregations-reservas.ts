@@ -11,6 +11,8 @@ export type ReservasAggregationParams = {
   semana: string | null;
   estado: string[] | null;
   chart2Estado: string[] | null;
+  /** ISO weekday 1..7 (lun..dom); null = sin filtro de día. */
+  weekdays: number[] | null;
 };
 
 export type ReservasSeriesPoint = { bucket: string; value: number };
@@ -26,6 +28,7 @@ export type ReservasAggregationsResponse = {
     semana: string | null;
     estado: string[] | null;
     chart2Estado: string[] | null;
+    weekdays: number[] | null;
   };
   filterOptions: {
     estados: string[];
@@ -69,6 +72,16 @@ function nullIfEmpty(arr: string[]): string[] | null {
   return arr.length === 0 ? null : arr;
 }
 
+function parseReservasWeekdaysParam(sp: URLSearchParams): number[] | null {
+  const seen = new Set<number>();
+  for (const raw of sp.getAll("weekday")) {
+    const n = Number.parseInt(raw, 10);
+    if (Number.isFinite(n) && n >= 1 && n <= 7) seen.add(n);
+  }
+  const arr = [...seen].sort((a, b) => a - b);
+  return arr.length === 0 ? null : arr;
+}
+
 export function parseReservasGranularity(raw: string | null): ReservasGranularity {
   const g = raw?.trim().toLowerCase();
   if (g === "hour" || g === "day" || g === "week" || g === "month") return g;
@@ -97,6 +110,7 @@ export function parseReservasAggregationParams(
     semana,
     estado,
     chart2Estado,
+    weekdays: parseReservasWeekdaysParam(sp),
   };
 }
 
@@ -108,6 +122,7 @@ function cacheKey(params: ReservasAggregationParams): string {
     semana: params.semana,
     estado: params.estado,
     chart2Estado: params.chart2Estado,
+    weekdays: params.weekdays,
   });
 }
 
@@ -126,6 +141,10 @@ function baseWhere(startIdx: number): string {
 
 function estadoClause(paramIdx: number): string {
   return `(cardinality($${paramIdx}::text[]) = 0 OR r."Estado" = ANY($${paramIdx}::text[]))`;
+}
+
+function weekdaysClause(paramIdx: number): string {
+  return `(cardinality($${paramIdx}::int[]) = 0 OR EXTRACT(ISODOW FROM timezone('America/Lima', r."F. Programada"))::int = ANY($${paramIdx}::int[]))`;
 }
 
 function bucketIso(v: unknown): string {
@@ -210,6 +229,7 @@ export async function runReservasAggregations(
     FROM ${TABLE} r
     WHERE ${baseWhere(1)}
       AND ${estadoClause(4)}
+      AND ${weekdaysClause(5)}
     GROUP BY bucket, estado
     ORDER BY bucket ASC, estado
   `;
@@ -219,6 +239,7 @@ export async function runReservasAggregations(
     FROM ${TABLE} r
     WHERE ${baseWhere(1)}
       AND ${estadoClause(4)}
+      AND ${weekdaysClause(5)}
     GROUP BY bucket
     ORDER BY bucket ASC
   `;
@@ -228,6 +249,7 @@ export async function runReservasAggregations(
     FROM ${TABLE} r
     WHERE ${baseWhere(1)}
       AND ${estadoClause(4)}
+      AND ${weekdaysClause(5)}
       AND upper(trim(r."Nombre Conductor"::text)) = 'NUEVOS'
       AND upper(trim(r."Estado"::text)) = 'FINALIZADO'
     GROUP BY bucket
@@ -239,15 +261,19 @@ export async function runReservasAggregations(
     FROM ${TABLE} r
     WHERE ${baseWhere(1)}
       AND ${estadoClause(4)}
+      AND ${weekdaysClause(5)}
     GROUP BY bucket
     ORDER BY bucket ASC
   `;
+
+  const globalWeekdays = params.weekdays ?? [];
 
   const baseParams = [
     params.start.toISOString(),
     params.end.toISOString(),
     params.semana,
     globalEstado,
+    globalWeekdays,
   ];
 
   const chart2Params = [
@@ -255,6 +281,7 @@ export async function runReservasAggregations(
     params.end.toISOString(),
     params.semana,
     chart2Estado,
+    globalWeekdays,
   ];
 
   const [chart1Res, chart2Res, chart3NumRes, chart3DenRes] = await Promise.all([
@@ -301,6 +328,7 @@ export async function runReservasAggregations(
       semana: params.semana,
       estado: params.estado,
       chart2Estado: params.chart2Estado,
+      weekdays: params.weekdays,
     },
     filterOptions,
     chart1: {
@@ -411,4 +439,5 @@ export function appendReservasParams(p: URLSearchParams, params: ReservasAggrega
   if (params.semana) p.set("semana", params.semana);
   for (const e of params.estado ?? []) p.append("estado", e);
   for (const e of params.chart2Estado ?? []) p.append("chart2_estado", e);
+  for (const d of params.weekdays ?? []) p.append("weekday", String(d));
 }

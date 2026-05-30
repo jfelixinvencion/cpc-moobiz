@@ -31,15 +31,34 @@ const AMERICA_LIMA = "America/Lima";
 const CHART_COLORS = ["#0f5666", "#2fb6b0", "#14b8a6", "#f59e0b", "#a855f7", "#f43f5e", "#64748b"];
 const CHART3_Y_TICK_COUNT = 5;
 const CHART3_ABSOLUTE_Y_MIN = 10;
+const CHART3_MIN_PERCENT_AXIS = 5;
 
-function chart3YAxisMax(numeratorValues: number[], showPercent: boolean): number {
-  if (showPercent) return 100;
+function chart3AbsoluteYMax(numeratorValues: number[]): number {
   const maxNumerator = numeratorValues.length > 0 ? Math.max(...numeratorValues) : 0;
   if (maxNumerator === 0) return CHART3_ABSOLUTE_Y_MIN;
   const suggestedMax = Math.ceil(maxNumerator * 1.1);
   return maxNumerator <= 10
     ? Math.max(suggestedMax, CHART3_ABSOLUTE_Y_MIN)
     : suggestedMax;
+}
+
+function chart3PercentBucketValues(numerator: number[], denominator: number[]): number[] {
+  return denominator.map((d, i) => (d > 0 ? ((numerator[i] ?? 0) / d) * 100 : 0));
+}
+
+function chart3PercentYAxis(
+  numerator: number[],
+  denominator: number[],
+): { yMax: number; ticks: number[] } {
+  const percentSeries = chart3PercentBucketValues(numerator, denominator);
+  const maxPercent = percentSeries.length > 0 ? Math.max(...percentSeries) : 0;
+  const suggestedMaxPercent = Math.ceil(maxPercent * 1.1);
+  const yMax = Math.min(Math.max(suggestedMaxPercent, CHART3_MIN_PERCENT_AXIS), 100);
+  const step = Math.max(Math.ceil(yMax / (CHART3_Y_TICK_COUNT - 1)), 1);
+  const ticks = Array.from({ length: CHART3_Y_TICK_COUNT }, (_, idx) => idx * step).filter(
+    (v) => v <= yMax,
+  );
+  return { yMax, ticks: ticks.length > 0 ? ticks : [0, yMax] };
 }
 
 type Props = {
@@ -233,10 +252,14 @@ export function ReservasCharts({ active = true }: Props) {
     [data, showPercentChart3],
   );
 
-  const chart3YMax = useMemo(
-    () => chart3YAxisMax(data?.chart3.numerator ?? [], showPercentChart3),
-    [data, showPercentChart3],
-  );
+  const chart3YAxis = useMemo((): { yMax: number; ticks?: number[] } => {
+    const numerator = data?.chart3.numerator ?? [];
+    const denominator = data?.chart3.denominator ?? [];
+    if (showPercentChart3) {
+      return chart3PercentYAxis(numerator, denominator);
+    }
+    return { yMax: chart3AbsoluteYMax(numerator) };
+  }, [data, showPercentChart3]);
 
   const estadoOptions = data?.filterOptions.estados ?? [];
   const semanaOptions = data?.filterOptions.semanas ?? [];
@@ -422,10 +445,14 @@ export function ReservasCharts({ active = true }: Props) {
               <XAxis dataKey="bucketLabel" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
               <YAxis
                 tick={{ fontSize: 10 }}
-                domain={[0, chart3YMax]}
-                tickCount={CHART3_Y_TICK_COUNT}
+                domain={[0, chart3YAxis.yMax]}
+                {...(showPercentChart3 && chart3YAxis.ticks
+                  ? { ticks: chart3YAxis.ticks }
+                  : { tickCount: CHART3_Y_TICK_COUNT })}
                 allowDecimals={false}
-                tickFormatter={(v) => (showPercentChart3 ? `${v}%` : String(v))}
+                tickFormatter={(v) =>
+                  showPercentChart3 ? `${Math.round(Number(v))}%` : String(v)
+                }
               />
               <Tooltip
                 formatter={(value, _name, item) => {

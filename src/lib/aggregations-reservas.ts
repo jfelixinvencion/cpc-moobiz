@@ -228,8 +228,8 @@ export async function runReservasAggregations(
     FROM ${TABLE} r
     WHERE ${baseWhere(1)}
       AND ${estadoClause(4)}
-      AND r."Nombre Conductor" = 'Nuevos'
-      AND r."Estado" = 'Finalizado'
+      AND upper(trim(r."Nombre Conductor"::text)) = 'NUEVOS'
+      AND upper(trim(r."Estado"::text)) = 'FINALIZADO'
     GROUP BY bucket
     ORDER BY bucket ASC
   `;

@@ -8,6 +8,7 @@ import { assertQualityReadAccess } from "@/lib/panel-session";
 
 export const runtime = "nodejs";
 
+/** Filas: conductores en `reportes.mv_conductores`; N_Reservas por semana en `reportes.semaforo`. */
 export async function GET(req: NextRequest) {
   try {
     assertQualityReadAccess(req);

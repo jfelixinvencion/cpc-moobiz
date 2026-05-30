@@ -1,7 +1,7 @@
 "use client";
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, ArrowUp, ArrowUpDown, Loader2 } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, ExternalLink, Loader2, RefreshCw } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -22,7 +22,19 @@ import {
   type FlotaConductoresSortDir,
 } from "@/lib/flota-conductores-params";
 import type { FlotaConductorRow, FlotaConductoresMeta } from "@/lib/flota-conductores-query";
+import { formatDateForUi } from "@/lib/date-utils";
 import { cn } from "@/lib/utils";
+
+const MOOBIZ_DRIVER_URL = "https://app.moobiz.pe/drivers";
+
+function moobizDriverHref(idConductor: string): string {
+  return `${MOOBIZ_DRIVER_URL}?query=${encodeURIComponent(idConductor)}`;
+}
+
+function formatFechaActivacion(value: string | null | undefined): string {
+  if (!value?.trim()) return "—";
+  return formatDateForUi(value) || value.trim();
+}
 
 const BATCH = 100;
 const ROW_H = 40;
@@ -128,39 +140,50 @@ export function FlotaConductoresPanel() {
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [refreshingViews, setRefreshingViews] = useState(false);
+  const [refreshNotice, setRefreshNotice] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
 
   const setFilter = useCallback(<K extends keyof FilterState>(key: K, value: FilterState[K]) => {
     setFilters((prev) => ({ ...prev, [key]: value }));
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
+  const fetchMeta = useCallback(async (applyDefaultSemana: boolean) => {
     setMetaLoading(true);
     setMetaError(null);
+    try {
+      const res = await fetch("/api/flota/conductores/meta", { cache: "no-store" });
+      const body = (await res.json()) as FlotaConductoresMeta & { error?: string };
+      if (!res.ok) throw new Error(body.error ?? res.statusText);
+      setMeta(body);
+      if (applyDefaultSemana && body.defaultSemana) {
+        setFilters((prev) => ({
+          ...prev,
+          semanas: prev.semanas.length === 0 ? [body.defaultSemana!] : prev.semanas,
+        }));
+      }
+      setMetaReady(true);
+      return body;
+    } finally {
+      setMetaLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch("/api/flota/conductores/meta", { cache: "no-store" });
-        const body = (await res.json()) as FlotaConductoresMeta & { error?: string };
-        if (!res.ok) throw new Error(body.error ?? res.statusText);
-        if (cancelled) return;
-        setMeta(body);
-        if (body.defaultSemana) {
-          setFilters((prev) => ({
-            ...prev,
-            semanas: prev.semanas.length === 0 ? [body.defaultSemana!] : prev.semanas,
-          }));
-        }
-        setMetaReady(true);
+        await fetchMeta(true);
       } catch (e) {
         if (!cancelled) setMetaError(e instanceof Error ? e.message : String(e));
-      } finally {
-        if (!cancelled) setMetaLoading(false);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [fetchMeta]);
 
   const loadRows = useCallback(
     async (append: boolean, offset: number) => {
@@ -217,6 +240,34 @@ export function FlotaConductoresPanel() {
     void loadRows(true, rows.length);
   }, [loadRows, loading, rows.length, total]);
 
+  const handleRefreshViews = useCallback(async () => {
+    setRefreshingViews(true);
+    setRefreshNotice(null);
+    try {
+      const res = await fetch("/api/flota/conductores/refresh", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+      });
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) {
+        throw new Error(body.error ?? res.statusText);
+      }
+      await fetchMeta(false);
+      setSelectedId(null);
+      await loadRows(false, 0);
+      setRefreshNotice({
+        type: "success",
+        text: "Refrescado completado — datos actualizados",
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setRefreshNotice({ type: "error", text: `Error al refrescar: ${msg}` });
+    } finally {
+      setRefreshingViews(false);
+    }
+  }, [fetchMeta, loadRows]);
+
   const toggleSort = (col: FlotaConductoresSortCol) => {
     if (sortCol === col) {
       setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -228,18 +279,50 @@ export function FlotaConductoresPanel() {
 
   const gridCols = useMemo(
     () =>
-      "grid grid-cols-[minmax(5rem,0.6fr)_minmax(8rem,1.4fr)_minmax(5rem,0.8fr)_minmax(7rem,1fr)_minmax(4rem,0.5fr)_minmax(4.5rem,0.55fr)] gap-2",
+      "grid grid-cols-[minmax(6rem,0.75fr)_minmax(8rem,1.4fr)_minmax(5rem,0.8fr)_minmax(7rem,1fr)_minmax(4rem,0.5fr)_minmax(5.5rem,0.65fr)_minmax(4.5rem,0.55fr)] gap-2",
     [],
   );
 
   return (
     <Card className="border-slate-200 bg-white shadow-sm">
       <CardHeader className="space-y-1 border-b border-slate-100 py-3">
-        <CardTitle className="text-base font-semibold text-slate-900">Conductores</CardTitle>
-        <p className="text-xs text-slate-500">
-          Listado de conductores y número de servicios por conductor (filtrable por semana y
-          atributos)
-        </p>
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 space-y-1">
+            <CardTitle className="text-base font-semibold text-slate-900">Conductores</CardTitle>
+            <p className="text-xs text-slate-500">
+              Listado de conductores y número de servicios por conductor (filtrable por semana y
+              atributos)
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleRefreshViews()}
+            disabled={refreshingViews || metaLoading}
+            title="Refrescar datos (actualiza mv_conductores y semaforo)"
+            aria-label="Refrescar datos"
+            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {refreshingViews ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+            ) : (
+              <RefreshCw className="h-3.5 w-3.5" aria-hidden />
+            )}
+            <span className="hidden sm:inline">
+              {refreshingViews ? "Refrescando…" : "Refrescar"}
+            </span>
+          </button>
+        </div>
+        {refreshNotice ? (
+          <p
+            className={cn(
+              "text-xs",
+              refreshNotice.type === "success" ? "text-emerald-700" : "text-red-600",
+            )}
+            role="status"
+          >
+            {refreshNotice.text}
+          </p>
+        ) : null}
         {metaError ? <p className="text-xs text-red-600">{metaError}</p> : null}
         {loadError ? <p className="text-xs text-red-600">{loadError}</p> : null}
       </CardHeader>
@@ -341,6 +424,7 @@ export function FlotaConductoresPanel() {
               <SortIcon active={sortCol === "distrito"} dir={sortDir} />
             </button>
             <span>Turno</span>
+            <span className="text-center">Fecha Activación</span>
             <button
               type="button"
               className="flex items-center justify-end text-right hover:text-slate-900"
@@ -389,8 +473,25 @@ export function FlotaConductoresPanel() {
                         }
                       }}
                     >
-                      <span className="truncate font-mono text-[11px]" title={row.idConductor}>
-                        {row.idConductor}
+                      <span className="flex min-w-0 items-center gap-1">
+                        <span
+                          className="truncate font-mono text-[11px]"
+                          title={row.idConductor}
+                        >
+                          {row.idConductor}
+                        </span>
+                        <a
+                          href={moobizDriverHref(row.idConductor)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={`Abrir driver ${row.idConductor} en app.moobiz`}
+                          aria-label={`Abrir driver ${row.idConductor} en app.moobiz`}
+                          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-[#0f5666]"
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => e.stopPropagation()}
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+                        </a>
                       </span>
                       <span className="truncate" title={row.nombreConductor}>
                         {row.nombreConductor}
@@ -403,6 +504,12 @@ export function FlotaConductoresPanel() {
                       </span>
                       <span className="truncate" title={row.turno}>
                         {row.turno || "—"}
+                      </span>
+                      <span
+                        className="truncate text-center tabular-nums text-[11px]"
+                        title={row.fechaActivacion ?? ""}
+                      >
+                        {formatFechaActivacion(row.fechaActivacion)}
                       </span>
                       <span className="text-right tabular-nums font-semibold text-[#0f5666]">
                         {row.nServicios.toLocaleString("es-PE")}

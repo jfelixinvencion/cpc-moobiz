@@ -26,8 +26,7 @@ import { DatosPendientesTable } from "@/components/DatosPendientesTable";
 import { FlotaConductoresPanel } from "@/components/flota/FlotaConductoresPanel";
 import { FlotaPendientesCard } from "@/components/flota-pendientes-card";
 import { ProductividadPanel } from "@/components/dashboard/ProductividadPanel";
-import { ServiciosMoobizCard } from "@/components/dashboard/ServiciosMoobizCard";
-import { ServiciosPendientesCard } from "@/components/dashboard/ServiciosPendientesCard";
+import { ReservasCharts } from "@/components/dashboard/ReservasCharts";
 import { ControlOperacionesPanel } from "@/components/control-operaciones-panel";
 import { OperacionesDriverFiltersProvider } from "@/context/operaciones-driver-filters-context";
 import { MouseRevealHeaderLayout } from "@/components/mouse-reveal-header-layout";
@@ -600,12 +599,10 @@ function DashboardContent() {
               </TabsList>
 
               <TabsContent value="reservas" className="mt-0 space-y-4 outline-none">
-            <ServiciosPendientesCard
-              active={mainTab === "dashboard" && dashboardSubTab === "reservas"}
-              refreshKey={refreshKey}
-            />
-            <ServiciosMoobizCard />
-          </TabsContent>
+                <ReservasCharts
+                  active={mainTab === "dashboard" && dashboardSubTab === "reservas"}
+                />
+              </TabsContent>
 
               <TabsContent value="productividad" className="mt-0 w-full max-w-none px-0 outline-none">
                 {/* Recuperar ancho útil frente al px-4/md:px-6 del shell sin afectar otras subpestañas */}

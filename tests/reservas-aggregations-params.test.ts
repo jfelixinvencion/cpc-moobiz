@@ -24,9 +24,21 @@ test("parseReservasAggregationParams reads filters", () => {
   sp.append("weekday", "5");
 
   const p = parseReservasAggregationParams(sp);
+  assert.equal(p.startDate, "2026-05-01");
+  assert.equal(p.endExclusiveDate, "2026-06-01");
   assert.equal(p.granularity, "hour");
   assert.equal(p.semana, "2026_Sem21_18.05_24.05");
   assert.deepEqual(p.estado, ["Finalizado"]);
   assert.deepEqual(p.chart2Estado, ["Cancelado"]);
   assert.deepEqual(p.weekdays, [1, 5]);
+});
+
+test("parseReservasAggregationParams legacy date-only half-open range", () => {
+  const sp = new URLSearchParams();
+  sp.set("start", "2026-05-25");
+  sp.set("end", "2026-05-26");
+
+  const p = parseReservasAggregationParams(sp);
+  assert.equal(p.startDate, "2026-05-25");
+  assert.equal(p.endExclusiveDate, "2026-05-26");
 });

@@ -4,7 +4,8 @@ const TABLE = "reportes.historico_reservas";
 
 export type ReservasGranularity = "hour" | "day" | "week" | "month";
 
-export type ReservasAggregationParams = {
+/** Params enviados por el cliente (fechas como Date / ISO). */
+export type ReservasClientQueryParams = {
   start: Date;
   end: Date;
   granularity: ReservasGranularity;
@@ -12,6 +13,17 @@ export type ReservasAggregationParams = {
   estado: string[] | null;
   chart2Estado: string[] | null;
   /** ISO weekday 1..7 (lun..dom); null = sin filtro de día. */
+  weekdays: number[] | null;
+};
+
+/** Params normalizados para SQL [startDate, endExclusiveDate) sobre "F. Programada". */
+export type ReservasAggregationParams = {
+  startDate: string;
+  endExclusiveDate: string;
+  granularity: ReservasGranularity;
+  semana: string | null;
+  estado: string[] | null;
+  chart2Estado: string[] | null;
   weekdays: number[] | null;
 };
 
@@ -58,6 +70,7 @@ const GRANULARITY_SQL: Record<ReservasGranularity, string> = {
 
 const DEFAULT_DAYS = 30;
 const MAX_MULTI = 40;
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
 type CacheEntry = { expires: number; body: ReservasAggregationsResponse };
 
@@ -70,6 +83,78 @@ function trimArr(arr: string[]): string[] {
 
 function nullIfEmpty(arr: string[]): string[] | null {
   return arr.length === 0 ? null : arr;
+}
+
+function utcDateString(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+function addDaysDateOnly(dateStr: string, days: number): string {
+  const d = new Date(`${dateStr}T12:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Normaliza query params a rango SQL [startDate, endExclusiveDate) sobre timestamptz. */
+export function resolveReservasSqlDateRange(
+  startRaw: string | null | undefined,
+  endRaw: string | null | undefined,
+): { startDate: string; endExclusiveDate: string } {
+  const now = new Date();
+  const defaultEndExclusive = addDaysDateOnly(utcDateString(now), 1);
+  const defaultStartDate = addDaysDateOnly(defaultEndExclusive, -DEFAULT_DAYS);
+
+  if (!startRaw?.trim()) {
+    return { startDate: defaultStartDate, endExclusiveDate: defaultEndExclusive };
+  }
+
+  const startTrim = startRaw.trim();
+  const endTrim = endRaw?.trim();
+
+  if (DATE_ONLY.test(startTrim)) {
+    const startDate = startTrim;
+    if (endTrim && DATE_ONLY.test(endTrim)) {
+      return { startDate, endExclusiveDate: endTrim };
+    }
+    if (endTrim) {
+      const endD = new Date(endTrim);
+      if (!Number.isNaN(endD.getTime())) {
+        const endUtc = utcDateString(endD);
+        return {
+          startDate,
+          endExclusiveDate: DATE_ONLY.test(endTrim)
+            ? endUtc
+            : addDaysDateOnly(endUtc, 1),
+        };
+      }
+    }
+    return { startDate, endExclusiveDate: addDaysDateOnly(startDate, 1) };
+  }
+
+  const startD = new Date(startTrim);
+  if (Number.isNaN(startD.getTime())) {
+    return { startDate: defaultStartDate, endExclusiveDate: defaultEndExclusive };
+  }
+  const startDate = utcDateString(startD);
+
+  if (!endTrim) {
+    return { startDate, endExclusiveDate: defaultEndExclusive };
+  }
+
+  if (DATE_ONLY.test(endTrim)) {
+    return { startDate, endExclusiveDate: endTrim };
+  }
+
+  const endD = new Date(endTrim);
+  if (Number.isNaN(endD.getTime())) {
+    return { startDate, endExclusiveDate: addDaysDateOnly(startDate, 1) };
+  }
+
+  const endUtc = utcDateString(endD);
+  return {
+    startDate,
+    endExclusiveDate: addDaysDateOnly(endUtc, 1),
+  };
 }
 
 function parseReservasWeekdaysParam(sp: URLSearchParams): number[] | null {
@@ -91,21 +176,18 @@ export function parseReservasGranularity(raw: string | null): ReservasGranularit
 export function parseReservasAggregationParams(
   sp: URLSearchParams,
 ): ReservasAggregationParams {
-  const now = new Date();
-  const defaultStart = new Date(now.getTime() - DEFAULT_DAYS * 24 * 60 * 60 * 1000);
-
-  const startRaw = sp.get("start")?.trim();
-  const endRaw = sp.get("end")?.trim();
-  const start = startRaw ? new Date(startRaw) : defaultStart;
-  const end = endRaw ? new Date(endRaw) : now;
+  const { startDate, endExclusiveDate } = resolveReservasSqlDateRange(
+    sp.get("start"),
+    sp.get("end"),
+  );
 
   const semana = sp.get("semana")?.trim() || null;
   const estado = nullIfEmpty(trimArr(sp.getAll("estado")));
   const chart2Estado = nullIfEmpty(trimArr(sp.getAll("chart2_estado")));
 
   return {
-    start: Number.isNaN(start.getTime()) ? defaultStart : start,
-    end: Number.isNaN(end.getTime()) ? now : end,
+    startDate,
+    endExclusiveDate,
     granularity: parseReservasGranularity(sp.get("granularity")),
     semana,
     estado,
@@ -116,8 +198,8 @@ export function parseReservasAggregationParams(
 
 function cacheKey(params: ReservasAggregationParams): string {
   return JSON.stringify({
-    start: params.start.toISOString(),
-    end: params.end.toISOString(),
+    startDate: params.startDate,
+    endExclusiveDate: params.endExclusiveDate,
     granularity: params.granularity,
     semana: params.semana,
     estado: params.estado,
@@ -127,14 +209,14 @@ function cacheKey(params: ReservasAggregationParams): string {
 }
 
 function truncExpr(granularity: ReservasGranularity): string {
-  const unit = GRANULARITY_SQL[granularity];
-  return `date_trunc('${unit}', r."F. Programada")`;
+  return `date_trunc('${GRANULARITY_SQL[granularity]}', r."F. Programada")`;
 }
 
 function baseWhere(startIdx: number): string {
   return `
     r."F. Programada" IS NOT NULL
-    AND r."F. Programada" BETWEEN $${startIdx}::timestamptz AND $${startIdx + 1}::timestamptz
+    AND r."F. Programada" >= $${startIdx}::date
+    AND r."F. Programada" < $${startIdx + 1}::date
     AND ($${startIdx + 2}::text IS NULL OR $${startIdx + 2} = '' OR r."Semana" = $${startIdx + 2})
   `;
 }
@@ -144,7 +226,7 @@ function estadoClause(paramIdx: number): string {
 }
 
 function weekdaysClause(paramIdx: number): string {
-  return `(cardinality($${paramIdx}::int[]) = 0 OR EXTRACT(ISODOW FROM timezone('America/Lima', r."F. Programada"))::int = ANY($${paramIdx}::int[]))`;
+  return `(cardinality($${paramIdx}::int[]) = 0 OR EXTRACT(ISODOW FROM r."F. Programada")::int = ANY($${paramIdx}::int[]))`;
 }
 
 function bucketIso(v: unknown): string {
@@ -269,16 +351,16 @@ export async function runReservasAggregations(
   const globalWeekdays = params.weekdays ?? [];
 
   const baseParams = [
-    params.start.toISOString(),
-    params.end.toISOString(),
+    params.startDate,
+    params.endExclusiveDate,
     params.semana,
     globalEstado,
     globalWeekdays,
   ];
 
   const chart2Params = [
-    params.start.toISOString(),
-    params.end.toISOString(),
+    params.startDate,
+    params.endExclusiveDate,
     params.semana,
     chart2Estado,
     globalWeekdays,
@@ -321,8 +403,8 @@ export async function runReservasAggregations(
 
   const body: ReservasAggregationsResponse = {
     meta: {
-      start: params.start.toISOString(),
-      end: params.end.toISOString(),
+      start: params.startDate,
+      end: params.endExclusiveDate,
       granularity: params.granularity,
       requestedAt: new Date().toISOString(),
       semana: params.semana,
@@ -432,7 +514,10 @@ function rowsToCsvLocal(
   return lines.join("\n");
 }
 
-export function appendReservasParams(p: URLSearchParams, params: ReservasAggregationParams): void {
+export function appendReservasParams(
+  p: URLSearchParams,
+  params: ReservasClientQueryParams,
+): void {
   p.set("start", params.start.toISOString());
   p.set("end", params.end.toISOString());
   p.set("granularity", params.granularity);

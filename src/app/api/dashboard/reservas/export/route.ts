@@ -48,17 +48,18 @@ function parseRawPagination(sp: URLSearchParams): { limit: number; offset: numbe
 function rawWhereSql(): string {
   return `
     r."F. Programada" IS NOT NULL
-    AND r."F. Programada" BETWEEN $1::timestamptz AND $2::timestamptz
+    AND r."F. Programada" >= $1::date
+    AND r."F. Programada" < $2::date
     AND ($3::text IS NULL OR $3 = '' OR r."Semana" = $3)
     AND (cardinality($4::text[]) = 0 OR r."Estado" = ANY($4::text[]))
-    AND (cardinality($5::int[]) = 0 OR EXTRACT(ISODOW FROM timezone('America/Lima', r."F. Programada"))::int = ANY($5::int[]))
+    AND (cardinality($5::int[]) = 0 OR EXTRACT(ISODOW FROM r."F. Programada")::int = ANY($5::int[]))
   `;
 }
 
 function rawBaseParams(params: ReservasAggregationParams): unknown[] {
   return [
-    params.start.toISOString(),
-    params.end.toISOString(),
+    params.startDate,
+    params.endExclusiveDate,
     params.semana,
     params.estado ?? [],
     params.weekdays ?? [],
@@ -97,9 +98,7 @@ function buildRawCsv(rows: RawRow[]): string {
 }
 
 function rawFilename(params: ReservasAggregationParams): string {
-  const start = params.start.toISOString().slice(0, 10);
-  const end = params.end.toISOString().slice(0, 10);
-  return `reservas_raw_${start}_${end}.csv`;
+  return `reservas_raw_${params.startDate}_${params.endExclusiveDate}.csv`;
 }
 
 async function exportRawReservasCsv(

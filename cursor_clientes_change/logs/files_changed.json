@@ -1,0 +1,137 @@
+[
+  {
+    "path": "db/migrations/20260601_create_empresas_criticas.sql",
+    "action": "created",
+    "summary": "Tabla public.Empresas_Criticas (PK co_id, bucket_level 1-3). No auto-ejecutar en prod."
+  },
+  {
+    "path": "src/lib/client-buckets.ts",
+    "action": "created",
+    "summary": "Upsert/delete/list/search; validación co_id en vista; política una bolsa por empresa."
+  },
+  {
+    "path": "src/lib/client-buckets-types.ts",
+    "action": "created",
+    "summary": "Tipos API bolsas."
+  },
+  {
+    "path": "src/lib/client-buckets-client.ts",
+    "action": "created",
+    "summary": "Fetch helpers para UI Clientes."
+  },
+  {
+    "path": "src/lib/client-buckets-api.ts",
+    "action": "created",
+    "summary": "Respuestas JSON/error API."
+  },
+  {
+    "path": "src/app/api/client-buckets/route.ts",
+    "action": "created",
+    "summary": "GET listado, POST upsert."
+  },
+  {
+    "path": "src/app/api/client-buckets/[co_id]/route.ts",
+    "action": "created",
+    "summary": "DELETE asignación."
+  },
+  {
+    "path": "src/app/api/client-buckets/bulk/route.ts",
+    "action": "created",
+    "summary": "POST asignación en lote transaccional."
+  },
+  {
+    "path": "src/app/api/client-buckets/companies/route.ts",
+    "action": "created",
+    "summary": "GET búsqueda empresas en vista."
+  },
+  {
+    "path": "src/components/planificacion/clientes-buckets-modal.tsx",
+    "action": "created",
+    "summary": "Modal 3 columnas N1/N2/N3 con buscar y agregar/quitar."
+  },
+  {
+    "path": "src/components/planificacion/clientes-bucket-badge.tsx",
+    "action": "created",
+    "summary": "Badge N1/N2/N3 en filas."
+  },
+  {
+    "path": "src/components/planificacion/clientes-empresa-bucket-menu.tsx",
+    "action": "created",
+    "summary": "Menú por fila Asignar/Quitar."
+  },
+  {
+    "path": "src/components/planificacion/clientes-panel.tsx",
+    "action": "modified",
+    "summary": "Bolsas persistidas; sin 2+ misma hora; filtro por bolsa; gestionar bolsas."
+  },
+  {
+    "path": "src/lib/panel-session.ts",
+    "action": "modified",
+    "summary": "getClientBucketsActorLabel para created_by."
+  },
+  {
+    "path": "tests/client-buckets.test.ts",
+    "action": "created",
+    "summary": "Validación parseCoId/parseBucketLevel."
+  },
+  {
+    "path": "tests/client-buckets-move.test.ts",
+    "action": "created",
+    "summary": "Política mover empresa entre niveles."
+  },
+  {
+    "path": "src/components/planificacion/clientes-bucket-company-search.tsx",
+    "action": "created",
+    "summary": "Autocomplete por columna: debounce, abort, selección, Agregar habilitado solo con selected."
+  },
+  {
+    "path": "src/hooks/use-debounced-value.ts",
+    "action": "created",
+    "summary": "Hook debounce reutilizable."
+  },
+  {
+    "path": "src/lib/client-buckets-company-search.ts",
+    "action": "created",
+    "summary": "Helpers testeables requestId y pickCompanyOnEnter."
+  },
+  {
+    "path": "src/components/planificacion/clientes-buckets-modal.tsx",
+    "action": "modified",
+    "summary": "Modal 1100px; usa CompanySearch por nivel; sin effect global triple."
+  },
+  {
+    "path": "src/lib/client-buckets-client.ts",
+    "action": "modified",
+    "summary": "searchClientBucketCompanies con AbortSignal y respuesta items/total."
+  },
+  {
+    "path": "tests/client-buckets-company-search.test.ts",
+    "action": "created",
+    "summary": "Tests race condition y selección."
+  },
+  {
+    "path": "src/components/planificacion/clientes-panel.tsx",
+    "action": "modified",
+    "summary": "Bolsa→Prioridad; Gestionar Prioridades; sin menú ⋯; clases fila N1-N3."
+  },
+  {
+    "path": "src/components/planificacion/clientes-priority.css",
+    "action": "created",
+    "summary": "Fondos sutiles N1 cálido, N2 menta, N3 gris (solo Clientes)."
+  },
+  {
+    "path": "src/lib/clientes-priority-styles.ts",
+    "action": "created",
+    "summary": "clientesPriorityRowClass helper."
+  },
+  {
+    "path": "src/components/planificacion/clientes-empresa-bucket-menu.tsx",
+    "action": "deleted",
+    "summary": "Menú ellipsis por fila eliminado; asignación solo vía Gestionar Prioridades."
+  },
+  {
+    "path": "tests/clientes-priority-styles.test.ts",
+    "action": "created",
+    "summary": "Assert clases clientes-priority-n1/n2/n3."
+  }
+]

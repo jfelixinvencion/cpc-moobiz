@@ -1,0 +1,36 @@
+{
+  "generatedAt": "2026-06-01T00:00:00.000Z",
+  "branch": "feat/dup-seguimiento-to-clientes",
+  "pr_target": "main",
+  "original_files_unmodified": true,
+  "original_files": [
+    "c:/Users/Moobiz/taxi-dashboard/src/components/seguimiento-operaciones.tsx",
+    "c:/Users/Moobiz/taxi-dashboard/src/lib/seguimiento-estado.ts",
+    "c:/Users/Moobiz/taxi-dashboard/src/app/api/seguimiento-operaciones/route.ts"
+  ],
+  "new_files": [
+    "c:/Users/Moobiz/taxi-dashboard/src/components/planificacion/clientes-panel.tsx",
+    "c:/Users/Moobiz/taxi-dashboard/src/lib/clientes-estado.ts",
+    "c:/Users/Moobiz/taxi-dashboard/tests/clientes-estado.test.ts"
+  ],
+  "modified_for_wiring_only": [
+    "c:/Users/Moobiz/taxi-dashboard/src/app/page.tsx"
+  ],
+  "tests_status": "pass",
+  "tests_note": "tests/clientes-estado.test.ts OK (3/3). Suite completa: 1 fallo preexistente no relacionado (control-operaciones-solicitante-filter-query).",
+  "build_status": "pass",
+  "build_log": "OUTPUT/logs/build.log",
+  "test_log": "OUTPUT/logs/test-clientes.log",
+  "pr_url": "https://github.com/jfelixinvencion/cpc-moobiz/pull/new/feat/dup-seguimiento-to-clientes",
+  "qa": {
+    "url": "/?tab=planificacion&planificacionSub=clientes",
+    "steps": [
+      "Iniciar sesión y abrir pestaña Planificacion",
+      "Seleccionar subpestaña Clientes",
+      "Verificar matriz de conductores, filtros BASE/NUEVOS, leyenda de estados",
+      "Comparar datos con Operaciones > Seguimiento (misma API /api/seguimiento-operaciones)",
+      "Probar GPS modal y filtro overlap Clientes"
+    ],
+    "data_customization": "Editar solo src/components/planificacion/clientes-panel.tsx y src/lib/clientes-estado.ts; no tocar seguimiento-operaciones.tsx"
+  }
+}

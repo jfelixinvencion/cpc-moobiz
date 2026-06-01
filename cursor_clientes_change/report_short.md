@@ -10,9 +10,16 @@ Subpestaña **Planificación → Clientes** con timeline por **empresa** (`co_na
 |------|---------|
 | API | `GET /api/clientes-operaciones` — lee `vista.moobiz_services_maestra`, fecha `alt_date`, incluye `dr_id` NULL |
 | UI | Eje Y **Empresa**; sin icono GPS; **Abrir** → `https://app.moobiz.pe/actives?id_company={co_id}` |
-| Estados | Todos los `state_color_name`, incl. **Pendiente** (ámbar `#ca8a04`) |
+| Estados | Leyenda orden fija; **Pendiente** gris claro `#b8b8b8` |
+| Eje horario | Primera columna = hora mínima entre Pendiente/Aceptado/Iniciado/Esperando; fallback: hora actual del sistema |
+| Filtros | Solo búsqueda por empresa + selector Clientes (sin filtro por cantidad de filas) |
 | Celdas | Conteo por empresa/hora; varios estados apilados; total central si >1 estado |
 | Seguimiento | **Sin cambios** (`seguimiento-operaciones.tsx`, `/api/seguimiento-operaciones`) |
+
+## Estilos (solo Clientes)
+
+- Colores y orden en `src/lib/clientes-estado.ts` (copia independiente de `seguimiento-estado.ts`).
+- **No** se modificaron estilos globales ni `seguimiento-estado.ts`.
 
 ## Prioridad visual multi-estado
 

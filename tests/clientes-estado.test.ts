@@ -12,17 +12,31 @@ import {
 
 test("canonicalClientesEstado matches case-sensitive SQL names", () => {
   assert.equal(canonicalClientesEstado("Aceptado"), "Aceptado");
+  assert.equal(canonicalClientesEstado("Pendiente"), "Pendiente");
   assert.equal(canonicalClientesEstado("En camino"), "En camino");
   assert.equal(canonicalClientesEstado("aceptado"), null);
 });
 
 test("colorForClientesEstado returns palette or fallback", () => {
+  assert.equal(colorForClientesEstado("Pendiente"), "#b8b8b8");
   assert.equal(colorForClientesEstado("Aceptado"), "#333333");
-  assert.equal(colorForClientesEstado("Pendiente"), "#ca8a04");
-  assert.equal(colorForClientesEstado("unknown"), "#64748b");
+  assert.equal(colorForClientesEstado("Validar"), "#7c3aed");
+  assert.notEqual(colorForClientesEstado("Otro estado"), colorForClientesEstado("Llegado"));
 });
 
-test("sortEstadosForLegend uses UI order", () => {
-  const sorted = sortEstadosForLegend(["Llegado", "Pendiente", "Aceptado", "En camino"]);
-  assert.deepEqual(sorted, ["Aceptado", "Pendiente", "En camino", "Llegado"]);
+test("sortEstadosForLegend uses primary order then extras", () => {
+  const sorted = sortEstadosForLegend([
+    "Llegado",
+    "Validar",
+    "Pendiente",
+    "Aceptado",
+    "En camino",
+  ]);
+  assert.deepEqual(sorted, [
+    "Pendiente",
+    "Aceptado",
+    "En camino",
+    "Llegado",
+    "Validar",
+  ]);
 });

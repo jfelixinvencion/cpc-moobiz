@@ -1,0 +1,46 @@
+{
+  "GET /api/client-buckets": {
+    "data": [
+      {
+        "co_id": "42",
+        "co_name": "Transportes Lima SAC",
+        "bucket_level": 1,
+        "created_by": "Operador (00000000-0000-0000-0000-000000000001)",
+        "created_at": "2026-06-01T12:00:00.000Z"
+      }
+    ]
+  },
+  "POST /api/client-buckets": {
+    "request": {
+      "co_id": 42,
+      "co_name": "Transportes Lima SAC",
+      "bucket_level": 2
+    },
+    "response": {
+      "data": {
+        "co_id": "42",
+        "co_name": "Transportes Lima SAC",
+        "bucket_level": 2,
+        "created_by": "Operador (...)",
+        "created_at": "2026-06-01T12:05:00.000Z"
+      }
+    },
+    "note": "ON CONFLICT (co_id) mueve la empresa al nuevo nivel automáticamente."
+  },
+  "DELETE /api/client-buckets/42": {
+    "ok": true
+  },
+  "POST /api/client-buckets/bulk": {
+    "request": {
+      "co_ids": [10, 11],
+      "bucket_level": 3,
+      "co_names": { "10": "Empresa A", "11": "Empresa B" }
+    },
+    "response": {
+      "data": []
+    }
+  },
+  "GET /api/client-buckets/companies?q=lima": {
+    "data": [{ "co_id": "42", "co_name": "Transportes Lima SAC" }]
+  }
+}

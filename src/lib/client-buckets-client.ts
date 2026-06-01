@@ -54,13 +54,33 @@ export async function bulkUpsertClientBucketsApi(
   return json.data ?? [];
 }
 
+export type ClientBucketCompaniesSearchResponse = {
+  data: ClientBucketCompanyOption[];
+  items: ClientBucketCompanyOption[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
 export async function searchClientBucketCompanies(
   q: string,
-): Promise<ClientBucketCompanyOption[]> {
+  options?: { signal?: AbortSignal; limit?: number; offset?: number },
+): Promise<ClientBucketCompaniesSearchResponse> {
   const params = new URLSearchParams({ q });
+  if (options?.limit != null) params.set("limit", String(options.limit));
+  if (options?.offset != null) params.set("offset", String(options.offset));
+
   const res = await fetch(`/api/client-buckets/companies?${params}`, {
     cache: "no-store",
+    signal: options?.signal,
   });
-  const json = await parseJson<{ data: ClientBucketCompanyOption[] }>(res);
-  return json.data ?? [];
+  const json = await parseJson<ClientBucketCompaniesSearchResponse>(res);
+  const items = json.items ?? json.data ?? [];
+  return {
+    data: items,
+    items,
+    total: json.total ?? items.length,
+    limit: json.limit ?? options?.limit ?? items.length,
+    offset: json.offset ?? options?.offset ?? 0,
+  };
 }

@@ -78,5 +78,35 @@
     "path": "tests/client-buckets-move.test.ts",
     "action": "created",
     "summary": "Política mover empresa entre niveles."
+  },
+  {
+    "path": "src/components/planificacion/clientes-bucket-company-search.tsx",
+    "action": "created",
+    "summary": "Autocomplete por columna: debounce, abort, selección, Agregar habilitado solo con selected."
+  },
+  {
+    "path": "src/hooks/use-debounced-value.ts",
+    "action": "created",
+    "summary": "Hook debounce reutilizable."
+  },
+  {
+    "path": "src/lib/client-buckets-company-search.ts",
+    "action": "created",
+    "summary": "Helpers testeables requestId y pickCompanyOnEnter."
+  },
+  {
+    "path": "src/components/planificacion/clientes-buckets-modal.tsx",
+    "action": "modified",
+    "summary": "Modal 1100px; usa CompanySearch por nivel; sin effect global triple."
+  },
+  {
+    "path": "src/lib/client-buckets-client.ts",
+    "action": "modified",
+    "summary": "searchClientBucketCompanies con AbortSignal y respuesta items/total."
+  },
+  {
+    "path": "tests/client-buckets-company-search.test.ts",
+    "action": "created",
+    "summary": "Tests race condition y selección."
   }
 ]

@@ -1,0 +1,27 @@
+{
+  "description": "Ejemplo de flujo estable tras el fix (una columna, debounce 300ms, abort)",
+  "requests": [
+    {
+      "method": "GET",
+      "url": "/api/client-buckets/companies?q=Fe&limit=15",
+      "note": "No se envía hasta debouncedQuery.length >= 2"
+    },
+    {
+      "method": "GET",
+      "url": "/api/client-buckets/companies?q=Fenix&limit=15",
+      "response_shape": {
+        "items": [{ "co_id": "123", "co_name": "Fenix Example SAC" }],
+        "data": [{ "co_id": "123", "co_name": "Fenix Example SAC" }],
+        "total": 1,
+        "limit": 15,
+        "offset": 0
+      }
+    },
+    {
+      "method": "POST",
+      "url": "/api/client-buckets",
+      "body": { "co_id": "123", "co_name": "Fenix Example SAC", "bucket_level": 1 },
+      "note": "Solo tras selección explícita + clic Agregar"
+    }
+  ]
+}

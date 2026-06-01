@@ -27,6 +27,7 @@ import { FlotaConductoresPanel } from "@/components/flota/FlotaConductoresPanel"
 import { FlotaPendientesCard } from "@/components/flota-pendientes-card";
 import { ProductividadPanel } from "@/components/dashboard/ProductividadPanel";
 import { ReservasCharts } from "@/components/dashboard/ReservasCharts";
+import { ClientesPanel } from "@/components/planificacion/clientes-panel";
 import { ServiciosMoobizCard } from "@/components/dashboard/ServiciosMoobizCard";
 import { ServiciosPendientesCard } from "@/components/dashboard/ServiciosPendientesCard";
 import { ControlOperacionesPanel } from "@/components/control-operaciones-panel";
@@ -51,6 +52,8 @@ const DATOS_SUB_PENDIENTES = "pendientes" as const;
 const DATOS_SUB_CONDUCTORES = "conductores" as const;
 const OPERACIONES_SUB_CONTROL = "control" as const;
 const OPERACIONES_SUB_SEGUIMIENTO = "seguimiento" as const;
+const PLANIFICACION_SUB_RESERVAS = "reservas" as const;
+const PLANIFICACION_SUB_CLIENTES = "clientes" as const;
 const HISTORY_PAGE_SIZE = 50;
 
 function asText(value: unknown): string {
@@ -100,7 +103,7 @@ function DashboardContent() {
   const [syncMonitorLoading, setSyncMonitorLoading] = useState(true);
   const [syncMonitorError, setSyncMonitorError] = useState<string | null>(null);
   const [dashboardSubTab, setDashboardSubTab] = useState("productividad");
-  const [planificacionSubTab, setPlanificacionSubTab] = useState("reservas");
+  const [planificacionSubTab, setPlanificacionSubTab] = useState<string>(PLANIFICACION_SUB_RESERVAS);
 
   const setDatosSubInUrl = useCallback(
     (value: string) => {
@@ -116,6 +119,16 @@ function DashboardContent() {
     (value: string) => {
       const p = new URLSearchParams(searchParams.toString());
       p.set("operacionesSub", value);
+      const qs = p.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    },
+    [pathname, router, searchParams],
+  );
+
+  const setPlanificacionSubInUrl = useCallback(
+    (value: string) => {
+      const p = new URLSearchParams(searchParams.toString());
+      p.set("planificacionSub", value);
       const qs = p.toString();
       router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
     },
@@ -141,6 +154,10 @@ function DashboardContent() {
       }
       if (value !== "operaciones" && p.has("operacionesSub")) {
         p.delete("operacionesSub");
+        changed = true;
+      }
+      if (value !== "planificacion" && p.has("planificacionSub")) {
+        p.delete("planificacionSub");
         changed = true;
       }
       if (changed) {
@@ -209,6 +226,31 @@ function DashboardContent() {
     setDatosSubTab(DATOS_SUB_DATOS_PENDIENTES);
     setDatosSubInUrl(DATOS_SUB_DATOS_PENDIENTES);
   }, [mainTab, searchParams, setDatosSubInUrl]);
+
+  const planificacionSubAllowed = useMemo(
+    () => new Set<string>([PLANIFICACION_SUB_RESERVAS, PLANIFICACION_SUB_CLIENTES]),
+    [],
+  );
+
+  const handlePlanificacionSubTabChange = useCallback(
+    (value: string) => {
+      if (!planificacionSubAllowed.has(value)) return;
+      setPlanificacionSubTab(value);
+      setPlanificacionSubInUrl(value);
+    },
+    [planificacionSubAllowed, setPlanificacionSubInUrl],
+  );
+
+  useEffect(() => {
+    if (mainTab !== "planificacion") return;
+    const raw = searchParams.get("planificacionSub");
+    if (raw === PLANIFICACION_SUB_RESERVAS || raw === PLANIFICACION_SUB_CLIENTES) {
+      setPlanificacionSubTab(raw);
+      return;
+    }
+    setPlanificacionSubTab(PLANIFICACION_SUB_RESERVAS);
+    setPlanificacionSubInUrl(PLANIFICACION_SUB_RESERVAS);
+  }, [mainTab, searchParams, setPlanificacionSubInUrl]);
 
   useEffect(() => {
     setHistoryPage(1);
@@ -591,25 +633,52 @@ function DashboardContent() {
           </TabsContent>
 
           <TabsContent value="planificacion" className="mt-0 space-y-4 outline-none">
-            <Tabs value={planificacionSubTab} onValueChange={setPlanificacionSubTab} className="w-full">
-              <TabsList className="mb-3 grid h-auto min-h-10 w-full max-w-3xl grid-cols-1 gap-1 bg-slate-200/90 p-1 sm:grid-cols-1 sm:gap-0">
+            <Tabs
+              value={planificacionSubTab}
+              onValueChange={handlePlanificacionSubTabChange}
+              className="w-full"
+            >
+              <TabsList className="mb-3 grid h-auto min-h-10 w-full max-w-3xl grid-cols-1 gap-1 bg-slate-200/90 p-1 sm:grid-cols-2 sm:gap-0">
                 <TabsTrigger
-                  value="reservas"
+                  value={PLANIFICACION_SUB_RESERVAS}
                   className="text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm sm:flex-1"
                 >
                   Reservas
                 </TabsTrigger>
+                <TabsTrigger
+                  value={PLANIFICACION_SUB_CLIENTES}
+                  className="text-sm data-active:bg-white data-active:text-slate-900 data-active:shadow-sm sm:flex-1"
+                >
+                  Clientes
+                </TabsTrigger>
               </TabsList>
 
-              <TabsContent value="reservas" className="mt-0 space-y-4 outline-none">
+              <TabsContent value={PLANIFICACION_SUB_RESERVAS} className="mt-0 space-y-4 outline-none">
                 <ServiciosPendientesCard
-                  active={mainTab === "planificacion" && planificacionSubTab === "reservas"}
+                  active={
+                    mainTab === "planificacion" && planificacionSubTab === PLANIFICACION_SUB_RESERVAS
+                  }
                   refreshKey={refreshKey}
                 />
                 <ServiciosMoobizCard />
                 <ReservasCharts
-                  active={mainTab === "planificacion" && planificacionSubTab === "reservas"}
+                  active={
+                    mainTab === "planificacion" && planificacionSubTab === PLANIFICACION_SUB_RESERVAS
+                  }
                 />
+              </TabsContent>
+
+              <TabsContent value={PLANIFICACION_SUB_CLIENTES} className="mt-0 outline-none">
+                <OperacionesDriverFiltersProvider>
+                  <div
+                    className={
+                      planificacionSubTab === PLANIFICACION_SUB_CLIENTES ? "block" : "hidden"
+                    }
+                    aria-hidden={planificacionSubTab !== PLANIFICACION_SUB_CLIENTES}
+                  >
+                    <ClientesPanel dataRevision={refreshKey} />
+                  </div>
+                </OperacionesDriverFiltersProvider>
               </TabsContent>
             </Tabs>
           </TabsContent>

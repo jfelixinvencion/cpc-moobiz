@@ -1,0 +1,85 @@
+﻿
+> taxi-dashboard@0.1.0 build
+> next build
+
+Ôû▓ Next.js 16.2.3 (Turbopack)
+- Environments: .env.local, .env
+
+node.exe : ÔÜá The "middleware" file convention is deprecated. Please use "proxy" instead. Learn more: 
+https://nextjs.org/docs/messages/middleware-to-proxy
+En línea: 1 Carácter: 1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (ÔÜá The "middle...leware-to-proxy:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  Creating an optimized production build ...
+Ô£ô Compiled successfully in 9.0s
+  Running TypeScript ...
+  Finished TypeScript in 9.1s ...
+  Collecting page data using 11 workers ...
+  Generating static pages using 11 workers (0/47) ...
+  Generating static pages using 11 workers (11/47) 
+  Generating static pages using 11 workers (23/47) 
+  Generating static pages using 11 workers (35/47) 
+Ô£ô Generating static pages using 11 workers (47/47) in 597ms
+  Finalizing page optimization ...
+
+Route (app)
+Ôöî Ôùï /
+Ôö£ Ôùï /_not-found
+Ôö£ ãÆ /api/auth/login
+Ôö£ ãÆ /api/auth/logout
+Ôö£ ãÆ /api/comercial/fotos
+Ôö£ ãÆ /api/comercial/quejas
+Ôö£ ãÆ /api/comercial/quejas/[id]
+Ôö£ ãÆ /api/comercial/quejas/[id]/review
+Ôö£ ãÆ /api/comercial/sync-service
+Ôö£ ãÆ /api/comercial/upload-photo
+Ôö£ ãÆ /api/control-operaciones
+Ôö£ ãÆ /api/dashboard-v2/reservas
+Ôö£ ãÆ /api/dashboard/productividad/by-date
+Ôö£ ãÆ /api/dashboard/productividad/by-date-hour
+Ôö£ ãÆ /api/dashboard/productividad/cards
+Ôö£ ãÆ /api/dashboard/productividad/filters
+Ôö£ ãÆ /api/dashboard/productividad/users
+Ôö£ ãÆ /api/dashboard/reservas/aggregations
+Ôö£ ãÆ /api/dashboard/reservas/export
+Ôö£ ãÆ /api/dashboard/services-moobiz
+Ôö£ ãÆ /api/dashboard/services-moobiz/data
+Ôö£ ãÆ /api/dashboard/services-moobiz/options
+Ôö£ ãÆ /api/extract
+Ôö£ ãÆ /api/filters/solicitante
+Ôö£ ãÆ /api/flota-pendientes
+Ôö£ ãÆ /api/flota/conductores
+Ôö£ ãÆ /api/flota/conductores/meta
+Ôö£ ãÆ /api/flota/conductores/refresh
+Ôö£ ãÆ /api/moobiz-drivers
+Ôö£ ãÆ /api/moobiz-drivers-pendientes
+Ôö£ ãÆ /api/moobiz-drivers/sync
+Ôö£ ãÆ /api/moobiz-history
+Ôö£ ãÆ /api/moobiz-logs-clean
+Ôö£ ãÆ /api/moobiz-logs-clean/productivity
+Ôö£ ãÆ /api/moobiz-services/sync
+Ôö£ ãÆ /api/moobiz/live-driver-location
+Ôö£ ãÆ /api/moobiz/refresh-gps-raw
+Ôö£ ãÆ /api/quality/audits
+Ôö£ ãÆ /api/quality/audits/[id]
+Ôö£ ãÆ /api/quality/audits/segimiento
+Ôö£ ãÆ /api/quality/audits/upload-url
+Ôö£ ãÆ /api/seguimiento-operaciones
+Ôö£ ãÆ /api/sync-monitor/latest
+Ôö£ ãÆ /api/test-moobiz-export
+Ôö£ ãÆ /api/test-supabase
+Ôö£ ãÆ /api/viajes
+Ôö£ Ôùï /calidad
+Ôö£ Ôùï /comercial
+Ôö£ Ôùï /dashboard/reservas
+Ôöö Ôùï /login
+
+
+ãÆ Proxy (Middleware)
+
+Ôùï  (Static)   prerendered as static content
+ãÆ  (Dynamic)  server-rendered on demand
+

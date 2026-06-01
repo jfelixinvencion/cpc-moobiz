@@ -1,0 +1,19 @@
+{
+  "original_subtab": "Seguimiento",
+  "parent_tab": "Operaciones",
+  "files": [
+    "src/components/seguimiento-operaciones.tsx",
+    "src/lib/seguimiento-estado.ts",
+    "src/app/api/seguimiento-operaciones/route.ts",
+    "src/components/operaciones-driver-mode-switch.tsx",
+    "src/context/operaciones-driver-filters-context.tsx",
+    "src/components/LiveDriverGpsDialog.tsx",
+    "src/lib/moobiz-live-driver-location-client.ts",
+    "src/lib/control-operaciones-driver-filters.ts",
+    "src/app/page.tsx (Operaciones > Seguimiento entry only — not modified in this PR)"
+  ],
+  "primary_copy_sources": [
+    "src/components/seguimiento-operaciones.tsx",
+    "src/lib/seguimiento-estado.ts"
+  ]
+}

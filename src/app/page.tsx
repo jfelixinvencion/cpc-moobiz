@@ -669,16 +669,14 @@ function DashboardContent() {
               </TabsContent>
 
               <TabsContent value={PLANIFICACION_SUB_CLIENTES} className="mt-0 outline-none">
-                <OperacionesDriverFiltersProvider>
-                  <div
-                    className={
-                      planificacionSubTab === PLANIFICACION_SUB_CLIENTES ? "block" : "hidden"
-                    }
-                    aria-hidden={planificacionSubTab !== PLANIFICACION_SUB_CLIENTES}
-                  >
-                    <ClientesPanel dataRevision={refreshKey} />
-                  </div>
-                </OperacionesDriverFiltersProvider>
+                <div
+                  className={
+                    planificacionSubTab === PLANIFICACION_SUB_CLIENTES ? "block" : "hidden"
+                  }
+                  aria-hidden={planificacionSubTab !== PLANIFICACION_SUB_CLIENTES}
+                >
+                  <ClientesPanel dataRevision={refreshKey} />
+                </div>
               </TabsContent>
             </Tabs>
           </TabsContent>

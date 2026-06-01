@@ -7,15 +7,15 @@
  *
  * IMPORTANTE: el match es ESTRICTAMENTE case-sensitive contra los strings
  * que devuelve el SQL. Respetar capitalización tal cual:
- *   "Aceptado", "Iniciado", "Esperando", "En camino" (c minúscula), "Llegado".
+ *   "Aceptado", "Pendiente", "Iniciado", "Esperando", "En camino" (c minúscula), "Llegado".
  */
 
 /**
- * Orden ESTRICTO de la leyenda y del apilado en celdas:
- *   Aceptado → Iniciado → Esperando → En camino → Llegado.
+ * Orden de leyenda / apilado en celdas (conocidos primero; otros usan fallback).
  */
 export const CLIENTES_ESTADO_UI_ORDER = [
   "Aceptado",
+  "Pendiente",
   "Iniciado",
   "Esperando",
   "En camino",
@@ -34,6 +34,7 @@ export type ClientesEstadoCanonical = (typeof CLIENTES_ESTADO_UI_ORDER)[number];
  */
 export const CLIENTES_ESTADO_COLORS: Record<ClientesEstadoCanonical, string> = {
   Aceptado: "#333333",
+  Pendiente: "#ca8a04",
   Iniciado: "#4B77BE",
   Esperando: "#f57f17",
   "En camino": "#00838f",

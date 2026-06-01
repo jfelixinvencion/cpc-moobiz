@@ -1,0 +1,47 @@
+{
+  "GET /api/clientes-operaciones?startDate=2026-05-30&endDate=2026-05-30": {
+    "data": [
+      {
+        "id": 1001,
+        "co_id": "42",
+        "co_name": "Transportes Lima SAC",
+        "estado": "Pendiente",
+        "fecha": "2026-05-30T15:20:00.000Z",
+        "fecha_registro": "2026-05-30T15:21:00.000Z",
+        "dr_id": null,
+        "producto": "Taxi Ejecutivo"
+      },
+      {
+        "id": 1002,
+        "co_id": "42",
+        "co_name": "Transportes Lima SAC",
+        "estado": "Aceptado",
+        "fecha": "2026-05-30T15:35:00.000Z",
+        "fecha_registro": "2026-05-30T15:36:00.000Z",
+        "dr_id": "drv-88",
+        "producto": "Taxi Ejecutivo"
+      }
+    ],
+    "summary": [
+      {
+        "co_id": "42",
+        "co_name": "Transportes Lima SAC",
+        "estado": "Pendiente",
+        "hour_ts": "2026-05-30T15:00:00.000Z",
+        "servicios_count": 1
+      },
+      {
+        "co_id": "42",
+        "co_name": "Transportes Lima SAC",
+        "estado": "Aceptado",
+        "hour_ts": "2026-05-30T15:00:00.000Z",
+        "servicios_count": 1
+      }
+    ]
+  },
+  "notes": [
+    "Fecha de servicio desde vista.alt_date (no date_created).",
+    "Incluye filas con dr_id null.",
+    "Seguimiento sigue en GET /api/seguimiento-operaciones sin cambios."
+  ]
+}

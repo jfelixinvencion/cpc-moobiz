@@ -18,10 +18,11 @@ test("canonicalClientesEstado matches case-sensitive SQL names", () => {
 
 test("colorForClientesEstado returns palette or fallback", () => {
   assert.equal(colorForClientesEstado("Aceptado"), "#333333");
+  assert.equal(colorForClientesEstado("Pendiente"), "#ca8a04");
   assert.equal(colorForClientesEstado("unknown"), "#64748b");
 });
 
 test("sortEstadosForLegend uses UI order", () => {
-  const sorted = sortEstadosForLegend(["Llegado", "Aceptado", "En camino"]);
-  assert.deepEqual(sorted, ["Aceptado", "En camino", "Llegado"]);
+  const sorted = sortEstadosForLegend(["Llegado", "Pendiente", "Aceptado", "En camino"]);
+  assert.deepEqual(sorted, ["Aceptado", "Pendiente", "En camino", "Llegado"]);
 });

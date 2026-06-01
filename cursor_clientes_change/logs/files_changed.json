@@ -1,0 +1,42 @@
+[
+  {
+    "path": "src/app/api/clientes-operaciones/route.ts",
+    "action": "created",
+    "summary": "GET independiente sobre vista.moobiz_services_maestra; agrega por co_id/co_name/hora/estado; sin filtro dr_id."
+  },
+  {
+    "path": "src/lib/clientes-operaciones-types.ts",
+    "action": "created",
+    "summary": "Tipos data + summary para API Clientes."
+  },
+  {
+    "path": "src/lib/clientes-operaciones-map.ts",
+    "action": "created",
+    "summary": "Helpers empresaRowKey, moobizActivesCompanyUrl, buildSummaryFromServices."
+  },
+  {
+    "path": "src/components/planificacion/clientes-panel.tsx",
+    "action": "modified",
+    "summary": "Timeline por empresa; fetch /api/clientes-operaciones; eje Y EMPRESA; solo enlace Abrir id_company; sin GPS."
+  },
+  {
+    "path": "src/lib/clientes-estado.ts",
+    "action": "modified",
+    "summary": "Estado Pendiente en orden y paleta (#ca8a04)."
+  },
+  {
+    "path": "src/app/page.tsx",
+    "action": "modified",
+    "summary": "ClientesPanel sin OperacionesDriverFiltersProvider."
+  },
+  {
+    "path": "tests/clientes-operaciones-map.test.ts",
+    "action": "created",
+    "summary": "Tests agregación, URL Moobiz empresa, Pendiente."
+  },
+  {
+    "path": "tests/clientes-estado.test.ts",
+    "action": "modified",
+    "summary": "Cobertura color Pendiente y orden leyenda."
+  }
+]

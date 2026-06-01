@@ -1,33 +1,22 @@
 /**
- * COPIA INDEPENDIENTE: Do not modify original Seguimiento files; this is Clientes copy.
- * Fuente: seguimiento-operaciones.tsx — misma API /api/seguimiento-operaciones por ahora.
+ * COPIA INDEPENDIENTE: Do not modify original Seguimiento files.
+ * Timeline por empresa (co_name) vía GET /api/clientes-operaciones.
  */
 "use client";
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ExternalLink, Loader2, MapPin, RefreshCw } from "lucide-react";
+import { ExternalLink, Loader2, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ComponentType,
-} from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { LiveDriverGpsDialog } from "@/components/LiveDriverGpsDialog";
-import { OperacionesDriverModeSwitch } from "@/components/operaciones-driver-mode-switch";
-import { useOperacionesDriverFilters } from "@/context/operaciones-driver-filters-context";
-import type { NearbyServiceMarker } from "@/components/LiveDriverMap";
-import { gpsIconColorFromAvailability } from "@/lib/live-driver-gps-ui";
+import type { ClientesOperacionesServiceRow } from "@/lib/clientes-operaciones-types";
 import {
-  fetchLiveDriverLocationByConductorName,
-  type DriverLiveAvailability,
-  type DriverLiveLocationApiResponse,
-  type DriverLiveLocationItem,
-} from "@/lib/moobiz-live-driver-location-client";
+  empresaDisplayName,
+  empresaRowKey,
+  moobizActivesCompanyUrl,
+  parseServiceDate,
+  toText,
+} from "@/lib/clientes-operaciones-map";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -48,124 +37,28 @@ import {
   sortEstadosForLegend,
 } from "@/lib/clientes-estado";
 
-type ViajeRow = {
-  id?: string | number | null;
-  conductor?: string | null;
-  estado?: string | null;
-  fecha?: string | null;
-  fecha_registro?: string | null;
-  producto?: string | null;
-};
-
-/** Fila API clientes (misma vista moobiz_services_maestra) (campos extra de `vista.moobiz_services_maestra`). */
-type ClientesMatrixRow = ViajeRow & {
-  dr_id?: string | number | null;
-  org_lat?: number | null;
-  org_lng?: number | null;
-  dst_zone?: string;
-  org_address?: string;
-  prioridad_mapa?: number | null;
-};
-
-type LiveDriverMapProps = {
-  lat: number;
-  lng: number;
-  fullName: string;
-  plate: string;
-  iconUrl?: string;
-  nearbyServices?: NearbyServiceMarker[];
-  /** Opcional: destino desde `vw_driver_live_raw_flat` (Control operaciones). */
-  serviceDestination?: import("@/lib/moobiz-live-driver-location-client").DriverLiveServiceDestination | null;
-};
+type ClientesMatrixRow = ClientesOperacionesServiceRow;
 
 const HOUR_MS = 60 * 60 * 1000;
 const MIN_AXIS_HOURS = 24;
-/** Altura aproximada para ver ~15 filas de conductores + cabecera de horas. */
+/** Altura aproximada para ver ~15 filas de empresas + cabecera de horas. */
 const MATRIX_MAX_HEIGHT = "min(600px, calc(15 * 2.35rem + 48px))";
 
 const ROW_ESTIMATE_PX = 40;
 const COL_ESTIMATE_PX = 44;
 const HEADER_ROW_HEIGHT = 48;
-const NAME_COL_WIDTH = 220;
+const NAME_COL_WIDTH = 280;
 
-function toText(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  return String(value).trim();
+function parseDateFromRow(row: ClientesMatrixRow): Date | null {
+  return parseServiceDate(row.fecha, row.fecha_registro);
 }
 
-function parseDateFromRow(row: ViajeRow): Date | null {
-  const candidate = toText(row.fecha) || toText(row.fecha_registro);
-  if (!candidate) return null;
-  const isoTry = new Date(candidate);
-  if (!Number.isNaN(isoTry.getTime())) return isoTry;
-  const m = candidate.match(
-    /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(a\.?\s*m\.?|p\.?\s*m\.?)?)?/i,
-  );
-  if (m) {
-    const day = Number(m[1]);
-    const month = Number(m[2]) - 1;
-    const year = Number(m[3]);
-    let hour = m[4] !== undefined ? Number(m[4]) : 0;
-    const minute = m[5] !== undefined ? Number(m[5]) : 0;
-    const second = m[6] !== undefined ? Number(m[6]) : 0;
-    const meridiem = m[7] ? String(m[7]).toLowerCase().replace(/\./g, "") : "";
-    if (meridiem.startsWith("p") && hour < 12) hour += 12;
-    if (meridiem.startsWith("a") && hour === 12) hour = 0;
-    const d = new Date(year, month, day, hour, minute, second);
-    return Number.isNaN(d.getTime()) ? null : d;
+function pickCoIdFromGroup(rows: ClientesMatrixRow[]): string | null {
+  for (const r of rows) {
+    const url = moobizActivesCompanyUrl(r.co_id);
+    if (url) return toText(r.co_id);
   }
   return null;
-}
-
-function parsePrioridadMapa(v: unknown): 1 | 2 | 3 {
-  const n = typeof v === "number" ? v : Number(v);
-  if (n === 1 || n === 2 || n === 3) return n;
-  return 3;
-}
-
-function driverGpsCacheKey(conductorName: string, group: ClientesMatrixRow[]): string {
-  const drIdRaw = group.map((r) => r.dr_id).find((v) => v != null && String(toText(v)) !== "");
-  if (drIdRaw != null && String(toText(drIdRaw)) !== "") return String(drIdRaw).trim();
-  return `name:${conductorName}`;
-}
-
-function buildNearbyMarkersFromClientesRows(rows: ClientesMatrixRow[]): NearbyServiceMarker[] {
-  const out: NearbyServiceMarker[] = [];
-  for (const r of rows) {
-    const lat = r.org_lat;
-    const lng = r.org_lng;
-    if (lat == null || lng == null || !Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-    const id = r.id;
-    if (id === null || id === undefined) continue;
-    if (String(id).trim() === "") continue;
-    out.push({
-      id,
-      lat,
-      lng,
-      alt_date: toText(r.fecha) || toText(r.fecha_registro) || "",
-      pr_name: toText(r.producto),
-      dst_zone: toText(r.dst_zone),
-      prioridad_mapa: parsePrioridadMapa(r.prioridad_mapa),
-    });
-  }
-  return out;
-}
-
-function pickConductorDrId(rows: ClientesMatrixRow[]): string | null {
-  for (const r of rows) {
-    const raw = r.dr_id;
-    if (raw === null || raw === undefined) continue;
-    const s = String(raw).trim();
-    if (s) return s;
-  }
-  return null;
-}
-
-function moobizActivesDriverUrl(driverId: string | null): string | null {
-  if (driverId === null || driverId === undefined) return null;
-  const s = String(driverId).trim();
-  if (!s) return null;
-  return `https://app.moobiz.pe/actives?id_driver=${encodeURIComponent(s)}`;
 }
 
 function floorToHour(d: Date): number {
@@ -309,27 +202,21 @@ export function ClientesPanel({
   endDate = "",
   dataRevision = 0,
 }: ClientesPanelProps) {
-  const {
-    baseFilterEnabled,
-    activated8dEnabled,
-    conductorMatchesFilters,
-    ensureDriverMetaLoaded,
-  } = useOperacionesDriverFilters();
   const parentRef = useRef<HTMLDivElement>(null);
 
   const [rows, setRows] = useState<ClientesMatrixRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [conductorSearch, setConductorSearch] = useState("");
+  const [empresaSearch, setEmpresaSearch] = useState("");
   const [syncBusy, setSyncBusy] = useState(false);
   const router = useRouter();
-  /** Filtro local de clientes (cliente): 2+ misma hora / niveles 1–3. */
+  /** Filtro local: 2+ misma hora / niveles 1–3. */
   const [serviceOverlapFilter, setServiceOverlapFilter] = useState<ClientesOverlapFilter>("all");
   /** Primera columna horaria visible (izquierda); niveles 1–3 usan 1ª y/o 2ª columna visible. */
   const [leftVisibleColumnIndex, setLeftVisibleColumnIndex] = useState(0);
   const [selectedRowCounts, setSelectedRowCounts] = useState<Set<number>>(new Set());
   const [hover, setHover] = useState<{
-    conductor: string;
+    empresa: string;
     total: number;
     trips: ViajeSlotTrip[];
     x: number;
@@ -344,7 +231,7 @@ export function ClientesPanel({
       if (startDate) params.set("startDate", startDate);
       if (endDate) params.set("endDate", endDate);
       const qs = params.toString();
-      const url = qs ? `/api/seguimiento-operaciones?${qs}` : "/api/seguimiento-operaciones";
+      const url = qs ? `/api/clientes-operaciones?${qs}` : "/api/clientes-operaciones";
       const res = await fetch(url, { cache: "no-store" });
       const json = (await res.json()) as { data?: ClientesMatrixRow[]; error?: string };
       if (!res.ok) throw new Error(json?.error || "Error al cargar clientes");
@@ -388,105 +275,24 @@ export function ClientesPanel({
     void load();
   }, [load, dataRevision]);
 
-  useEffect(() => {
-    if (!baseFilterEnabled && !activated8dEnabled) return;
-    void ensureDriverMetaLoaded();
-  }, [baseFilterEnabled, activated8dEnabled, ensureDriverMetaLoaded]);
-
-  const rowsByConductor = useMemo(() => {
+  const rowsByEmpresa = useMemo(() => {
     const m = new Map<string, ClientesMatrixRow[]>();
     for (const row of rows) {
-      const c = toText(row.conductor);
-      if (!c) continue;
-      if (!m.has(c)) m.set(c, []);
-      m.get(c)!.push(row);
+      const key = empresaRowKey(row.co_id, row.co_name);
+      if (!m.has(key)) m.set(key, []);
+      m.get(key)!.push(row);
     }
     return m;
   }, [rows]);
 
-  const liveLocationCacheRef = useRef<Map<string, DriverLiveLocationApiResponse>>(new Map());
-  const [gpsAvailByDriverId, setGpsAvailByDriverId] = useState<Record<string, DriverLiveAvailability>>({});
-  const [gpsModalOpen, setGpsModalOpen] = useState(false);
-  const [gpsModalDriver, setGpsModalDriver] = useState<{ id: string; name: string } | null>(null);
-  const [gpsModalMarkers, setGpsModalMarkers] = useState<NearbyServiceMarker[]>([]);
-  const [gpsModalState, setGpsModalState] = useState<{
-    status: "idle" | "loading" | "success" | "error";
-    item: DriverLiveLocationItem | null;
-  }>({ status: "idle", item: null });
-  const [LiveMapComponent, setLiveMapComponent] = useState<ComponentType<LiveDriverMapProps> | null>(
-    null,
-  );
-
-  const rememberGpsAvailability = useCallback((driverId: string, entry: DriverLiveLocationApiResponse) => {
-    if (!entry.ok || !entry.item) return;
-    setGpsAvailByDriverId((prev) => {
-      if (prev[driverId] === entry.item!.availability) return prev;
-      return { ...prev, [driverId]: entry.item!.availability };
-    });
-  }, []);
-
-  const loadLiveMapChunk = useCallback(() => {
-    void import("@/components/LiveDriverMap").then((mod) => {
-      setLiveMapComponent(() => mod.default);
-    });
-  }, []);
-
-  const openGpsModalForConductor = useCallback(
-    async (conductorDisplayName: string) => {
-      const group = rowsByConductor.get(conductorDisplayName) ?? [];
-      const cacheKey = driverGpsCacheKey(conductorDisplayName, group);
-
-      setGpsModalDriver({ id: cacheKey, name: conductorDisplayName });
-      setGpsModalOpen(true);
-      setGpsModalMarkers(buildNearbyMarkersFromClientesRows(group));
-      setLiveMapComponent(null);
-
-      const cached = liveLocationCacheRef.current.get(cacheKey);
-      const hasCachedItem = Boolean(cached?.ok && cached.item);
-      if (cached?.ok && cached.item) {
-        rememberGpsAvailability(cacheKey, cached);
-        setGpsModalState({
-          status: "success",
-          item: cached.item,
-        });
-        loadLiveMapChunk();
-      } else {
-        setGpsModalState({ status: "loading", item: null });
-      }
-
-      try {
-        const normalized = await fetchLiveDriverLocationByConductorName(conductorDisplayName);
-        rememberGpsAvailability(cacheKey, normalized);
-        if (!normalized.ok || !normalized.item) {
-          if (!hasCachedItem) {
-            setGpsModalState({ status: "error", item: null });
-          }
-          return;
-        }
-        liveLocationCacheRef.current.set(cacheKey, normalized);
-        setGpsModalState({
-          status: "success",
-          item: normalized.item,
-        });
-        loadLiveMapChunk();
-      } catch {
-        if (!hasCachedItem) {
-          setGpsModalState({ status: "error", item: null });
-        }
-      }
-    },
-    [rowsByConductor, rememberGpsAvailability, loadLiveMapChunk],
-  );
-
-  const handleGpsDialogOpenChange = useCallback((open: boolean) => {
-    setGpsModalOpen(open);
-    if (!open) {
-      setGpsModalState({ status: "idle", item: null });
-      setGpsModalDriver(null);
-      setGpsModalMarkers([]);
-      setLiveMapComponent(null);
+  const displayNameByEmpresaKey = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const row of rows) {
+      const key = empresaRowKey(row.co_id, row.co_name);
+      m.set(key, empresaDisplayName(row.co_name, row.co_id));
     }
-  }, []);
+    return m;
+  }, [rows]);
 
   const legendEstados = useMemo(() => {
     const set = new Set<string>();
@@ -497,7 +303,7 @@ export function ClientesPanel({
     return sortEstadosForLegend(Array.from(set));
   }, [rows]);
 
-  const { slots, conductorOrder, cellMap, conductorTotals } = useMemo(() => {
+  const { slots, empresaOrder, cellMap, empresaTotals } = useMemo(() => {
     const nowFloor = floorToHour(new Date());
     let maxSlot = nowFloor;
     for (const row of rows) {
@@ -536,36 +342,35 @@ export function ClientesPanel({
     const totals = new Map<string, number>();
 
     for (const row of rows) {
-      const c = toText(row.conductor);
-      if (!c) continue;
+      const key = empresaRowKey(row.co_id, row.co_name);
       const d = parseDateFromRow(row);
       if (!d) continue;
       const ts = floorToHour(d);
       if (ts < nowFloor || ts > end) continue;
       const est = toText(row.estado) || "Sin estado";
-      if (!cell.has(c)) cell.set(c, new Map());
-      const bySlot = cell.get(c)!;
+      if (!cell.has(key)) cell.set(key, new Map());
+      const bySlot = cell.get(key)!;
       if (!bySlot.has(ts)) bySlot.set(ts, []);
       const list = bySlot.get(ts)!;
       list.push({ estado: est, scheduledAt: new Date(d.getTime()) });
-      totals.set(c, (totals.get(c) ?? 0) + 1);
+      totals.set(key, (totals.get(key) ?? 0) + 1);
     }
 
     const order = Array.from(totals.entries())
       .sort((a, b) => b[1] - a[1])
-      .map(([name]) => name);
+      .map(([key]) => key);
 
-    return { slots: slotsArr, conductorOrder: order, cellMap: cell, conductorTotals: totals };
+    return { slots: slotsArr, empresaOrder: order, cellMap: cell, empresaTotals: totals };
   }, [rows]);
 
   const distinctTotals = useMemo(() => {
     const s = new Set<number>();
-    for (const v of conductorTotals.values()) s.add(v);
+    for (const v of empresaTotals.values()) s.add(v);
     return Array.from(s).sort((a, b) => a - b);
-  }, [conductorTotals]);
+  }, [empresaTotals]);
 
-  /** Conductores con al menos una celda (misma hora) con 2 o más servicios. */
-  const conductorsWithSlotOverlap = useMemo(() => {
+  /** Empresas con al menos una celda (misma hora) con 2 o más servicios. */
+  const empresasWithSlotOverlap = useMemo(() => {
     const out = new Set<string>();
     for (const [name, bySlot] of cellMap) {
       for (const trips of bySlot.values()) {
@@ -579,7 +384,7 @@ export function ClientesPanel({
   }, [cellMap]);
 
   /** Nivel 1: en la primera columna visible debe existir al menos un "Aceptado". */
-  const conductorsWithLevel1 = useMemo(() => {
+  const empresasWithLevel1 = useMemo(() => {
     const out = new Set<string>();
     const firstTs = slots[leftVisibleColumnIndex]?.ts;
     if (firstTs == null) return out;
@@ -591,7 +396,7 @@ export function ClientesPanel({
   }, [cellMap, slots, leftVisibleColumnIndex]);
 
   /** Nivel 2: en la primera columna visible algún viaje "Iniciado" o "Esperando". */
-  const conductorsWithLevel2 = useMemo(() => {
+  const empresasWithLevel2 = useMemo(() => {
     const out = new Set<string>();
     const firstTs = slots[leftVisibleColumnIndex]?.ts;
     if (firstTs == null) return out;
@@ -604,7 +409,7 @@ export function ClientesPanel({
   }, [cellMap, slots, leftVisibleColumnIndex]);
 
   /** Nivel 3: en la segunda columna visible algún viaje "Aceptado". */
-  const conductorsWithLevel3 = useMemo(() => {
+  const empresasWithLevel3 = useMemo(() => {
     const out = new Set<string>();
     const secondTs = slots[leftVisibleColumnIndex + 1]?.ts;
     if (secondTs == null) return out;
@@ -615,38 +420,38 @@ export function ClientesPanel({
     return out;
   }, [cellMap, slots, leftVisibleColumnIndex]);
 
-  const filteredConductors = useMemo(() => {
-    const q = conductorSearch.trim().toLowerCase();
-    return conductorOrder.filter((name) => {
+  const filteredEmpresas = useMemo(() => {
+    const q = empresaSearch.trim().toLowerCase();
+    return empresaOrder.filter((key) => {
+      const label = displayNameByEmpresaKey.get(key) ?? key;
       if (serviceOverlapFilter === "suspicious") {
-        if (!conductorsWithSlotOverlap.has(name)) return false;
+        if (!empresasWithSlotOverlap.has(key)) return false;
       } else if (serviceOverlapFilter === "level1") {
-        if (!conductorsWithLevel1.has(name)) return false;
+        if (!empresasWithLevel1.has(key)) return false;
       } else if (serviceOverlapFilter === "level2") {
-        if (!conductorsWithLevel2.has(name)) return false;
+        if (!empresasWithLevel2.has(key)) return false;
       } else if (serviceOverlapFilter === "level3") {
-        if (!conductorsWithLevel3.has(name)) return false;
+        if (!empresasWithLevel3.has(key)) return false;
       }
-      if (q && !name.toLowerCase().includes(q)) return false;
-      const total = conductorTotals.get(name) ?? 0;
+      if (q && !label.toLowerCase().includes(q)) return false;
+      const total = empresaTotals.get(key) ?? 0;
       if (selectedRowCounts.size > 0 && !selectedRowCounts.has(total)) return false;
-      if (!conductorMatchesFilters(name)) return false;
       return true;
     });
   }, [
-    conductorOrder,
-    conductorTotals,
-    conductorSearch,
+    empresaOrder,
+    empresaTotals,
+    empresaSearch,
+    displayNameByEmpresaKey,
     selectedRowCounts,
     serviceOverlapFilter,
-    conductorsWithSlotOverlap,
-    conductorsWithLevel1,
-    conductorsWithLevel2,
-    conductorsWithLevel3,
-    conductorMatchesFilters,
+    empresasWithSlotOverlap,
+    empresasWithLevel1,
+    empresasWithLevel2,
+    empresasWithLevel3,
   ]);
 
-  const rowCount = filteredConductors.length;
+  const rowCount = filteredEmpresas.length;
   const colCount = slots.length;
 
   const rowVirtualizer = useVirtualizer({
@@ -722,15 +527,9 @@ export function ClientesPanel({
   }, []);
 
   return (
-    <>
-      <Card className="border-slate-200 bg-white shadow-sm">
+    <Card className="border-slate-200 bg-white shadow-sm">
       <CardHeader className="border-b border-slate-100 py-2">
-        <div className="flex items-start justify-between gap-3">
-          <CardTitle className="text-base font-semibold text-slate-800">
-            Clientes
-          </CardTitle>
-          <OperacionesDriverModeSwitch />
-        </div>
+        <CardTitle className="text-base font-semibold text-slate-800">Clientes</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3 pt-2">
         {legendEstados.length > 0 && (
@@ -752,7 +551,7 @@ export function ClientesPanel({
 
         <div className="flex flex-col gap-3 rounded-lg border border-slate-100 bg-slate-50/80 p-3 lg:flex-row lg:flex-wrap lg:items-end">
           <div className="flex-1 space-y-2">
-            <Label className="text-xs text-slate-600">Filtrar por cantidad de filas (conductor)</Label>
+            <Label className="text-xs text-slate-600">Filtrar por cantidad de filas (empresa)</Label>
             <div className="flex flex-wrap items-center gap-2">
               {distinctTotals.map((n) => (
                 <label
@@ -800,10 +599,10 @@ export function ClientesPanel({
           </div>
           <div className="flex w-full min-w-0 flex-col gap-3 sm:flex-row sm:items-end">
             <div className="min-w-0 flex-1 space-y-1">
-              <Label className="text-xs text-slate-600">Nombre del conductor</Label>
+              <Label className="text-xs text-slate-600">Nombre de la empresa</Label>
               <Input
-                value={conductorSearch}
-                onChange={(e) => setConductorSearch(e.target.value)}
+                value={empresaSearch}
+                onChange={(e) => setEmpresaSearch(e.target.value)}
                 placeholder="Buscar..."
                 className="h-9 text-sm"
               />
@@ -834,8 +633,8 @@ export function ClientesPanel({
         )}
         {loading && <p className="text-sm text-slate-500">Cargando matriz...</p>}
 
-        {!loading && filteredConductors.length === 0 && (
-          <p className="text-sm text-slate-500">No hay conductores que cumplan los filtros.</p>
+        {!loading && filteredEmpresas.length === 0 && (
+          <p className="text-sm text-slate-500">No hay empresas que cumplan los filtros.</p>
         )}
 
         {hover && (
@@ -843,7 +642,7 @@ export function ClientesPanel({
             className="pointer-events-none fixed z-[100] max-h-[min(70vh,22rem)] max-w-sm overflow-y-auto rounded-lg border border-slate-700 bg-[#0b1131] px-3 py-2 text-xs text-white shadow-xl"
             style={{ left: hover.x, top: hover.y }}
           >
-            <p className="font-bold text-white">{hover.conductor}</p>
+            <p className="font-bold text-white">{hover.empresa}</p>
             <p className="mt-1 text-white/80">Total filas: {hover.total}</p>
             <div className="mt-2 space-y-1.5">
               {hover.trips.map((trip, i) => (
@@ -866,7 +665,7 @@ export function ClientesPanel({
           </div>
         )}
 
-        {filteredConductors.length > 0 && colCount > 0 && (
+        {filteredEmpresas.length > 0 && colCount > 0 && (
           <div
             className="rounded-lg border border-slate-200"
             style={{ maxHeight: MATRIX_MAX_HEIGHT }}
@@ -895,11 +694,11 @@ export function ClientesPanel({
                       boxSizing: "border-box",
                     }}
                   >
-                    <span className="truncate">Conductor</span>
-                    <span className="flex shrink-0 items-center gap-1.5 opacity-80" aria-hidden>
-                      <MapPin className="h-3.5 w-3.5 text-slate-400" />
-                      <ExternalLink className="h-3.5 w-3.5 text-blue-500" />
-                    </span>
+                    <span className="truncate">Empresa</span>
+                    <ExternalLink
+                      className="h-3.5 w-3.5 shrink-0 text-blue-500 opacity-80"
+                      aria-hidden
+                    />
                   </div>
                   <div
                     className="relative z-[50] shrink-0 overflow-visible border-b border-slate-200 bg-slate-100"
@@ -939,18 +738,13 @@ export function ClientesPanel({
 
                 {/* Filas virtualizadas */}
                 {rowVirtualizer.getVirtualItems().map((vRow) => {
-                  const name = filteredConductors[vRow.index];
-                  if (!name) return null;
-                  const totalRows = conductorTotals.get(name) ?? 0;
-                  const groupRows = rowsByConductor.get(name) ?? [];
-                  const gpsKey = driverGpsCacheKey(name, groupRows);
-                  const drId = pickConductorDrId(groupRows);
-                  if (!drId) {
-                    console.error(
-                      `[clientes] Conductor "${name}" sin dr_id en vista.moobiz_services_maestra; no se construye URL Moobiz.`,
-                    );
-                  }
-                  const moobizHref = moobizActivesDriverUrl(drId);
+                  const empresaKey = filteredEmpresas[vRow.index];
+                  if (!empresaKey) return null;
+                  const displayName = displayNameByEmpresaKey.get(empresaKey) ?? empresaKey;
+                  const totalRows = empresaTotals.get(empresaKey) ?? 0;
+                  const groupRows = rowsByEmpresa.get(empresaKey) ?? [];
+                  const coId = pickCoIdFromGroup(groupRows);
+                  const moobizHref = moobizActivesCompanyUrl(coId ?? "");
 
                   return (
                     <div
@@ -971,36 +765,20 @@ export function ClientesPanel({
                           boxSizing: "border-box",
                         }}
                       >
-                        <span className="line-clamp-2 min-w-0 flex-1" title={name}>
-                          {name}
+                        <span className="line-clamp-2 min-w-0 flex-1" title={displayName}>
+                          {displayName}
                         </span>
                         <div className="flex shrink-0 items-center gap-1">
                           <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[10px] tabular-nums">
                             {totalRows}
                           </Badge>
-                          <button
-                            type="button"
-                            title="Ver ubicación GPS"
-                            onClick={() => {
-                              void openGpsModalForConductor(name);
-                            }}
-                            className="inline-flex items-center justify-center transition hover:opacity-85"
-                          >
-                            <MapPin
-                              className="h-4 w-4"
-                              style={{
-                                color: gpsIconColorFromAvailability(
-                                  gpsAvailByDriverId[gpsKey] ?? null,
-                                ),
-                              }}
-                            />
-                          </button>
                           {moobizHref ? (
                             <a
                               href={moobizHref}
                               target="_blank"
                               rel="noopener noreferrer"
-                              title="Abrir conductor en Moobiz"
+                              title="Abrir empresa en Moobiz"
+                              aria-label={`Abrir ${displayName} en Moobiz`}
                               onClick={(e) => e.stopPropagation()}
                               className="inline-flex items-center justify-center text-blue-500 hover:text-blue-600"
                             >
@@ -1009,7 +787,7 @@ export function ClientesPanel({
                           ) : (
                             <span
                               className="inline-flex cursor-not-allowed items-center justify-center text-slate-300"
-                              title="Sin dr_id del conductor"
+                              title="Sin co_id de empresa"
                               aria-hidden
                             >
                               <ExternalLink className="h-4 w-4" />
@@ -1028,7 +806,7 @@ export function ClientesPanel({
                         {columnVirtualizer.getVirtualItems().map((vCol) => {
                           const slot = slots[vCol.index];
                           if (!slot) return null;
-                          const tripsCell = cellMap.get(name)?.get(slot.ts) ?? EMPTY_TRIPS;
+                          const tripsCell = cellMap.get(empresaKey)?.get(slot.ts) ?? EMPTY_TRIPS;
                           const totalHover = tripsCell.length;
 
                           return (
@@ -1049,7 +827,7 @@ export function ClientesPanel({
                                   (a, b) => a.scheduledAt.getTime() - b.scheduledAt.getTime(),
                                 );
                                 setHover({
-                                  conductor: name,
+                                  empresa: displayName,
                                   total: sorted.length,
                                   trips: sorted,
                                   x: e.clientX + 12,
@@ -1101,16 +879,5 @@ export function ClientesPanel({
         )}
       </CardContent>
     </Card>
-
-    <LiveDriverGpsDialog
-      open={gpsModalOpen}
-      onOpenChange={handleGpsDialogOpenChange}
-      driverTitle={gpsModalDriver?.name ?? null}
-      gpsModalState={gpsModalState}
-      nearbyServices={gpsModalMarkers}
-      LiveMapComponent={LiveMapComponent}
-      mapKey={gpsModalDriver?.id ?? null}
-    />
-    </>
   );
 }

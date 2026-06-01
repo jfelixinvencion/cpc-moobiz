@@ -5,17 +5,27 @@
 "use client";
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ExternalLink, Loader2, RefreshCw } from "lucide-react";
+import { ExternalLink, Layers, Loader2, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { ClientesOperacionesServiceRow } from "@/lib/clientes-operaciones-types";
+import { ClientesBucketBadge } from "@/components/planificacion/clientes-bucket-badge";
+import { ClientesBucketsModal } from "@/components/planificacion/clientes-buckets-modal";
+import { ClientesEmpresaBucketMenu } from "@/components/planificacion/clientes-empresa-bucket-menu";
+import {
+  deleteClientBucketApi,
+  fetchClientBuckets,
+  upsertClientBucketApi,
+} from "@/lib/client-buckets-client";
+import type { ClientBucketLevel, ClientBucketRow } from "@/lib/client-buckets-types";
 import {
   empresaDisplayName,
   empresaRowKey,
   moobizActivesCompanyUrl,
   parseServiceDate,
   toText,
+  UNKNOWN_COMPANY_ID,
 } from "@/lib/clientes-operaciones-map";
 
 import { Badge } from "@/components/ui/badge";
@@ -36,6 +46,11 @@ import {
   sortEstadoEntriesForMatrix,
   sortEstadosForLegend,
 } from "@/lib/clientes-estado";
+import {
+  computeClientesTimelineAxisBounds,
+  floorToLocalHourMs,
+  indexOfCurrentHourInAxis,
+} from "@/lib/clientes-timeline-axis";
 
 type ClientesMatrixRow = ClientesOperacionesServiceRow;
 
@@ -59,13 +74,6 @@ function pickCoIdFromGroup(rows: ClientesMatrixRow[]): string | null {
     if (url) return toText(r.co_id);
   }
   return null;
-}
-
-function floorToHour(d: Date): number {
-  const x = new Date(d.getTime());
-  x.setMinutes(0, 0, 0);
-  x.setMilliseconds(0);
-  return x.getTime();
 }
 
 function shortSlotLabel(ms: number): string {
@@ -121,10 +129,8 @@ const EMPTY_TRIPS: ViajeSlotTrip[] = [];
 /** Interior de celda; `trips` es la lista de servicios en esa franja horaria (referencia estable por celda en el Map). */
 const MatrixCellBody = memo(function MatrixCellBody({
   trips,
-  overlapHighlight,
 }: {
   trips: ViajeSlotTrip[] | undefined;
-  overlapHighlight?: boolean;
 }) {
   const { entries, total, multi } = useMemo(() => {
     const list = trips ?? [];
@@ -138,17 +144,11 @@ const MatrixCellBody = memo(function MatrixCellBody({
     return { entries, total, multi: entries.length > 1 };
   }, [trips]);
 
-  const showOverlapAlert = Boolean(overlapHighlight && total >= 2);
-
   if (total === 0) {
     return <div className="h-full w-full rounded-md bg-slate-50/90" />;
   }
   return (
-    <div
-      className={`relative h-full w-full rounded-md ${
-        showOverlapAlert ? "ring-2 ring-red-600 ring-offset-0" : ""
-      }`}
-    >
+    <div className="relative h-full w-full rounded-md">
       <div className="relative flex h-full min-h-0 w-full gap-0.5 overflow-hidden rounded-md bg-slate-100/90 p-0.5">
         {entries.map(([estado, cnt]) => (
           <div
@@ -159,22 +159,12 @@ const MatrixCellBody = memo(function MatrixCellBody({
               backgroundColor: colorForClientesEstado(estado),
             }}
           >
-            {!multi ? (showOverlapAlert ? null : cnt) : null}
+            {!multi ? cnt : null}
           </div>
         ))}
       </div>
       {multi ? (
-        <span
-          className={`pointer-events-none absolute inset-0 flex items-center justify-center text-[10px] font-bold text-white drop-shadow-[0_1px_1px_rgba(0,0,0,0.85)] ${
-            showOverlapAlert
-              ? "rounded-full bg-red-600 px-1.5 py-0.5 shadow-md ring-1 ring-white/30"
-              : ""
-          }`}
-        >
-          {total}
-        </span>
-      ) : showOverlapAlert ? (
-        <span className="pointer-events-none absolute right-0.5 top-0.5 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-orange-600 px-1 text-[9px] font-bold leading-none text-white shadow ring-1 ring-white/40">
+        <span className="pointer-events-none absolute inset-0 flex items-center justify-center text-[10px] font-bold text-white drop-shadow-[0_1px_1px_rgba(0,0,0,0.85)]">
           {total}
         </span>
       ) : null}
@@ -189,13 +179,18 @@ export type ClientesPanelProps = {
   dataRevision?: number;
 };
 
-/** Valores del desplegable Clientes (matriz seguimiento operaciones). */
-export type ClientesOverlapFilter =
-  | "all"
-  | "suspicious"
-  | "level1"
-  | "level2"
-  | "level3";
+/** Filtro por bolsa persistida (public.Empresas_Criticas). */
+export type ClientesBucketFilter = "all" | "level1" | "level2" | "level3";
+
+function resolveCoIdForEmpresaKey(
+  empresaKey: string,
+  groupRows: ClientesMatrixRow[],
+): string | null {
+  const fromRows = pickCoIdFromGroup(groupRows);
+  if (fromRows) return fromRows;
+  if (empresaKey && !empresaKey.startsWith(UNKNOWN_COMPANY_ID)) return empresaKey;
+  return null;
+}
 
 export function ClientesPanel({
   startDate = "",
@@ -210,11 +205,11 @@ export function ClientesPanel({
   const [empresaSearch, setEmpresaSearch] = useState("");
   const [syncBusy, setSyncBusy] = useState(false);
   const router = useRouter();
-  /** Filtro local: 2+ misma hora / niveles 1–3. */
-  const [serviceOverlapFilter, setServiceOverlapFilter] = useState<ClientesOverlapFilter>("all");
-  /** Primera columna horaria visible (izquierda); niveles 1–3 usan 1ª y/o 2ª columna visible. */
-  const [leftVisibleColumnIndex, setLeftVisibleColumnIndex] = useState(0);
-  const [selectedRowCounts, setSelectedRowCounts] = useState<Set<number>>(new Set());
+  const [bucketFilter, setBucketFilter] = useState<ClientesBucketFilter>("all");
+  const [buckets, setBuckets] = useState<ClientBucketRow[]>([]);
+  const [bucketsModalOpen, setBucketsModalOpen] = useState(false);
+  const [bucketActionBusy, setBucketActionBusy] = useState(false);
+  const [toast, setToast] = useState<{ message: string; error?: boolean } | null>(null);
   const [hover, setHover] = useState<{
     empresa: string;
     total: number;
@@ -275,6 +270,70 @@ export function ClientesPanel({
     void load();
   }, [load, dataRevision]);
 
+  const showToast = useCallback((message: string, isError = false) => {
+    setToast({ message, error: isError });
+    window.setTimeout(() => setToast(null), 4000);
+  }, []);
+
+  const loadBuckets = useCallback(async () => {
+    try {
+      const data = await fetchClientBuckets();
+      setBuckets(data);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Error al cargar bolsas", true);
+    }
+  }, [showToast]);
+
+  useEffect(() => {
+    void loadBuckets();
+  }, [loadBuckets, dataRevision]);
+
+  const bucketsByCoId = useMemo(() => {
+    const m = new Map<string, ClientBucketLevel>();
+    for (const b of buckets) {
+      m.set(b.co_id, b.bucket_level);
+    }
+    return m;
+  }, [buckets]);
+
+  const handleAssignBucket = useCallback(
+    async (coId: string, coName: string, level: ClientBucketLevel) => {
+      if (!coId) return;
+      setBucketActionBusy(true);
+      try {
+        const row = await upsertClientBucketApi({
+          co_id: coId,
+          co_name: coName,
+          bucket_level: level,
+        });
+        setBuckets((prev) => [...prev.filter((b) => b.co_id !== coId), row]);
+        showToast(`${coName} → Nivel ${level}`);
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : "Error al asignar", true);
+      } finally {
+        setBucketActionBusy(false);
+      }
+    },
+    [showToast],
+  );
+
+  const handleRemoveBucket = useCallback(
+    async (coId: string, coName: string) => {
+      if (!coId) return;
+      setBucketActionBusy(true);
+      try {
+        await deleteClientBucketApi(coId);
+        setBuckets((prev) => prev.filter((b) => b.co_id !== coId));
+        showToast(`${coName} quitada de bolsas`);
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : "Error al quitar", true);
+      } finally {
+        setBucketActionBusy(false);
+      }
+    },
+    [showToast],
+  );
+
   const rowsByEmpresa = useMemo(() => {
     const m = new Map<string, ClientesMatrixRow[]>();
     for (const row of rows) {
@@ -304,19 +363,16 @@ export function ClientesPanel({
   }, [rows]);
 
   const { slots, empresaOrder, cellMap, empresaTotals } = useMemo(() => {
-    const nowFloor = floorToHour(new Date());
-    let maxSlot = nowFloor;
-    for (const row of rows) {
-      const d = parseDateFromRow(row);
-      if (!d) continue;
-      const t = floorToHour(d);
-      if (t > maxSlot) maxSlot = t;
-    }
-    const minEnd = nowFloor + (MIN_AXIS_HOURS - 1) * HOUR_MS;
-    const end = Math.max(maxSlot, minEnd);
+    const { axisStartMs, axisEndMs } = computeClientesTimelineAxisBounds({
+      rows: rows.map((row) => ({
+        estado: toText(row.estado),
+        serviceAt: parseDateFromRow(row),
+      })),
+      minAxisHours: MIN_AXIS_HOURS,
+    });
 
     const slotsArr: MatrixSlot[] = [];
-    for (let t = nowFloor; t <= end; t += HOUR_MS) {
+    for (let t = axisStartMs; t <= axisEndMs; t += HOUR_MS) {
       slotsArr.push({
         ts: t,
         label: shortSlotLabel(t),
@@ -345,8 +401,8 @@ export function ClientesPanel({
       const key = empresaRowKey(row.co_id, row.co_name);
       const d = parseDateFromRow(row);
       if (!d) continue;
-      const ts = floorToHour(d);
-      if (ts < nowFloor || ts > end) continue;
+      const ts = floorToLocalHourMs(d);
+      if (ts < axisStartMs || ts > axisEndMs) continue;
       const est = toText(row.estado) || "Sin estado";
       if (!cell.has(key)) cell.set(key, new Map());
       const bySlot = cell.get(key)!;
@@ -363,92 +419,29 @@ export function ClientesPanel({
     return { slots: slotsArr, empresaOrder: order, cellMap: cell, empresaTotals: totals };
   }, [rows]);
 
-  const distinctTotals = useMemo(() => {
-    const s = new Set<number>();
-    for (const v of empresaTotals.values()) s.add(v);
-    return Array.from(s).sort((a, b) => a - b);
-  }, [empresaTotals]);
-
-  /** Empresas con al menos una celda (misma hora) con 2 o más servicios. */
-  const empresasWithSlotOverlap = useMemo(() => {
-    const out = new Set<string>();
-    for (const [name, bySlot] of cellMap) {
-      for (const trips of bySlot.values()) {
-        if (trips.length >= 2) {
-          out.add(name);
-          break;
-        }
-      }
-    }
-    return out;
-  }, [cellMap]);
-
-  /** Nivel 1: en la primera columna visible debe existir al menos un "Aceptado". */
-  const empresasWithLevel1 = useMemo(() => {
-    const out = new Set<string>();
-    const firstTs = slots[leftVisibleColumnIndex]?.ts;
-    if (firstTs == null) return out;
-    for (const [name, bySlot] of cellMap) {
-      const trips = bySlot.get(firstTs) ?? EMPTY_TRIPS;
-      if (trips.some((t) => t.estado === "Aceptado")) out.add(name);
-    }
-    return out;
-  }, [cellMap, slots, leftVisibleColumnIndex]);
-
-  /** Nivel 2: en la primera columna visible algún viaje "Iniciado" o "Esperando". */
-  const empresasWithLevel2 = useMemo(() => {
-    const out = new Set<string>();
-    const firstTs = slots[leftVisibleColumnIndex]?.ts;
-    if (firstTs == null) return out;
-    for (const [name, bySlot] of cellMap) {
-      const firstTrips = bySlot.get(firstTs) ?? EMPTY_TRIPS;
-      if (firstTrips.some((t) => t.estado === "Iniciado" || t.estado === "Esperando"))
-        out.add(name);
-    }
-    return out;
-  }, [cellMap, slots, leftVisibleColumnIndex]);
-
-  /** Nivel 3: en la segunda columna visible algún viaje "Aceptado". */
-  const empresasWithLevel3 = useMemo(() => {
-    const out = new Set<string>();
-    const secondTs = slots[leftVisibleColumnIndex + 1]?.ts;
-    if (secondTs == null) return out;
-    for (const [name, bySlot] of cellMap) {
-      const trips = bySlot.get(secondTs) ?? EMPTY_TRIPS;
-      if (trips.some((t) => t.estado === "Aceptado")) out.add(name);
-    }
-    return out;
-  }, [cellMap, slots, leftVisibleColumnIndex]);
-
   const filteredEmpresas = useMemo(() => {
     const q = empresaSearch.trim().toLowerCase();
+    const requiredLevel =
+      bucketFilter === "level1" ? 1 : bucketFilter === "level2" ? 2 : bucketFilter === "level3" ? 3 : null;
+
     return empresaOrder.filter((key) => {
       const label = displayNameByEmpresaKey.get(key) ?? key;
-      if (serviceOverlapFilter === "suspicious") {
-        if (!empresasWithSlotOverlap.has(key)) return false;
-      } else if (serviceOverlapFilter === "level1") {
-        if (!empresasWithLevel1.has(key)) return false;
-      } else if (serviceOverlapFilter === "level2") {
-        if (!empresasWithLevel2.has(key)) return false;
-      } else if (serviceOverlapFilter === "level3") {
-        if (!empresasWithLevel3.has(key)) return false;
+      const groupRows = rowsByEmpresa.get(key) ?? [];
+      const coId = resolveCoIdForEmpresaKey(key, groupRows);
+
+      if (requiredLevel != null) {
+        if (!coId || bucketsByCoId.get(coId) !== requiredLevel) return false;
       }
       if (q && !label.toLowerCase().includes(q)) return false;
-      const total = empresaTotals.get(key) ?? 0;
-      if (selectedRowCounts.size > 0 && !selectedRowCounts.has(total)) return false;
       return true;
     });
   }, [
     empresaOrder,
-    empresaTotals,
     empresaSearch,
     displayNameByEmpresaKey,
-    selectedRowCounts,
-    serviceOverlapFilter,
-    empresasWithSlotOverlap,
-    empresasWithLevel1,
-    empresasWithLevel2,
-    empresasWithLevel3,
+    bucketFilter,
+    bucketsByCoId,
+    rowsByEmpresa,
   ]);
 
   const rowCount = filteredEmpresas.length;
@@ -492,39 +485,15 @@ export function ClientesPanel({
 
   const nowHourCenterPx = useMemo(() => {
     if (slots.length === 0) return null;
-    const off = columnVirtualizer.getOffsetForIndex(0, "start");
-    const start = off?.[0] ?? 0;
+    const nowIdx = indexOfCurrentHourInAxis(slots);
+    if (nowIdx < 0) return null;
+    const off = columnVirtualizer.getOffsetForIndex(nowIdx, "start");
+    const start = off?.[0] ?? nowIdx * COL_ESTIMATE_PX;
     const vis = columnVirtualizer.getVirtualItems();
-    const v0 = vis.find((v) => v.index === 0);
-    const w = v0?.size ?? COL_ESTIMATE_PX;
+    const vCol = vis.find((v) => v.index === nowIdx);
+    const w = vCol?.size ?? COL_ESTIMATE_PX;
     return start + w / 2;
-  }, [slots.length, columnVirtualizer, colCount, columnScrollToken]);
-
-  const toggleCount = (n: number) => {
-    setSelectedRowCounts((prev) => {
-      const next = new Set(prev);
-      if (next.has(n)) next.delete(n);
-      else next.add(n);
-      return next;
-    });
-  };
-
-  useEffect(() => {
-    const el = parentRef.current;
-    if (!el) return;
-    const updateLeftVisibleColumn = () => {
-      const gridScrollLeft = Math.max(0, el.scrollLeft - NAME_COL_WIDTH);
-      const idx = Math.max(0, Math.floor(gridScrollLeft / COL_ESTIMATE_PX));
-      setLeftVisibleColumnIndex((prev) => (prev === idx ? prev : idx));
-    };
-    updateLeftVisibleColumn();
-    el.addEventListener("scroll", updateLeftVisibleColumn, { passive: true });
-    window.addEventListener("resize", updateLeftVisibleColumn);
-    return () => {
-      el.removeEventListener("scroll", updateLeftVisibleColumn);
-      window.removeEventListener("resize", updateLeftVisibleColumn);
-    };
-  }, []);
+  }, [slots, columnVirtualizer, colCount, columnScrollToken]);
 
   return (
     <Card className="border-slate-200 bg-white shadow-sm">
@@ -532,6 +501,18 @@ export function ClientesPanel({
         <CardTitle className="text-base font-semibold text-slate-800">Clientes</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3 pt-2">
+        {toast && (
+          <p
+            className={`rounded-md border px-3 py-2 text-sm ${
+              toast.error
+                ? "border-red-200 bg-red-50 text-red-800"
+                : "border-emerald-200 bg-emerald-50 text-emerald-900"
+            }`}
+            role="status"
+          >
+            {toast.message}
+          </p>
+        )}
         {legendEstados.length > 0 && (
           <div className="flex flex-wrap gap-x-4 gap-y-2 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
             <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
@@ -549,55 +530,8 @@ export function ClientesPanel({
           </div>
         )}
 
-        <div className="flex flex-col gap-3 rounded-lg border border-slate-100 bg-slate-50/80 p-3 lg:flex-row lg:flex-wrap lg:items-end">
-          <div className="flex-1 space-y-2">
-            <Label className="text-xs text-slate-600">Filtrar por cantidad de filas (empresa)</Label>
-            <div className="flex flex-wrap items-center gap-2">
-              {distinctTotals.map((n) => (
-                <label
-                  key={n}
-                  className="flex cursor-pointer items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedRowCounts.has(n)}
-                    onChange={() => toggleCount(n)}
-                  />
-                  {n} fila{n === 1 ? "" : "s"}
-                </label>
-              ))}
-              {distinctTotals.length === 0 && (
-                <span className="text-xs text-slate-500">Sin datos para filtrar</span>
-              )}
-              <Button
-                type="button"
-                size="sm"
-                variant="default"
-                disabled={syncBusy}
-                onClick={() => void syncMoobizServices()}
-                className="ml-auto h-8 gap-1.5 bg-[#0b1131] px-3 text-xs text-white hover:bg-[#0b1131]/90"
-                title="Sincronizar public.moobiz_services y refrescar matriz desde vista.moobiz_services_maestra."
-              >
-                {syncBusy ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-                ) : (
-                  <RefreshCw className="h-3.5 w-3.5" aria-hidden />
-                )}
-                {syncBusy ? "Actualizando..." : "Actualizar Moobiz"}
-              </Button>
-            </div>
-            {selectedRowCounts.size > 0 && (
-              <Button
-                variant="ghost"
-                size="xs"
-                className="h-7 text-xs"
-                onClick={() => setSelectedRowCounts(new Set())}
-              >
-                Limpiar filtros de cantidad
-              </Button>
-            )}
-          </div>
-          <div className="flex w-full min-w-0 flex-col gap-3 sm:flex-row sm:items-end">
+        <div className="flex flex-col gap-3 rounded-lg border border-slate-100 bg-slate-50/80 p-3 sm:flex-row sm:flex-wrap sm:items-end">
+          <div className="flex w-full min-w-0 flex-col gap-3 sm:flex-row sm:items-end sm:flex-1">
             <div className="min-w-0 flex-1 space-y-1">
               <Label className="text-xs text-slate-600">Nombre de la empresa</Label>
               <Input
@@ -607,18 +541,17 @@ export function ClientesPanel({
                 className="h-9 text-sm"
               />
             </div>
-            <div className="w-full shrink-0 space-y-1 sm:w-[min(100%,280px)]">
-              <Label className="text-xs text-slate-600">Clientes</Label>
+            <div className="w-full shrink-0 space-y-1 sm:w-[min(100%,220px)]">
+              <Label className="text-xs text-slate-600">Bolsa</Label>
               <Select
-                value={serviceOverlapFilter}
-                onValueChange={(v) => setServiceOverlapFilter(v as ClientesOverlapFilter)}
+                value={bucketFilter}
+                onValueChange={(v) => setBucketFilter(v as ClientesBucketFilter)}
               >
                 <SelectTrigger className="h-9 w-full border-slate-200 bg-white text-sm">
                   <SelectValue placeholder="Filtro" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Todos</SelectItem>
-                  <SelectItem value="suspicious">2+ en misma hora</SelectItem>
                   <SelectItem value="level1">Nivel 1</SelectItem>
                   <SelectItem value="level2">Nivel 2</SelectItem>
                   <SelectItem value="level3">Nivel 3</SelectItem>
@@ -626,6 +559,32 @@ export function ClientesPanel({
               </Select>
             </div>
           </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-9 shrink-0 gap-1.5 border-slate-300 text-xs"
+            onClick={() => setBucketsModalOpen(true)}
+          >
+            <Layers className="h-3.5 w-3.5" aria-hidden />
+            Gestionar bolsas
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="default"
+            disabled={syncBusy}
+            onClick={() => void syncMoobizServices()}
+            className="h-9 shrink-0 gap-1.5 bg-[#0b1131] px-3 text-xs text-white hover:bg-[#0b1131]/90"
+            title="Sincronizar public.moobiz_services y refrescar matriz desde vista.moobiz_services_maestra."
+          >
+            {syncBusy ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+            ) : (
+              <RefreshCw className="h-3.5 w-3.5" aria-hidden />
+            )}
+            {syncBusy ? "Actualizando..." : "Actualizar Moobiz"}
+          </Button>
         </div>
 
         {err && (
@@ -743,14 +702,17 @@ export function ClientesPanel({
                   const displayName = displayNameByEmpresaKey.get(empresaKey) ?? empresaKey;
                   const totalRows = empresaTotals.get(empresaKey) ?? 0;
                   const groupRows = rowsByEmpresa.get(empresaKey) ?? [];
-                  const coId = pickCoIdFromGroup(groupRows);
+                  const coId = resolveCoIdForEmpresaKey(empresaKey, groupRows);
                   const moobizHref = moobizActivesCompanyUrl(coId ?? "");
+                  const bucketLevel = coId ? bucketsByCoId.get(coId) : undefined;
 
                   return (
                     <div
                       key={vRow.key}
                       data-index={vRow.index}
-                      className="absolute left-0 top-0 flex bg-white"
+                      className={`absolute left-0 top-0 flex ${
+                        bucketLevel ? "bg-amber-50/50" : "bg-white"
+                      }`}
                       style={{
                         width: totalInnerWidth,
                         height: vRow.size,
@@ -758,7 +720,9 @@ export function ClientesPanel({
                       }}
                     >
                       <div
-                        className="sticky left-0 z-30 flex w-full shrink-0 items-center justify-between gap-1 border-b border-r border-slate-200 bg-white px-1.5 text-xs font-medium text-slate-800"
+                        className={`sticky left-0 z-30 flex w-full shrink-0 items-center justify-between gap-1 border-b border-r border-slate-200 px-1.5 text-xs font-medium text-slate-800 ${
+                          bucketLevel ? "bg-amber-50/80" : "bg-white"
+                        }`}
                         style={{
                           width: NAME_COL_WIDTH,
                           height: vRow.size,
@@ -768,10 +732,19 @@ export function ClientesPanel({
                         <span className="line-clamp-2 min-w-0 flex-1" title={displayName}>
                           {displayName}
                         </span>
-                        <div className="flex shrink-0 items-center gap-1">
+                        <div className="flex shrink-0 items-center gap-0.5">
+                          {bucketLevel != null && <ClientesBucketBadge level={bucketLevel} />}
                           <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[10px] tabular-nums">
                             {totalRows}
                           </Badge>
+                          <ClientesEmpresaBucketMenu
+                            coId={coId ?? ""}
+                            coName={displayName}
+                            currentLevel={bucketLevel ?? null}
+                            disabled={bucketActionBusy || !coId}
+                            onAssign={(lvl) => void handleAssignBucket(coId!, displayName, lvl)}
+                            onRemove={() => void handleRemoveBucket(coId!, displayName)}
+                          />
                           {moobizHref ? (
                             <a
                               href={moobizHref}
@@ -836,10 +809,7 @@ export function ClientesPanel({
                               }}
                               onMouseLeave={() => setHover(null)}
                             >
-                              <MatrixCellBody
-                                trips={tripsCell}
-                                overlapHighlight={serviceOverlapFilter === "suspicious"}
-                              />
+                              <MatrixCellBody trips={tripsCell} />
                             </div>
                           );
                         })}
@@ -877,6 +847,14 @@ export function ClientesPanel({
             </div>
           </div>
         )}
+
+        <ClientesBucketsModal
+          open={bucketsModalOpen}
+          onOpenChange={setBucketsModalOpen}
+          buckets={buckets}
+          onBucketsChange={setBuckets}
+          onToast={showToast}
+        />
       </CardContent>
     </Card>
   );

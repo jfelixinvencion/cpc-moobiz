@@ -42,3 +42,10 @@ export function getQualityActorDefaultName(): string {
     "Auditor"
   );
 }
+
+/** Actor para `created_by` en bolsas Clientes (misma sesión del panel). */
+export function getClientBucketsActorLabel(): string {
+  const name = getQualityActorDefaultName();
+  const id = getQualityActorUserId();
+  return `${name} (${id})`;
+}

@@ -10,14 +10,12 @@ import { useRouter } from "next/navigation";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { ClientesOperacionesServiceRow } from "@/lib/clientes-operaciones-types";
+import "./clientes-priority.css";
+
 import { ClientesBucketBadge } from "@/components/planificacion/clientes-bucket-badge";
 import { ClientesBucketsModal } from "@/components/planificacion/clientes-buckets-modal";
-import { ClientesEmpresaBucketMenu } from "@/components/planificacion/clientes-empresa-bucket-menu";
-import {
-  deleteClientBucketApi,
-  fetchClientBuckets,
-  upsertClientBucketApi,
-} from "@/lib/client-buckets-client";
+import { fetchClientBuckets } from "@/lib/client-buckets-client";
+import { clientesPriorityRowClass } from "@/lib/clientes-priority-styles";
 import type { ClientBucketLevel, ClientBucketRow } from "@/lib/client-buckets-types";
 import {
   empresaDisplayName,
@@ -179,7 +177,7 @@ export type ClientesPanelProps = {
   dataRevision?: number;
 };
 
-/** Filtro por bolsa persistida (public.Empresas_Criticas). */
+/** Filtro por prioridad persistida (public.Empresas_Criticas). */
 export type ClientesBucketFilter = "all" | "level1" | "level2" | "level3";
 
 function resolveCoIdForEmpresaKey(
@@ -208,7 +206,6 @@ export function ClientesPanel({
   const [bucketFilter, setBucketFilter] = useState<ClientesBucketFilter>("all");
   const [buckets, setBuckets] = useState<ClientBucketRow[]>([]);
   const [bucketsModalOpen, setBucketsModalOpen] = useState(false);
-  const [bucketActionBusy, setBucketActionBusy] = useState(false);
   const [toast, setToast] = useState<{ message: string; error?: boolean } | null>(null);
   const [hover, setHover] = useState<{
     empresa: string;
@@ -280,7 +277,7 @@ export function ClientesPanel({
       const data = await fetchClientBuckets();
       setBuckets(data);
     } catch (e) {
-      showToast(e instanceof Error ? e.message : "Error al cargar bolsas", true);
+      showToast(e instanceof Error ? e.message : "Error al cargar prioridades", true);
     }
   }, [showToast]);
 
@@ -295,44 +292,6 @@ export function ClientesPanel({
     }
     return m;
   }, [buckets]);
-
-  const handleAssignBucket = useCallback(
-    async (coId: string, coName: string, level: ClientBucketLevel) => {
-      if (!coId) return;
-      setBucketActionBusy(true);
-      try {
-        const row = await upsertClientBucketApi({
-          co_id: coId,
-          co_name: coName,
-          bucket_level: level,
-        });
-        setBuckets((prev) => [...prev.filter((b) => b.co_id !== coId), row]);
-        showToast(`${coName} → Nivel ${level}`);
-      } catch (e) {
-        showToast(e instanceof Error ? e.message : "Error al asignar", true);
-      } finally {
-        setBucketActionBusy(false);
-      }
-    },
-    [showToast],
-  );
-
-  const handleRemoveBucket = useCallback(
-    async (coId: string, coName: string) => {
-      if (!coId) return;
-      setBucketActionBusy(true);
-      try {
-        await deleteClientBucketApi(coId);
-        setBuckets((prev) => prev.filter((b) => b.co_id !== coId));
-        showToast(`${coName} quitada de bolsas`);
-      } catch (e) {
-        showToast(e instanceof Error ? e.message : "Error al quitar", true);
-      } finally {
-        setBucketActionBusy(false);
-      }
-    },
-    [showToast],
-  );
 
   const rowsByEmpresa = useMemo(() => {
     const m = new Map<string, ClientesMatrixRow[]>();
@@ -542,7 +501,7 @@ export function ClientesPanel({
               />
             </div>
             <div className="w-full shrink-0 space-y-1 sm:w-[min(100%,220px)]">
-              <Label className="text-xs text-slate-600">Bolsa</Label>
+              <Label className="text-xs text-slate-600">Prioridad</Label>
               <Select
                 value={bucketFilter}
                 onValueChange={(v) => setBucketFilter(v as ClientesBucketFilter)}
@@ -567,7 +526,7 @@ export function ClientesPanel({
             onClick={() => setBucketsModalOpen(true)}
           >
             <Layers className="h-3.5 w-3.5" aria-hidden />
-            Gestionar bolsas
+            Gestionar Prioridades
           </Button>
           <Button
             type="button"
@@ -705,14 +664,14 @@ export function ClientesPanel({
                   const coId = resolveCoIdForEmpresaKey(empresaKey, groupRows);
                   const moobizHref = moobizActivesCompanyUrl(coId ?? "");
                   const bucketLevel = coId ? bucketsByCoId.get(coId) : undefined;
+                  const priorityClass = clientesPriorityRowClass(bucketLevel);
 
                   return (
                     <div
                       key={vRow.key}
                       data-index={vRow.index}
-                      className={`absolute left-0 top-0 flex ${
-                        bucketLevel ? "bg-amber-50/50" : "bg-white"
-                      }`}
+                      data-priority={bucketLevel ?? undefined}
+                      className={`absolute left-0 top-0 flex ${priorityClass || "bg-white"}`}
                       style={{
                         width: totalInnerWidth,
                         height: vRow.size,
@@ -720,9 +679,7 @@ export function ClientesPanel({
                       }}
                     >
                       <div
-                        className={`sticky left-0 z-30 flex w-full shrink-0 items-center justify-between gap-1 border-b border-r border-slate-200 px-1.5 text-xs font-medium text-slate-800 ${
-                          bucketLevel ? "bg-amber-50/80" : "bg-white"
-                        }`}
+                        className="sticky left-0 z-30 flex w-full shrink-0 items-center justify-between gap-1 border-b border-r border-slate-200 bg-transparent px-1.5 text-xs font-medium text-slate-800"
                         style={{
                           width: NAME_COL_WIDTH,
                           height: vRow.size,
@@ -737,14 +694,6 @@ export function ClientesPanel({
                           <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[10px] tabular-nums">
                             {totalRows}
                           </Badge>
-                          <ClientesEmpresaBucketMenu
-                            coId={coId ?? ""}
-                            coName={displayName}
-                            currentLevel={bucketLevel ?? null}
-                            disabled={bucketActionBusy || !coId}
-                            onAssign={(lvl) => void handleAssignBucket(coId!, displayName, lvl)}
-                            onRemove={() => void handleRemoveBucket(coId!, displayName)}
-                          />
                           {moobizHref ? (
                             <a
                               href={moobizHref}

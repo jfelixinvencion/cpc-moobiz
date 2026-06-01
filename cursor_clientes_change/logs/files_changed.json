@@ -108,5 +108,30 @@
     "path": "tests/client-buckets-company-search.test.ts",
     "action": "created",
     "summary": "Tests race condition y selección."
+  },
+  {
+    "path": "src/components/planificacion/clientes-panel.tsx",
+    "action": "modified",
+    "summary": "Bolsa→Prioridad; Gestionar Prioridades; sin menú ⋯; clases fila N1-N3."
+  },
+  {
+    "path": "src/components/planificacion/clientes-priority.css",
+    "action": "created",
+    "summary": "Fondos sutiles N1 cálido, N2 menta, N3 gris (solo Clientes)."
+  },
+  {
+    "path": "src/lib/clientes-priority-styles.ts",
+    "action": "created",
+    "summary": "clientesPriorityRowClass helper."
+  },
+  {
+    "path": "src/components/planificacion/clientes-empresa-bucket-menu.tsx",
+    "action": "deleted",
+    "summary": "Menú ellipsis por fila eliminado; asignación solo vía Gestionar Prioridades."
+  },
+  {
+    "path": "tests/clientes-priority-styles.test.ts",
+    "action": "created",
+    "summary": "Assert clases clientes-priority-n1/n2/n3."
   }
 ]

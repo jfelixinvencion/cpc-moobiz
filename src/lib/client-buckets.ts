@@ -190,7 +190,7 @@ export function bucketLevelLabel(level: ClientBucketLevel): string {
 }
 
 export function bucketLevelBadgeClass(level: ClientBucketLevel): string {
-  if (level === 1) return "bg-amber-100 text-amber-900 border-amber-200";
-  if (level === 2) return "bg-orange-100 text-orange-900 border-orange-200";
-  return "bg-red-100 text-red-900 border-red-200";
+  if (level === 1) return "bg-amber-50/95 text-amber-900/90 border-amber-200/70";
+  if (level === 2) return "bg-teal-50/95 text-teal-900/85 border-teal-200/70";
+  return "bg-slate-100/95 text-slate-700 border-slate-300/70";
 }

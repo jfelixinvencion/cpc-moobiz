@@ -83,7 +83,7 @@ export function ClientesBucketsModal({
     try {
       await deleteClientBucketApi(row.co_id);
       onBucketsChange(buckets.filter((b) => b.co_id !== row.co_id));
-      onToast(`${row.co_name} quitada de bolsas`);
+      onToast(`${row.co_name} quitada de prioridades`);
     } catch (e) {
       onToast(e instanceof Error ? e.message : "No se pudo quitar", true);
     } finally {
@@ -95,10 +95,10 @@ export function ClientesBucketsModal({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={CLIENTES_BUCKETS_MODAL_CLASS}>
         <DialogHeader>
-          <DialogTitle>Gestionar bolsas (Nivel 1, 2 y 3)</DialogTitle>
+          <DialogTitle>Gestionar Prioridades (Nivel 1, 2 y 3)</DialogTitle>
         </DialogHeader>
         <p className="text-xs text-slate-600">
-          Una empresa solo puede estar en una bolsa. Al asignarla a otro nivel, se mueve
+          Una empresa solo puede tener una prioridad. Al asignarla a otro nivel, se mueve
           automáticamente. Busque, seleccione una fila y pulse Agregar.
         </p>
         <div className="grid gap-4 md:grid-cols-3">
@@ -139,7 +139,7 @@ export function ClientesBucketsModal({
                       variant="ghost"
                       className="h-6 w-6 shrink-0 text-slate-500"
                       disabled={busyCoId === row.co_id}
-                      title="Quitar de bolsas"
+                      title="Quitar prioridad"
                       onClick={() => void remove(row)}
                     >
                       <X className="h-3.5 w-3.5" />

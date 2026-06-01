@@ -1,0 +1,19 @@
+/**
+ * Estilos de fila por prioridad (solo subpestaña Clientes).
+ * Importar únicamente desde clientes-panel.tsx.
+ */
+
+.clientes-priority-n1 {
+  background-color: rgba(255, 247, 230, 0.35);
+  border-left: 4px solid rgba(255, 190, 66, 0.6);
+}
+
+.clientes-priority-n2 {
+  background-color: rgba(233, 247, 246, 0.35);
+  border-left: 4px solid rgba(0, 170, 150, 0.6);
+}
+
+.clientes-priority-n3 {
+  background-color: rgba(245, 245, 245, 0.35);
+  border-left: 4px solid rgba(120, 120, 120, 0.45);
+}

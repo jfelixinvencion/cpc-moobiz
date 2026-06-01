@@ -10,7 +10,7 @@ export function ClientesBucketBadge({ level }: { level: ClientBucketLevel }) {
     <Badge
       variant="outline"
       className={`h-5 shrink-0 px-1.5 text-[10px] font-bold tabular-nums ${bucketLevelBadgeClass(level)}`}
-      title={`Bolsa ${bucketLevelLabel(level)}`}
+      title={`Prioridad ${bucketLevelLabel(level)}`}
     >
       {bucketLevelLabel(level)}
     </Badge>
